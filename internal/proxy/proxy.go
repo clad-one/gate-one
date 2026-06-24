@@ -5,69 +5,71 @@ import (
     "net/http"
     "net/http/httputil"
     "net/url"
+
+    "cladone/gateway/internal/core"
 )
 
 type Gateway struct {
     routes map[string]*httputil.ReverseProxy
 }
 
-func New(routes map[string]string) (*Gateway, error) {
+func New(cfg *core.Config) (*Gateway, error) {
 
-    g := &Gateway{
-        routes: map[string]*httputil.ReverseProxy{},
-    }
+    routes := make(map[string]*httputil.ReverseProxy)
 
-    for host, target := range routes {
+    for host, h := range cfg.Hosts {
 
-        u, err := url.Parse(target)
+        svc, ok := cfg.Services[h.Service]
+
+        if !ok {
+            return nil,  http.ErrMissingFile
+        }
+
+        u, err := url.Parse(svc.URL)
+
         if err != nil {
             return nil, err
         }
 
         rp := httputil.NewSingleHostReverseProxy(u)
 
-        director := rp.Director
+        original := rp.Director
 
         rp.Director = func(req *http.Request) {
 
-            director(req)
+            original(req)
 
             req.Host = u.Host
 
             log.Printf(
                 "%s %s -> %s",
-                req.Host,
+                host,
                 req.URL.Path,
-                target,
+                svc.URL,
             )
+
         }
 
-        rp.ErrorHandler = func(
-            w http.ResponseWriter,
-            r *http.Request,
-            err error,
-        ) {
-            log.Println(err)
-            http.Error(w, "Bad Gateway", 502)
-        }
+        routes[host] = rp
 
-        g.routes[host] = rp
     }
 
-    return g, nil
+    return &Gateway{
+        routes: routes,
+    }, nil
+
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-    log.Printf("Host=%q URL=%s", r.Host, r.URL.Path)
+    log.Printf("Host=%q URL=%q", r.Host, r.URL.Path)
 
-    rp, ok := g.routes[r.Host]
-
+    p, ok := g.routes[r.Host]
     if !ok {
-        log.Printf("unknown host %q", r.Host)
+        log.Printf("unknown host: %q", r.Host)
         http.NotFound(w, r)
         return
     }
 
-    rp.ServeHTTP(w, r)
+    p.ServeHTTP(w, r)
 }

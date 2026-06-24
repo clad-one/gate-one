@@ -4,22 +4,29 @@ import (
     "log"
     "net/http"
 
-    "cladone/gateway/internal/config"
+    "cladone/gateway/internal/core"
     "cladone/gateway/internal/proxy"
 )
 
 func main() {
 
-    cfg := config.Load()
+    cfg, err := core.Load("api-routes.json")
 
-    log.Printf("%+v\n", cfg.Routes)
-    
-    gateway, err := proxy.New(cfg.Routes)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    log.Printf("Loaded %d services", len(cfg.Services))
+
+    log.Printf("Loaded %d hosts", len(cfg.Hosts))
+
+    gw, err := proxy.New(cfg)
+
     if err != nil {
         log.Fatal(err)
     }
 
     log.Println("Gateway listening on :3000")
 
-    log.Fatal(http.ListenAndServe(":3000", gateway))
+    log.Fatal(http.ListenAndServe(":3000", gw))
 }
