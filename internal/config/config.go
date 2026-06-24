@@ -1,6 +1,10 @@
 package config
 
-import "os"
+import (
+    "encoding/json"
+    "log"
+    "os"
+)
 
 type Config struct {
     Routes map[string]string
@@ -8,21 +12,19 @@ type Config struct {
 
 func Load() Config {
 
-    return Config{
-        Routes: map[string]string{
-            "vers2.cladone.com": getenv("VERSIFIER2_URL", "http://versifier2:9292"),
-            "vers.cladone.com":  getenv("VERSIFIER_URL", "http://versifier:9292"),
-        },
-    }
-}
-
-func getenv(name, def string) string {
-
-    v := os.Getenv(name)
-
-    if v == "" {
-        return def
+    cfg := Config{
+        Routes: map[string]string{},
     }
 
-    return v
+    raw := os.Getenv("ROUTES")
+
+    if raw == "" {
+        log.Fatal("ROUTES environment variable is empty")
+    }
+
+    if err := json.Unmarshal([]byte(raw), &cfg.Routes); err != nil {
+        log.Fatal(err)
+    }
+
+    return cfg
 }

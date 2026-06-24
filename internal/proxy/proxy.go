@@ -1,68 +1,73 @@
 package proxy
 
 import (
-	//"errors"
-	"log"
-	"net/http"
-	"net/http/httputil"
-	"net/url"
+    "log"
+    "net/http"
+    "net/http/httputil"
+    "net/url"
 )
 
-type Router struct {
-	routes map[string]*httputil.ReverseProxy
+type Gateway struct {
+    routes map[string]*httputil.ReverseProxy
 }
 
-// NewRouter builds one reverse proxy per host
-func NewRouter(routeMap map[string]string) (*Router, error) {
+func New(routes map[string]string) (*Gateway, error) {
 
-	routes := make(map[string]*httputil.ReverseProxy)
+    g := &Gateway{
+        routes: map[string]*httputil.ReverseProxy{},
+    }
 
-	for host, target := range routeMap {
+    for host, target := range routes {
 
-		u, err := url.Parse(target)
-		if err != nil {
-			return nil, err
-		}
+        u, err := url.Parse(target)
+        if err != nil {
+            return nil, err
+        }
 
-		proxy := httputil.NewSingleHostReverseProxy(u)
+        rp := httputil.NewSingleHostReverseProxy(u)
 
-		originalDirector := proxy.Director
+        director := rp.Director
 
-		proxy.Director = func(req *http.Request) {
+        rp.Director = func(req *http.Request) {
 
-			originalDirector(req)
+            director(req)
 
-			// preserve real host routing inside backend
-			req.Host = u.Host
+            req.Host = u.Host
 
-			log.Printf("[proxy] %s %s -> %s",
-				req.Method,
-				req.URL.Path,
-				target,
-			)
-		}
+            log.Printf(
+                "%s %s -> %s",
+                req.Host,
+                req.URL.Path,
+                target,
+            )
+        }
 
-		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("[proxy error] %v", err)
-			http.Error(w, "Bad Gateway", http.StatusBadGateway)
-		}
+        rp.ErrorHandler = func(
+            w http.ResponseWriter,
+            r *http.Request,
+            err error,
+        ) {
+            log.Println(err)
+            http.Error(w, "Bad Gateway", 502)
+        }
 
-		routes[host] = proxy
-	}
+        g.routes[host] = rp
+    }
 
-	return &Router{routes: routes}, nil
+    return g, nil
 }
 
-// ServeHTTP routes by Host header
-func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-	host := req.Host
+    log.Printf("Host=%q URL=%s", r.Host, r.URL.Path)
 
-	proxy, ok := r.routes[host]
-	if !ok {
-		http.Error(w, "No route for host", http.StatusNotFound)
-		return
-	}
+    rp, ok := g.routes[r.Host]
 
-	proxy.ServeHTTP(w, req)
+    if !ok {
+        log.Printf("unknown host %q", r.Host)
+        http.NotFound(w, r)
+        return
+    }
+
+    rp.ServeHTTP(w, r)
 }
