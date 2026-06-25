@@ -15,20 +15,17 @@ type Gateway struct {
     client *http.Client
 }
 
+func routeKey(host, path string) string {
+    return host + "|" + path
+}
+
 func New(cfg *core.Config) (*Gateway, error) {
 
-    routes := make(map[string]*httputil.ReverseProxy)
+    routes := map[string]*httputil.ReverseProxy{}
 
-    for host, h := range cfg.Hosts {
+    for _, route := range cfg.Routes {
 
-        svc, ok := cfg.Services[h.Service]
-
-        if !ok {
-            return nil,  http.ErrMissingFile
-        }
-
-        u, err := url.Parse(svc.URL)
-
+        u, err := url.Parse(route.Backend)
         if err != nil {
             return nil, err
         }
@@ -45,15 +42,13 @@ func New(cfg *core.Config) (*Gateway, error) {
 
             log.Printf(
                 "%s %s -> %s",
-                host,
-                req.URL.Path,
-                svc.URL,
+                route.Host,
+                route.Path,
+                route.Backend,
             )
-
         }
 
-        routes[host] = rp
-
+        routes[routeKey(route.Host, route.Path)] = rp
     }
 
     return &Gateway{
@@ -98,7 +93,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     // recherche du reverse proxy correspondant au host
     //
 
-    p, ok := g.routes[ctx.Host]
+    p, ok := g.routes[routeKey(ctx.Host, ctx.Path)]
 
     if !ok {
 
