@@ -45,5 +45,21 @@
       "service": "payment"
     }
 
-  }
+  },
+  "routes": [
+    {
+      "host": "vers.cladone.com",
+      "path": "/api/process_stream",
+      "auth":{
+        "when":{
+          "method":"POST",
+          "body":{
+            "coupes":true
+          }
+        }
+      },
+      "quota": "free",
+      "rateLimit": "10r/s"
+    }
+  ]
 }
