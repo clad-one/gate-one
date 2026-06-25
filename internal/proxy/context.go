@@ -8,6 +8,7 @@ import (
 )
 
 type RequestContext struct {
+
     Host    string
     Path    string
     Method  string
@@ -15,6 +16,12 @@ type RequestContext struct {
     Query   map[string]string
     Headers map[string]string
     Body    map[string]any
+
+    UserID   string
+    Username string
+    Email    string
+    Roles    []string
+
 }
 
 func BuildContext(r *http.Request) (*RequestContext, error) {

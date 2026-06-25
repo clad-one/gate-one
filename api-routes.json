@@ -1,55 +1,10 @@
 {
-  "services": {
-
-    "versifier": {
-      "url": "http://versifier:9292"
-    },
-
-    "versifier2": {
-      "url": "http://versifier2:9292"
-    },
-
-    "feedback": {
-      "url": "http://feedback:3000"
-    },
-
-    "grammar": {
-      "url": "http://grammar:8080"
-    },
-
-    "payment": {
-      "url": "http://payment:8080"
-    }
-
-  },
-
-  "hosts": {
-
-    "vers.cladone.com": {
-      "service": "versifier"
-    },
-
-    "vers2.cladone.com": {
-      "service": "versifier2"
-    },
-
-    "feedback.cladone.com": {
-      "service": "feedback"
-    },
-
-    "grammar.cladone.com": {
-      "service": "grammar"
-    },
-
-    "payment.cladone.com": {
-      "service": "payment"
-    }
-
-  },
   "routes": [
+
     {
       "host": "vers.cladone.com",
       "path": "/api/process_stream",
+      "backend":"http://versifier:9292",
       "auth":{
         "when":{
           "method":"POST",
@@ -58,8 +13,19 @@
           }
         }
       },
-      "quota": "free",
-      "rateLimit": "10r/s"
+      "quota": {
+        "limit": 100,
+        "period": "minute"
+      },
+      "rateLimit": {
+        "requests": 10,
+        "period": "second"
+      }
+    },
+    {
+      "host": "vers.cladone.com",
+      "path": "/*",
+      "backend": "http://versifier:9292"
     }
   ]
 }

@@ -2,6 +2,7 @@ package proxy
 
 import (
     "log"
+    "strings"
     "net/http"
     "net/http/httputil"
     "net/url"
@@ -9,9 +10,15 @@ import (
     "cladone/gateway/internal/core"
 )
 
+type compiledRoute struct {
+    route  *core.Route
+    proxy  *httputil.ReverseProxy
+    prefix string
+}
+
 type Gateway struct {
-    routes map[string]*httputil.ReverseProxy
-    config *core.Config
+    routes []*compiledRoute
+    config *core.Config //for policy inspection
     client *http.Client
 }
 
@@ -21,9 +28,11 @@ func routeKey(host, path string) string {
 
 func New(cfg *core.Config) (*Gateway, error) {
 
-    routes := map[string]*httputil.ReverseProxy{}
+    var routes []*compiledRoute
 
-    for _, route := range cfg.Routes {
+    for i := range cfg.Routes {
+
+        route := &cfg.Routes[i]
 
         u, err := url.Parse(route.Backend)
         if err != nil {
@@ -35,48 +44,89 @@ func New(cfg *core.Config) (*Gateway, error) {
         original := rp.Director
 
         rp.Director = func(req *http.Request) {
-
             original(req)
-
             req.Host = u.Host
-
-            log.Printf(
-                "%s %s -> %s",
-                route.Host,
-                route.Path,
-                route.Backend,
-            )
         }
 
-        routes[routeKey(route.Host, route.Path)] = rp
+        routes = append(routes, &compiledRoute{
+            route:  route,
+            proxy:  rp,
+            prefix: normalizePath(route.Path),
+        })
     }
 
     return &Gateway{
         routes: routes,
-        config: cfg,
         client: &http.Client{},
     }, nil
+}
 
+func normalizePath(p string) string {
+    if p == "/*" {
+        return "/"
+    }
+
+    if strings.HasSuffix(p, "/*") {
+        return strings.TrimSuffix(p, "/*") + "/"
+    }
+
+    return p
+}
+
+func matchPath(routePath, reqPath string) bool {
+    if routePath == "/*" {
+        return true
+    }
+
+    if strings.HasSuffix(routePath, "/*") {
+        base := strings.TrimSuffix(routePath, "/*")
+        return reqPath == base || strings.HasPrefix(reqPath, base+"/")
+    }
+
+    return reqPath == routePath
+}
+
+func (g *Gateway) findRoute(ctx *RequestContext) (*core.Route, *httputil.ReverseProxy, bool) {
+
+    var (
+        bestRoute *core.Route
+        bestProxy *httputil.ReverseProxy
+        bestLen   int
+    )
+
+    for _, r := range g.routes {
+
+        // host must match
+        if r.route.Host != ctx.Host {
+            continue
+        }
+
+        // prefix match
+        if !strings.HasPrefix(ctx.Path, r.prefix) {
+            continue
+        }
+
+        // longer prefix wins
+        if len(r.prefix) > bestLen {
+            bestLen = len(r.prefix)
+            bestRoute = r.route
+            bestProxy = r.proxy
+        }
+    }
+
+    if bestRoute == nil {
+        return nil, nil, false
+    }
+
+    return bestRoute, bestProxy, true
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-    //
-    // construit le contexte complet de la requête
-    //
-
     ctx, err := BuildContext(r)
-
     if err != nil {
-
         log.Printf("cannot build request context: %v", err)
-
-        http.Error(
-            w,
-            "invalid request",
-            http.StatusBadRequest,
-        )
-
+        http.Error(w, "invalid request", http.StatusBadRequest)
         return
     }
 
@@ -89,112 +139,117 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         ctx.Body,
     )
 
-    //
-    // recherche du reverse proxy correspondant au host
-    //
-
-    p, ok := g.routes[routeKey(ctx.Host, ctx.Path)]
-
+    route, p, ok := g.findRoute(ctx)
     if !ok {
-
-        log.Printf("unknown host: %q", ctx.Host)
-
+        log.Printf("unknown route: host=%s path=%s", ctx.Host, ctx.Path)
         http.NotFound(w, r)
-
-        return
+            return
     }
 
     //
-    // application des règles
+    // Authentication
     //
 
-    if g.requiresAuthentication(ctx) {
+    if g.needsAuthentication(route, ctx) {
 
         log.Printf("AUTH REQUIRED")
 
-        if !g.checkAuth(r) {
+        ctx, err = g.checkAuth(r, ctx)
+        if err != nil {
 
-            log.Printf("AUTH FAILED")
+            log.Printf("AUTH FAILED: %v", err)
 
-            w.Header().Set(
-                "Content-Type",
-                "application/json",
-            )
-
+            w.Header().Set("Content-Type", "application/json")
             w.WriteHeader(http.StatusUnauthorized)
-
-            w.Write([]byte(`{
-                "error":"authentication_required"
-            }`))
-
+            w.Write([]byte(`{"error":"authentication_required"}`))
             return
         }
 
-        log.Printf("AUTH OK")
+        log.Printf(
+            "AUTH OK user=%s roles=%v",
+            ctx.Username,
+            ctx.Roles,
+        )
     }
 
     //
-    // transfert au backend
+    // TODO rate limit
     //
+
+    //
+    // TODO quota
+    //
+
+    //
+    // Forward headers
+    //
+
+    r.Header.Set("X-User-Id", ctx.UserID)
+    r.Header.Set("X-Username", ctx.Username)
+    r.Header.Set("X-Email", ctx.Email)
+    r.Header.Set("X-Roles", strings.Join(ctx.Roles, ","))
 
     p.ServeHTTP(w, r)
 }
 
-func (g *Gateway) requiresAuthentication(ctx *RequestContext) bool {
-
-    for _, route := range g.config.Routes {
-
-        if route.Host != ctx.Host {
-            continue
-        }
-
-        if route.Path != ctx.Path {
-            continue
-        }
-
-        if route.Auth == nil {
-            continue
-        }
-
-        if route.Auth.When == nil {
-            return true
-        }
-
-        if route.Auth.When.Method != "" &&
-           route.Auth.When.Method != ctx.Method {
-            continue
-        }
-
-        ok := true
-
-        for k,v := range route.Auth.When.Query {
-
-            if ctx.Query[k] != v {
-                ok = false
-            }
-
-        }
-
-        for k,v := range route.Auth.When.Header {
-
-            if ctx.Headers[k] != v {
-                ok = false
-            }
-
-        }
-
-        for k,v := range route.Auth.When.Body {
-
-            if ctx.Body[k] != v {
-                ok = false
-            }
-
-        }
-
-        if ok {
+func (ctx *RequestContext) HasRole(role string) bool {
+    for _, r := range ctx.Roles {
+        if r == role {
             return true
         }
     }
-
     return false
+}
+
+func matches(m *core.Match, ctx *RequestContext) bool {
+
+    if m == nil {
+        return true
+    }
+
+    if m.Method != "" && m.Method != ctx.Method {
+        return false
+    }
+
+    for k, v := range m.Query {
+        if ctx.Query[k] != v {
+            return false
+        }
+    }
+
+    for k, v := range m.Header {
+        if ctx.Headers[k] != v {
+            return false
+        }
+    }
+
+    for k, v := range m.Body {
+        if ctx.Body[k] != v {
+            return false
+        }
+    }
+
+    for _, role := range m.Roles {
+        if !ctx.HasRole(role) {
+            return false
+        }
+    }
+
+    if m.User != "" && ctx.Username != m.User {
+        return false
+    }
+
+    return true
+}
+
+func (g *Gateway) needsAuthentication(
+    route *core.Route,
+    ctx *RequestContext,
+) bool {
+
+    if route.Auth == nil {
+        return false
+    }
+
+    return matches(route.Auth.When, ctx)
 }

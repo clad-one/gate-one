@@ -16,9 +16,7 @@ func main() {
         log.Fatal(err)
     }
 
-    log.Printf("Loaded %d services", len(cfg.Services))
-
-    log.Printf("Loaded %d hosts", len(cfg.Hosts))
+    log.Printf("Loaded %d routes", len(cfg.Routes))
 
     gw, err := proxy.New(cfg)
 

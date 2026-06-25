@@ -1,36 +1,60 @@
 package proxy
 
 import (
-    "log"
+//    "log"
     "net/http"
+    "errors"
+    "fmt"
+    "strings"
 )
 
-func (g *Gateway) checkAuth(r *http.Request) bool {
+func (g *Gateway) checkAuth(
+    r *http.Request,
+    ctx *RequestContext,
+) (*RequestContext, error) {
 
     token := r.Header.Get("Authorization")
+
     if token == "" {
-        return false
+        return nil, errors.New("missing authorization header")
     }
 
-    req, err := http.NewRequest("GET", "http://auth-bridge:3000/auth", nil)
+    req, err := http.NewRequest(
+        "GET",
+        "http://auth-bridge:3000/auth",
+        nil,
+    )
+
     if err != nil {
-        return false
+        return nil, err
     }
 
     req.Header.Set("Authorization", token)
 
     resp, err := g.client.Do(req)
+
     if err != nil {
-        log.Println("AUTH BRIDGE ERROR:", err)
-        return false
+        return nil, err
     }
+
     defer resp.Body.Close()
 
-    log.Println("AUTH BRIDGE STATUS:", resp.StatusCode)
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("auth bridge returned %d", resp.StatusCode)
+    }
 
-    return resp.StatusCode == http.StatusOK
+    ctx.UserID = resp.Header.Get("X-User-Id")
+    ctx.Username = resp.Header.Get("X-Username")
+    ctx.Email = resp.Header.Get("X-Email")
+
+    roles := resp.Header.Get("X-Roles")
+
+    if roles != "" {
+        ctx.Roles = strings.Split(roles, ",")
+    }
+
+    return ctx, nil
 }
-
 /*
 func (g *Gateway) checkAuth(r *http.Request) bool {
 
