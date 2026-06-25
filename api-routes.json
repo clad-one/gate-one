@@ -1,6 +1,10 @@
 {
-  "routes": [
-
+  "routes": [    
+    {
+      "host": "gram.cladone.com",
+      "path": "/*",
+      "backend": "http://grammar:8000"
+    },
     {
       "host": "vers.cladone.com",
       "path": "/*",
