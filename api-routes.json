@@ -11,11 +11,6 @@
       "backend": "http://versifier:9292"
     },
     {
-      "host": "vers2.cladone.com",
-      "path": "/*",
-      "backend": "http://versifier2:9292"
-    },
-    {
       "host": "feedback.cladone.com",
       "path": "/*",
       "backend": "http://feedback:3000"
