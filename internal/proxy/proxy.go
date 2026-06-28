@@ -230,30 +230,6 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
             return
         }
     }
-
-/*
-    if g.needsAuthentication(route, ctx) {
-
-        log.Printf("AUTH REQUIRED")
-
-        ctx, err = g.checkAuth(r, ctx)
-
-        if err != nil {
-
-            if redir, ok := err.(*RedirectError); ok {
-                http.Redirect(w, r, redir.Location, http.StatusFound)
-                return
-            }
-
-            w.Header().Set("Content-Type", "application/json")
-            w.WriteHeader(http.StatusUnauthorized)
-            w.Write([]byte(`{"error":"authentication_required"}`))
-            return
-        }
-
-        log.Printf("AUTH OK user=%s roles=%v", ctx.Username, ctx.Roles)
-    }
-*/
     //
     // TODO rate limit
     //
