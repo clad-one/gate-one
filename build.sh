@@ -1,1 +1,1 @@
-go build -o gateway ./cmd/gateway
+go build -o ./bin/gateway ./cmd/gateway
