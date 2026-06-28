@@ -1,7 +1,6 @@
 package proxy
 
 import (
-    "errors"
     "log"
     "strings"
     "net/http"
@@ -193,71 +192,39 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
     if g.needsAuthentication(route, ctx) {
 
-        log.Printf("AUTH REQUIRED")
-
         ctx, err = g.checkAuth(r, ctx)
 
-        // REDIRECT CASE
-        if errors.Is(err, ErrRedirect) {
+        if err != nil {
 
-            host := r.Header.Get("X-Forwarded-Host")
-            uri := r.Header.Get("X-Forwarded-Uri")
-
-            if host == "" {
-                host = r.Host
-            }
-
-            returnTo := "https://" + host + uri
-
-            http.Redirect(
-                w,
-                r,
-                "https://login.cladone.com/login?returnTo="+url.QueryEscape(returnTo),
-                http.StatusFound,
-            )
-            return
-        }
-/*
-        if errors.Is(err, ErrRedirect) {
-
-            accept := r.Header.Get("Accept")
-            isBrowser :=
-                strings.Contains(accept, "text/html") ||
+            isBrowser := strings.Contains(r.Header.Get("Accept"), "text/html") ||
                 strings.Contains(r.Header.Get("Sec-Fetch-Dest"), "document")
 
-            if isBrowser {
+            // ✅ ONLY redirect for real page navigation
+            if isBrowser && r.Method == "GET" {
 
                 host := r.Header.Get("X-Forwarded-Host")
                 uri := r.Header.Get("X-Forwarded-Uri")
+
                 if host == "" {
                     host = r.Host
                 }
 
                 returnTo := "https://" + host + uri
 
-                http.Redirect(
-                    w,
-                    r,
+                http.Redirect(w, r,
                     "https://login.cladone.com/login?returnTo="+url.QueryEscape(returnTo),
                     http.StatusFound,
                 )
                 return
             }
 
-            w.WriteHeader(http.StatusUnauthorized)
-            return
-        }
-*/
-
-        // NORMAL FAILURE
-        if err != nil {
-            log.Printf("AUTH FAILED: %v", err)
+            // API CASE = signal only
+            w.Header().Set("Content-Type", "application/json")
+            w.Header().Set("WWW-Authenticate", `Bearer realm="cladone"`)
             w.WriteHeader(http.StatusUnauthorized)
             w.Write([]byte(`{"error":"authentication_required"}`))
             return
         }
-
-        log.Printf("AUTH OK user=%s roles=%v", ctx.Username, ctx.Roles)
     }
 
 /*
