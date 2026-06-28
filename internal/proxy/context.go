@@ -16,6 +16,7 @@ type RequestContext struct {
     Query   map[string]string
     Headers map[string]string
     Body    map[string]any
+    RawBody []byte
 
     UserID   string
     Username string
@@ -46,14 +47,18 @@ func BuildContext(r *http.Request) (*RequestContext, error) {
     if r.Body != nil {
 
         data, err := io.ReadAll(r.Body)
-
         if err != nil {
             return nil, err
         }
 
+        // IMPORTANT: restore ORIGINAL body (not reread)
         r.Body = io.NopCloser(bytes.NewBuffer(data))
 
-        json.Unmarshal(data, &ctx.Body)
+        ctx.RawBody = data
+        // optional JSON parse (safe copy)
+        if len(data) > 0 && json.Valid(data) {
+            _ = json.Unmarshal(data, &ctx.Body)
+        }
     }
 
     return ctx, nil

@@ -1,12 +1,12 @@
 package proxy
 
 import (
+    "errors"
     "log"
     "strings"
     "net/http"
     "net/http/httputil"
     "net/url"
-
     "cladone/gateway/internal/core"
 )
 
@@ -57,7 +57,11 @@ func New(cfg *core.Config) (*Gateway, error) {
 
     return &Gateway{
         routes: routes,
-        client: &http.Client{},
+        client: &http.Client{
+            CheckRedirect: func(req *http.Request, via []*http.Request) error {
+                return http.ErrUseLastResponse
+            },
+        },
     }, nil
 }
 
@@ -86,6 +90,12 @@ func matchPath(routePath, reqPath string) bool {
     return reqPath == routePath
 }
 
+func normalizeHost(h string) string {
+    h = strings.TrimSpace(h)
+    h = strings.ToLower(h)
+    return strings.Split(h, ":")[0]
+}
+
 func (g *Gateway) findRoute(ctx *RequestContext) (*core.Route, *httputil.ReverseProxy, bool) {
 
     var (
@@ -96,10 +106,16 @@ func (g *Gateway) findRoute(ctx *RequestContext) (*core.Route, *httputil.Reverse
 
     for _, r := range g.routes {
 
-        // host must match
-        if r.route.Host != ctx.Host {
+        log.Printf("r.route.Host  = %q", r.route.Host )
+        log.Printf("CTX HOST RAW = %q", ctx.Host)
+        //host := strings.Split(ctx.Host, ":")[0]
+        if normalizeHost(r.route.Host) != normalizeHost(ctx.Host) {
             continue
         }
+        // host must match
+        /*if r.route.Host != ctx.Host {
+            continue
+        }*/
 
         // prefix match
         if !strings.HasPrefix(ctx.Path, r.prefix) {
@@ -119,6 +135,31 @@ func (g *Gateway) findRoute(ctx *RequestContext) (*core.Route, *httputil.Reverse
     }
 
     return bestRoute, bestProxy, true
+}
+
+func extractToken(r *http.Request) string {
+
+    // 1. Authorization header (API / JS fetch)
+    auth := r.Header.Get("Authorization")
+    if strings.HasPrefix(auth, "Bearer ") {
+        return strings.TrimPrefix(auth, "Bearer ")
+    }
+
+    // 2. Cookie (browser session)
+    cookie, err := r.Cookie("access_token")
+    if err == nil {
+        return cookie.Value
+    }
+
+    return ""
+}
+
+type RedirectError struct {
+    Location string
+}
+
+func (e *RedirectError) Error() string {
+    return "redirect"
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -155,9 +196,83 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         log.Printf("AUTH REQUIRED")
 
         ctx, err = g.checkAuth(r, ctx)
+
+        // REDIRECT CASE
+        if errors.Is(err, ErrRedirect) {
+
+            host := r.Header.Get("X-Forwarded-Host")
+            uri := r.Header.Get("X-Forwarded-Uri")
+
+            if host == "" {
+                host = r.Host
+            }
+
+            returnTo := "https://" + host + uri
+
+            http.Redirect(
+                w,
+                r,
+                "https://login.cladone.com/login?returnTo="+url.QueryEscape(returnTo),
+                http.StatusFound,
+            )
+            return
+        }
+/*
+        if errors.Is(err, ErrRedirect) {
+
+            accept := r.Header.Get("Accept")
+            isBrowser :=
+                strings.Contains(accept, "text/html") ||
+                strings.Contains(r.Header.Get("Sec-Fetch-Dest"), "document")
+
+            if isBrowser {
+
+                host := r.Header.Get("X-Forwarded-Host")
+                uri := r.Header.Get("X-Forwarded-Uri")
+                if host == "" {
+                    host = r.Host
+                }
+
+                returnTo := "https://" + host + uri
+
+                http.Redirect(
+                    w,
+                    r,
+                    "https://login.cladone.com/login?returnTo="+url.QueryEscape(returnTo),
+                    http.StatusFound,
+                )
+                return
+            }
+
+            w.WriteHeader(http.StatusUnauthorized)
+            return
+        }
+*/
+
+        // NORMAL FAILURE
+        if err != nil {
+            log.Printf("AUTH FAILED: %v", err)
+            w.WriteHeader(http.StatusUnauthorized)
+            w.Write([]byte(`{"error":"authentication_required"}`))
+            return
+        }
+
+        log.Printf("AUTH OK user=%s roles=%v", ctx.Username, ctx.Roles)
+    }
+
+/*
+    if g.needsAuthentication(route, ctx) {
+
+        log.Printf("AUTH REQUIRED")
+
+        ctx, err = g.checkAuth(r, ctx)
+
         if err != nil {
 
-            log.Printf("AUTH FAILED: %v", err)
+            if redir, ok := err.(*RedirectError); ok {
+                http.Redirect(w, r, redir.Location, http.StatusFound)
+                return
+            }
 
             w.Header().Set("Content-Type", "application/json")
             w.WriteHeader(http.StatusUnauthorized)
@@ -165,13 +280,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        log.Printf(
-            "AUTH OK user=%s roles=%v",
-            ctx.Username,
-            ctx.Roles,
-        )
+        log.Printf("AUTH OK user=%s roles=%v", ctx.Username, ctx.Roles)
     }
-
+*/
     //
     // TODO rate limit
     //
@@ -191,6 +302,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
     p.ServeHTTP(w, r)
 }
+
 
 func (ctx *RequestContext) HasRole(role string) bool {
     for _, r := range ctx.Roles {
@@ -242,13 +354,15 @@ func matches(m *core.Match, ctx *RequestContext) bool {
     return true
 }
 
-func (g *Gateway) needsAuthentication(
-    route *core.Route,
-    ctx *RequestContext,
-) bool {
+func (g *Gateway) needsAuthentication(route *core.Route, ctx *RequestContext) bool {
 
     if route.Auth == nil {
         return false
+    }
+
+    // auth: true => always required
+    if route.Auth.When == nil {
+        return true
     }
 
     return matches(route.Auth.When, ctx)

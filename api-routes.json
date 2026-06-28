@@ -13,7 +13,8 @@
     {
       "host": "feedback.cladone.com",
       "path": "/*",
-      "backend": "http://feedback:3000"
+      "backend": "http://feedback:3000",
+      "auth": {}
     },
     {
       "host": "vers.cladone.com",
