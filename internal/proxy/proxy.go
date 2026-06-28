@@ -161,6 +161,14 @@ func (e *RedirectError) Error() string {
     return "redirect"
 }
 
+func isBrowserRequest(r *http.Request) bool {
+    accept := r.Header.Get("Accept")
+    sec := r.Header.Get("Sec-Fetch-Dest")
+
+    return strings.Contains(accept, "text/html") ||
+        strings.Contains(sec, "document")
+}
+
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
     ctx, err := BuildContext(r)
@@ -196,11 +204,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
         if err != nil {
 
-            isBrowser := strings.Contains(r.Header.Get("Accept"), "text/html") ||
-                strings.Contains(r.Header.Get("Sec-Fetch-Dest"), "document")
-
-            // ✅ ONLY redirect for real page navigation
-            if isBrowser && r.Method == "GET" {
+            if isBrowserRequest(r) && r.Method == http.MethodGet {
 
                 host := r.Header.Get("X-Forwarded-Host")
                 uri := r.Header.Get("X-Forwarded-Uri")
@@ -218,7 +222,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
                 return
             }
 
-            // API CASE = signal only
+            // API / fetch / websocket / stream case
             w.Header().Set("Content-Type", "application/json")
             w.Header().Set("WWW-Authenticate", `Bearer realm="cladone"`)
             w.WriteHeader(http.StatusUnauthorized)
