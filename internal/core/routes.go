@@ -1,8 +1,9 @@
 package core
 
 import (
-	"encoding/json"
-	"os"
+    "encoding/json"
+    "fmt"
+    "os"
 )
 
 type Match struct {
@@ -19,6 +20,7 @@ type Match struct {
 
     User string `json:"user,omitempty"`
 }
+
 type RateLimitPolicy struct {
     Requests int    `json:"requests"`
     Period      string `json:"period"`
@@ -32,9 +34,8 @@ type QuotaPolicy struct {
 
     When *Match `json:"when,omitempty"`
 }
-type AuthPolicy struct {
 
-    //Required bool `json:"required"`
+type AuthPolicy struct {
 
     When *Match `json:"when,omitempty"`
 
@@ -55,25 +56,45 @@ type Route struct {
 
 type Config struct {
 
-//	Services map[string]Service `json:"services"`
-
-//	Hosts map[string]Host `json:"hosts"`
-
 	Routes []Route `json:"routes"`
 }
 
 func Load(path string) (*Config, error) {
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return nil, err
+    }
 
-	var cfg Config
+    var cfg Config
 
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
+    if err := json.Unmarshal(data, &cfg); err != nil {
 
-	return &cfg, nil
+        if se, ok := err.(*json.SyntaxError); ok {
+
+            line := 1
+            col := 1
+
+            for i := 0; i < int(se.Offset)-1 && i < len(data); i++ {
+                if data[i] == '\n' {
+                    line++
+                    col = 1
+                } else {
+                    col++
+                }
+            }
+
+            return nil, fmt.Errorf(
+                "%s:%d:%d: %v",
+                path,
+                line,
+                col,
+                err,
+            )
+        }
+
+        return nil, err
+    }
+
+    return &cfg, nil
 }
