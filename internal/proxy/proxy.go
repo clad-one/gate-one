@@ -216,7 +216,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
                 returnTo := "https://" + host + uri
 
                 http.Redirect(w, r,
-                    "https://login.cladone.com/login/google?returnTo="+url.QueryEscape(returnTo),
+                    "https://login.cladone.com/login?returnTo="+url.QueryEscape(returnTo),
                     http.StatusFound,
                 )
                 return
