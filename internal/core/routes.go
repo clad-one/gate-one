@@ -4,46 +4,7 @@ import (
 	"encoding/json"
 	"os"
 )
-/*
-type Service struct {
-	URL string `json:"url"`
-}
 
-type Host struct {
-	Service string `json:"service"`
-}
-
-type AuthWhen struct {
-	Query map[string]string `json:"query"`
-}
-
-type AuthWhen struct {
-
-    Method string `json:"method,omitempty"`
-
-    Query map[string]string `json:"query,omitempty"`
-
-    Header map[string]string `json:"header,omitempty"`
-
-    Body map[string]any `json:"body,omitempty"`
-}
-
-type Auth struct {
-	Required bool      `json:"required"`
-	When     *AuthWhen `json:"when,omitempty"`
-}*/
-/*
-type Route struct {
-	Host      string `json:"host"`
-	Path      string `json:"path"`
-	Service   string `json:"service,omitempty"`
-
-	Auth      *Auth  `json:"auth,omitempty"`
-
-	Quota     string `json:"quota,omitempty"`
-
-	RateLimit string `json:"rateLimit,omitempty"`
-}*/
 type Match struct {
 
     Method string `json:"method,omitempty"`
@@ -84,6 +45,7 @@ type Route struct {
     Host string `json:"host"`
     Path string `json:"path"`
 
+    Frontend  bool   `json:"frontend,omitempty"`
     Backend string `json:"backend"`
 
     Auth      *AuthPolicy      `json:"auth,omitempty"`

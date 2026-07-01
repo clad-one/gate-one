@@ -10,9 +10,12 @@ import (
 )
 
 type compiledRoute struct {
-    route  *core.Route
-    proxy  *httputil.ReverseProxy
-    prefix string
+    route     *core.Route
+    proxy     *httputil.ReverseProxy
+    prefix    string
+
+    // true when this route is intended to return HTML pages
+    pageRoute bool
 }
 
 type Gateway struct {
@@ -48,14 +51,18 @@ func New(cfg *core.Config) (*Gateway, error) {
         }
 
         routes = append(routes, &compiledRoute{
-            route:  route,
-            proxy:  rp,
+            route: route,
+            proxy: rp,
             prefix: normalizePath(route.Path),
+
+            // page routes are the catch-all routes
+            pageRoute: route.Frontend,
         })
     }
 
     return &Gateway{
-        routes: routes,
+        routes: routes,    
+        config: cfg,
         client: &http.Client{
             CheckRedirect: func(req *http.Request, via []*http.Request) error {
                 return http.ErrUseLastResponse
@@ -95,45 +102,39 @@ func normalizeHost(h string) string {
     return strings.Split(h, ":")[0]
 }
 
-func (g *Gateway) findRoute(ctx *RequestContext) (*core.Route, *httputil.ReverseProxy, bool) {
+func (g *Gateway) findRoute(ctx *RequestContext) (*compiledRoute, bool) {
 
     var (
-        bestRoute *core.Route
-        bestProxy *httputil.ReverseProxy
-        bestLen   int
+        best    *compiledRoute
+        bestLen int
     )
 
     for _, r := range g.routes {
 
-        log.Printf("r.route.Host  = %q", r.route.Host )
-        log.Printf("CTX HOST RAW = %q", ctx.Host)
-        //host := strings.Split(ctx.Host, ":")[0]
         if normalizeHost(r.route.Host) != normalizeHost(ctx.Host) {
             continue
         }
-        // host must match
-        /*if r.route.Host != ctx.Host {
-            continue
-        }*/
 
-        // prefix match
         if !strings.HasPrefix(ctx.Path, r.prefix) {
             continue
         }
 
-        // longer prefix wins
         if len(r.prefix) > bestLen {
+            best = r
             bestLen = len(r.prefix)
-            bestRoute = r.route
-            bestProxy = r.proxy
         }
     }
 
-    if bestRoute == nil {
-        return nil, nil, false
+    if best == nil {
+        log.Printf(
+            "NO ROUTE host=%q path=%q",
+            ctx.Host,
+            ctx.Path,
+        )
+        return nil, false
     }
 
-    return bestRoute, bestProxy, true
+    return best, true
 }
 
 func extractToken(r *http.Request) string {
@@ -187,12 +188,14 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         ctx.Body,
     )
 
-    route, p, ok := g.findRoute(ctx)
+    cr, ok := g.findRoute(ctx)
     if !ok {
-        log.Printf("unknown route: host=%s path=%s", ctx.Host, ctx.Path)
         http.NotFound(w, r)
-            return
+        return
     }
+
+    route := cr.route
+    p := cr.proxy
 
     //
     // Authentication
@@ -204,25 +207,28 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
         if err != nil {
 
-            if isBrowserRequest(r) && r.Method == http.MethodGet {
+            //
+            // Page route
+            //
+            if cr.pageRoute {
 
-                host := r.Header.Get("X-Forwarded-Host")
-                uri := r.Header.Get("X-Forwarded-Uri")
+                host := r.Host
 
-                if host == "" {
-                    host = r.Host
-                }
+                returnTo := "https://" + host + r.RequestURI
 
-                returnTo := "https://" + host + uri
-
-                http.Redirect(w, r,
-                    "https://login.cladone.com/login?returnTo="+url.QueryEscape(returnTo),
+                http.Redirect(
+                    w,
+                    r,
+                    "https://login.cladone.com/login?returnTo="+
+                        url.QueryEscape(returnTo),
                     http.StatusFound,
                 )
                 return
             }
 
-            // API / fetch / websocket / stream case
+            //
+            // API route
+            //
             w.Header().Set("Content-Type", "application/json")
             w.Header().Set("WWW-Authenticate", `Bearer realm="cladone"`)
             w.WriteHeader(http.StatusUnauthorized)
@@ -230,6 +236,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
             return
         }
     }
+
     //
     // TODO rate limit
     //

@@ -3,16 +3,19 @@
     {
       "host": "gram.cladone.com",
       "path": "/*",
+      "frontend": true,
       "backend": "http://grammar:8000"
     },
     {
       "host": "vers.cladone.com",
       "path": "/*",
+      "frontend": true,
       "backend": "http://versifier:9292"
     },
     {
       "host": "feedback.cladone.com",
       "path": "/*",
+      "frontend": true,
       "backend": "http://feedback:3000",
       "auth": {}
     },
