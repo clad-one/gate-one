@@ -47,7 +47,7 @@ func New(cfg *core.Config) (*Gateway, error) {
 
         rp.Director = func(req *http.Request) {
             original(req)
-            req.Host = u.Host
+            //req.Host = u.Host
         }
 
         routes = append(routes, &compiledRoute{
@@ -115,7 +115,8 @@ func (g *Gateway) findRoute(ctx *RequestContext) (*compiledRoute, bool) {
             continue
         }
 
-        if !strings.HasPrefix(ctx.Path, r.prefix) {
+        //if !strings.HasPrefix(ctx.Path, r.prefix) {
+        if !matchPath(r.route.Path, ctx.Path) {
             continue
         }
 
@@ -187,8 +188,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         ctx.Query,
         ctx.Body,
     )
+    
+log.Printf(
+    "Host=%q Method=%q Path=%q",
+    ctx.Host,
+    ctx.Method,
+    ctx.Path,
+)
 
     cr, ok := g.findRoute(ctx)
+
+log.Printf("matched=%v", ok)
+
     if !ok {
         http.NotFound(w, r)
         return
