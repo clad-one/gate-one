@@ -209,6 +209,19 @@ log.Printf("matched=%v", ok)
     p := cr.proxy
 
     //
+    // HEAD fallback
+    //
+    if route.AutoHead && r.Method == http.MethodHead {
+
+        r.Method = http.MethodGet
+        ctx.Method = http.MethodGet
+
+        w = &headResponseWriter{
+            ResponseWriter: w,
+        }
+    }
+
+    //
     // Authentication
     //
     if g.needsAuthentication(route, ctx) {

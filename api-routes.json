@@ -10,7 +10,8 @@
       "host": "vers.cladone.com",
       "path": "/*",
       "frontend": true,
-      "backend": "http://versifier:9292"
+      "backend": "http://versifier:9292",
+      "autoHead": true
     },
     {
       "host": "feedback.cladone.com",
