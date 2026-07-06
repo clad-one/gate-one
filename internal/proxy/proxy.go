@@ -211,10 +211,9 @@ log.Printf("matched=%v", ok)
     //
     // Authentication
     //
-
     if g.needsAuthentication(route, ctx) {
 
-        ctx, err = g.checkAuth(r, ctx)
+        ctx, err = g.checkAuth(w, r, ctx)
 
         if err != nil {
 
