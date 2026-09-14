@@ -1,9 +1,10 @@
 package proxy
 
 import (
-    "strings"
-    "errors"
-    "net/http"
+	"errors"
+	"log"
+	"net/http"
+	"strings"
 )
 
 var ErrRedirect = errors.New("auth redirect")
@@ -31,6 +32,13 @@ func (g *Gateway) checkAuth(
     r *http.Request,
     ctx *RequestContext,
 ) (*RequestContext, error) {
+	log.Printf(
+        "AUTH CHECK method=%s host=%s uri=%s authorization=%t",
+        r.Method,
+        r.Host,
+        r.RequestURI,
+        r.Header.Get("Authorization") != "",
+    )
     req, err := http.NewRequest(
         http.MethodGet,
         "http://auth-bridge:3000/auth",
@@ -39,6 +47,7 @@ func (g *Gateway) checkAuth(
     if err != nil {
         return nil, err
     }
+	
     if auth := r.Header.Get("Authorization"); auth != "" {
         req.Header.Set("Authorization", auth)
     }
@@ -54,7 +63,15 @@ func (g *Gateway) checkAuth(
         return nil, err
     }
     defer resp.Body.Close()
-
+    
+    log.Printf(
+        "AUTH BRIDGE status=%d user=%q username=%q roles=%q",
+        resp.StatusCode,
+        resp.Header.Get("X-User-Id"),
+        resp.Header.Get("X-Username"),
+        resp.Header.Get("X-Roles"),
+    )
+	
     // Propagate any cookies auth-bridge issued (e.g. a silently
     // refreshed access_token/refresh_token) back to the browser,
     // regardless of whether auth ultimately succeeded or not.

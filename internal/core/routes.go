@@ -42,6 +42,22 @@ type AuthPolicy struct {
     //Roles []string `json:"roles,omitempty"`
 }
 
+type OpenAPIPolicy struct {
+	URL    string `json:"url"`
+	Public bool   `json:"public,omitempty"`
+}
+
+type MCPOperation struct {
+	Name        string `json:"name"`
+	OperationID string `json:"operationId"`
+}
+
+type MCPPolicy struct {
+	Enabled    bool           `json:"enabled"`
+	Path       string         `json:"path,omitempty"`
+	Operations []MCPOperation `json:"operations"`
+}
+
 type Route struct {
     Host string `json:"host"`
     Path string `json:"path"`
@@ -54,6 +70,9 @@ type Route struct {
     Auth      *AuthPolicy      `json:"auth,omitempty"`
     RateLimit *RateLimitPolicy `json:"rateLimit,omitempty"`
     Quota     *QuotaPolicy     `json:"quota,omitempty"`
+	
+	OpenAPI *OpenAPIPolicy `json:"openapi,omitempty"`
+	MCP     *MCPPolicy     `json:"mcp,omitempty"`
 }
 
 type Config struct {

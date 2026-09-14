@@ -7,6 +7,7 @@ import (
     "net/http/httputil"
     "net/url"
     "cladone/gateway/internal/core"
+	mcpserver "cladone/gateway/internal/mcp"
 )
 
 type compiledRoute struct {
@@ -16,6 +17,8 @@ type compiledRoute struct {
 
     // true when this route is intended to return HTML pages
     pageRoute bool
+	
+	mcp *mcpserver.Server
 }
 
 type Gateway struct {
@@ -50,21 +53,41 @@ func New(cfg *core.Config) (*Gateway, error) {
             //req.Host = u.Host
         }
 
-        routes = append(routes, &compiledRoute{
-            route: route,
-            proxy: rp,
-            prefix: normalizePath(route.Path),
+		cr := &compiledRoute{
+			route:     route,
+			proxy:     rp,
+			prefix:    normalizePath(route.Path),
+			pageRoute: route.Frontend,
+		}
 
-            // page routes are the catch-all routes
-            pageRoute: route.Frontend,
-        })
+		if route.MCP != nil &&
+			route.MCP.Enabled {
+
+			mcpServer := mcpserver.New(
+				route.Backend,
+			)
+
+			cr.mcp = mcpServer
+
+			log.Printf(
+				"MCP enabled host=%s path=%s",
+				route.Host,
+				route.MCP.Path,
+			)
+		}
+
+		routes = append(routes, cr)
+		
     }
 
     return &Gateway{
         routes: routes,    
         config: cfg,
         client: &http.Client{
-            CheckRedirect: func(req *http.Request, via []*http.Request) error {
+            CheckRedirect: func(
+				req *http.Request, 
+				via []*http.Request,
+			) error {
                 return http.ErrUseLastResponse
             },
         },
@@ -171,6 +194,33 @@ func isBrowserRequest(r *http.Request) bool {
         strings.Contains(sec, "document")
 }
 
+func (g *Gateway) isPubliclyForbidden(
+	ctx *RequestContext,
+) bool {
+
+	for _, r := range g.routes {
+
+		if normalizeHost(r.route.Host) !=
+			normalizeHost(ctx.Host) {
+			continue
+		}
+
+		if r.route.OpenAPI == nil {
+			continue
+		}
+
+		if r.route.OpenAPI.Public {
+			continue
+		}
+
+		if ctx.Path == "/openapi.json" {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
     ctx, err := BuildContext(r)
@@ -178,6 +228,85 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         log.Printf("cannot build request context: %v", err)
         http.Error(w, "invalid request", http.StatusBadRequest)
         return
+    }
+
+    if g.isPubliclyForbidden(ctx) {
+    	http.NotFound(w, r)
+    	return
+    }
+	
+    //
+    // MCP
+    //
+    
+    if cr, ok := g.findMCP(ctx); ok {
+    
+    	route := cr.route
+    
+    	//
+    	// Authentification MCP
+    	//
+    	if g.needsAuthentication(route, ctx) {
+    
+    		ctx, err = g.checkAuth(
+    			w,
+    			r,
+    			ctx,
+    		)
+    
+    		if err != nil {
+    
+    			w.Header().Set(
+    				"Content-Type",
+    				"application/json",
+    			)
+    
+    			w.Header().Set(
+    				"WWW-Authenticate",
+    				`Bearer realm="cladone"`,
+    			)
+    
+    			w.WriteHeader(
+    				http.StatusUnauthorized,
+    			)
+    
+    			_, _ = w.Write([]byte(
+    				`{"error":"authentication_required"}`,
+    			))
+    
+    			return
+    		}
+    	}
+    
+    	//
+    	// Identité disponible pour le handler MCP.
+    	//
+    	r.Header.Set(
+    		"X-User-Id",
+    		ctx.UserID,
+    	)
+    
+    	r.Header.Set(
+    		"X-Username",
+    		ctx.Username,
+    	)
+    
+    	r.Header.Set(
+    		"X-Email",
+    		ctx.Email,
+    	)
+    
+    	r.Header.Set(
+    		"X-Roles",
+    		strings.Join(ctx.Roles, ","),
+    	)
+    
+    	cr.mcp.HTTPHandler.ServeHTTP(
+    		w,
+    		r,
+    	)
+    
+    	return
     }
 
     log.Printf(
@@ -343,4 +472,35 @@ func (g *Gateway) needsAuthentication(route *core.Route, ctx *RequestContext) bo
     }
 
     return matches(route.Auth.When, ctx)
+}
+
+func (g *Gateway) findMCP(
+	ctx *RequestContext,
+) (*compiledRoute, bool) {
+
+	for _, r := range g.routes {
+
+		if r.mcp == nil {
+			continue
+		}
+
+		if normalizeHost(r.route.Host) !=
+			normalizeHost(ctx.Host) {
+			continue
+		}
+
+		path := r.route.MCP.Path
+
+		if path == "" {
+			path = "/mcp"
+		}
+
+		if ctx.Path != path {
+			continue
+		}
+
+		return r, true
+	}
+
+	return nil, false
 }

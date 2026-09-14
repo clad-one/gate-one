@@ -2,9 +2,29 @@
   "routes": [    
     {
       "host": "gram.cladone.com",
+      "path": "/mcp",
+      "backend": "http://grammar:8000",
+      "auth": {},
+      "mcp": {
+        "enabled": true,
+        "path": "/mcp",
+        "operations": [
+          {
+            "name": "processStream",
+            "operationId": "process_api_process_stream_post"
+          }
+        ]
+      }
+    },
+    {
+      "host": "gram.cladone.com",
       "path": "/*",
       "frontend": true,
-      "backend": "http://grammar:8000"
+      "backend": "http://grammar:8000",
+      "openapi": {
+        "url": "http://grammar:8000/openapi.json",
+        "public": false
+      }
     },
     {
       "host": "vers.cladone.com",
