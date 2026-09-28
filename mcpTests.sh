@@ -121,3 +121,70 @@ content-type: application/json
 date: Mon, 14 Sep 2026 01:47:30 GMT
 
 {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\"content_type\":\"application/x-ndjson\",\"data\":\"{\\\"sentence\\\": 0, \\\"tokens\\\": [{\\\"text\\\": \\\"Bonjour\\\", \\\"lemma\\\": \\\"bonjour\\\", \\\"pos\\\": \\\"NOUN\\\", \\\"tag\\\": \\\"NOUN\\\", \\\"dep\\\": \\\"ROOT\\\", \\\"ipa\\\": \\\"b\\\\u0254\\\\u0303\\\\u0292u\\\\u0281\\\", \\\"liaison\\\": \\\"\\\", \\\"can_swap_next\\\": false}, {\\\"text\\\": \\\"tout\\\", \\\"lemma\\\": \\\"tout\\\", \\\"pos\\\": \\\"ADJ\\\", \\\"tag\\\": \\\"ADJ\\\", \\\"dep\\\": \\\"amod\\\", \\\"ipa\\\": \\\"tu\\\", \\\"liaison\\\": \\\"\\\", \\\"can_swap_next\\\": false}, {\\\"text\\\": \\\"le\\\", \\\"lemma\\\": \\\"le\\\", \\\"pos\\\": \\\"DET\\\", \\\"tag\\\": \\\"DET\\\", \\\"dep\\\": \\\"det\\\", \\\"ipa\\\": \\\"l\\\\u0259\\\", \\\"liaison\\\": \\\"\\\", \\\"can_swap_next\\\": false}, {\\\"text\\\": \\\"monde\\\", \\\"lemma\\\": \\\"monde\\\", \\\"pos\\\": \\\"NOUN\\\", \\\"tag\\\": \\\"NOUN\\\", \\\"dep\\\": \\\"nmod\\\", \\\"ipa\\\": \\\"m\\\\u0254\\\\u0303d\\\", \\\"liaison\\\": \\\"\\\", \\\"can_swap_next\\\": false}, {\\\"text\\\": \\\".\\\", \\\"lemma\\\": \\\".\\\", \\\"pos\\\": \\\"PUNCT\\\", \\\"tag\\\": \\\"PUNCT\\\", \\\"dep\\\": \\\"punct\\\", \\\"ipa\\\": \\\"\\\", \\\"liaison\\\": \\\"\\\", \\\"can_swap_next\\\": false}]}\\n\"}"}],"structuredContent":{"content_type":"application/x-ndjson","data":"{\"sentence\": 0, \"tokens\": [{\"text\": \"Bonjour\", \"lemma\": \"bonjour\", \"pos\": \"NOUN\", \"tag\": \"NOUN\", \"dep\": \"ROOT\", \"ipa\": \"b\\u0254\\u0303\\u0292u\\u0281\", \"liaison\": \"\", \"can_swap_next\": false}, {\"text\": \"tout\", \"lemma\": \"tout\", \"pos\": \"ADJ\", \"tag\": \"ADJ\", \"dep\": \"amod\", \"ipa\": \"tu\", \"liaison\": \"\", \"can_swap_next\": false}, {\"text\": \"le\", \"lemma\": \"le\", \"pos\": \"DET\", \"tag\": \"DET\", \"dep\": \"det\", \"ipa\": \"l\\u0259\", \"liaison\": \"\", \"can_swap_next\": false}, {\"text\": \"monde\", \"lemma\": \"monde\", \"pos\": \"NOUN\", \"tag\": \"NOUN\", \"dep\": \"nmod\", \"ipa\": \"m\\u0254\\u0303d\", \"liaison\": \"\", \"can_swap_next\": false}, {\"text\": \".\", \"lemma\": \".\", \"pos\": \"PUNCT\", \"tag\": \"PUNCT\", \"dep\": \"punct\", \"ipa\": \"\", \"liaison\": \"\", \"can_swap_next\": false}]}\n"}}}
+
+
+export ADMIN_TOKEN=
+curl -s \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "https://auth.cladone.com/admin/realms/cladone/client-policies/policies" \
+  | jq
+{
+  "policies": []
+}
+
+
+curl -i https://gram.cladone.com/.well-known/oauth-protected-resource
+ curl -i https://gram.cladone.com/.well-known/oauth-protected-resourcee
+HTTP/2 200
+content-type: application/json
+date: Mon, 14 Sep 2026 03:44:30 GMT
+content-length: 183
+
+{"authorization_servers":["https://auth.cladone.com/realms/cladone"],"bearer_methods_supported":["header"],"resource":"https://gram.cladone.com/mcp","scopes_supported":["mcp:tools"]}
+
+curl -i https://gram.cladone.com/mcp
+
+
+
+: "${MCP_TEST_CLIENT_SECRET:?export MCP_TEST_CLIENT_SECRET first}"
+: "${MCP_TEST_USERNAME:?export MCP_TEST_USERNAME first}"
+: "${MCP_TEST_PASSWORD:?export MCP_TEST_PASSWORD first}"
+
+TOKEN=$(
+  curl -s -X POST \
+    "https://auth.cladone.com/realms/cladone/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password" \
+    -d "client_id=mcp-test" \
+    -d "client_secret=$MCP_TEST_CLIENT_SECRET" \
+    -d "username=$MCP_TEST_USERNAME" \
+    -d "password=$MCP_TEST_PASSWORD" \
+    -d "scope=openid mcp:tools" |
+  jq -r '.access_token'
+)
+
+curl -s -X POST \
+    "https://auth.cladone.com/realms/cladone/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password" \
+    -d "client_id=mcp-test" \
+    -d "client_secret=$MCP_TEST_CLIENT_SECRET" \
+    -d "username=$MCP_TEST_USERNAME" \
+    -d "password=$MCP_TEST_PASSWORD" \
+    -d "scope=openid mcp:tools" |
+  jq -r '.access_token'
+null
+
+$ curl -sS -X POST \
+  "https://auth.cladone.com/realms/cladone/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "grant_type=password" \
+  --data-urlencode "client_id=mcp-test" \
+  --data-urlencode "client_secret=$MCP_TEST_CLIENT_SECRET" \
+  --data-urlencode "username=$MCP_TEST_USERNAME" \
+  --data-urlencode "password=$MCP_TEST_PASSWORD" \
+  --data-urlencode "scope=openid mcp:tools" | jq
+{
+  "error": "invalid_grant",
+  "error_description": "Invalid user credentials"
+}

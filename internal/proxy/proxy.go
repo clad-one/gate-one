@@ -1,6 +1,7 @@
 package proxy
 
 import (
+    "encoding/json"
     "log"
     "strings"
     "net/http"
@@ -92,6 +93,28 @@ func New(cfg *core.Config) (*Gateway, error) {
             },
         },
     }, nil
+}
+
+func (g *Gateway) serveMCPProtectedResourceMetadata(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	resource, ok := g.mcpResourceURLForHost(r.Host)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"resource": resource,
+		"authorization_servers": []string{
+			"https://auth.cladone.com/realms/cladone",
+		},
+		"scopes_supported":          []string{"mcp-tools"},
+		"bearer_methods_supported": []string{"header"},
+	})
 }
 
 func normalizePath(p string) string {
@@ -221,6 +244,45 @@ func (g *Gateway) isPubliclyForbidden(
 	return false
 }
 
+func (g *Gateway) mcpResourceURLForHost(host string) (string, bool) {
+	for _, cr := range g.routes {
+		if cr.route.MCP == nil || !cr.route.MCP.Enabled {
+			continue
+		}
+
+		if normalizeHost(cr.route.Host) != normalizeHost(host) {
+			continue
+		}
+
+		path := cr.route.MCP.Path
+		if path == "" {
+			path = cr.route.Path
+		}
+
+		if path == "" {
+			path = "/mcp"
+		}
+
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+
+		return "https://" + normalizeHost(cr.route.Host) + path, true
+	}
+
+	return "", false
+}
+
+func (g *Gateway) mcpResourceMetadataURL(host string) (string, bool) {
+	if _, ok := g.mcpResourceURLForHost(host); !ok {
+		return "", false
+	}
+
+	return "https://" +
+		normalizeHost(host) +
+		"/.well-known/oauth-protected-resource", true
+}
+
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
     ctx, err := BuildContext(r)
@@ -229,6 +291,14 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "invalid request", http.StatusBadRequest)
         return
     }
+
+	// MCP OAuth protected-resource metadata
+	if ctx.Path == "/.well-known/oauth-protected-resource" {
+		if _, ok := g.mcpResourceURLForHost(ctx.Host); ok {
+			g.serveMCPProtectedResourceMetadata(w, r)
+			return
+		}
+	}
 
     if g.isPubliclyForbidden(ctx) {
     	http.NotFound(w, r)
@@ -240,40 +310,32 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     //
     
     if cr, ok := g.findMCP(ctx); ok {
-    
+
     	route := cr.route
     
     	//
-    	// Authentification MCP
+    	// MCP OAuth authentication
     	//
     	if g.needsAuthentication(route, ctx) {
     
-    		ctx, err = g.checkAuth(
+    		resourceMetadataURL, ok := g.mcpResourceMetadataURL(ctx.Host)
+    		if !ok {
+    			http.Error(
+    				w,
+    				"MCP authentication configuration error",
+    				http.StatusInternalServerError,
+    			)
+    			return
+    		}
+    
+    		ctx, err = g.checkMCPAuth(
     			w,
     			r,
     			ctx,
+    			resourceMetadataURL,
     		)
     
     		if err != nil {
-    
-    			w.Header().Set(
-    				"Content-Type",
-    				"application/json",
-    			)
-    
-    			w.Header().Set(
-    				"WWW-Authenticate",
-    				`Bearer realm="cladone"`,
-    			)
-    
-    			w.WriteHeader(
-    				http.StatusUnauthorized,
-    			)
-    
-    			_, _ = w.Write([]byte(
-    				`{"error":"authentication_required"}`,
-    			))
-    
     			return
     		}
     	}
