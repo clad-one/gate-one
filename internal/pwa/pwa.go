@@ -6,8 +6,10 @@
 package pwa
 
 import (
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -86,17 +88,43 @@ func (h *Handler) manifest() []byte {
 // route declares an apiCache policy, API responses (POST/SSE included)
 // are cached keyed by request and replayed offline.
 func (h *Handler) swJS() string {
-	js := `// Généré par la gateway — workbox ` + workboxVersion + ` auto-hébergé
-importScripts('` + PathPrefix + `workbox/workbox-sw.js');
+	// Passe 1 : générer le corps avec le placeholder CACHE_VERSION ;
+	// le hash porte sur ce texte (la politique effective y est déjà,
+	// via apiCacheJS et ses noms/versions de caches).
+	body := `importScripts('` + PathPrefix + `workbox/workbox-sw.js');
 
 workbox.setConfig({ modulePathPrefix: '` + PathPrefix + `workbox/' });
+
+// Version de l'ensemble des caches = hash du contenu même de ce SW :
+// tout changement (config, générateur, champ version d'un apiCache)
+// change le hash => nouveaux noms de caches => purge des anciens à
+// l'activation. Aucun changement => mêmes caches, le replay offline
+// survit aux fermetures d'onglets.
+const CACHE_VERSION = '@@CACHE_VERSION@@';
+const ASSETS_CACHE = 'gateway-pwa-assets-' + CACHE_VERSION;
+
+// prend la main dès l'installation : la mise à jour est effective au
+// chargement suivant, sans attendre la fermeture de tous les onglets
+self.skipWaiting();
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys
+          .filter((k) => k.startsWith('gateway-pwa-') && !k.includes(CACHE_VERSION))
+          .map((k) => caches.delete(k))
+      ).then(() => self.clients.claim())
+    )
+  );
+});
 
 if (workbox) {
   // Stratégie pour les pages et les assets (Mode déconnecté de base)
   workbox.routing.registerRoute(
     ({request}) => request.destination === 'document' || request.destination === 'script' || request.destination === 'style',
     new workbox.strategies.NetworkFirst({
-      cacheName: 'gateway-pwa-assets',
+      cacheName: ASSETS_CACHE,
     })
   );
 
@@ -107,6 +135,13 @@ if (workbox) {
   );
 ` + h.apiCacheJS() + `}
 `
+
+	// Passe 2 : hash du corps (placeholder inclus), puis substitution.
+	version := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))[:8]
+	body = strings.ReplaceAll(body, "@@CACHE_VERSION@@", version)
+
+	js := `// Généré par la gateway — workbox ` + workboxVersion + ` auto-hébergé
+// version caches: ` + version + "\n" + body
 	return js
 }
 
@@ -188,7 +223,13 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	}
 
 	cacheName := "gateway-pwa-api-" + strings.TrimPrefix(c.Path, "/")
+	if c.Version != "" {
+		cacheName += "-" + c.Version
+	}
 	cacheName = strings.ReplaceAll(cacheName, "/", "-")
+	// @@CACHE_VERSION@@ est substitué par swJS (hash du SW entier) ;
+	// le nom dépend donc aussi de toute la politique effective.
+	cacheName += "-@@CACHE_VERSION@@"
 
 	return `
   // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement,

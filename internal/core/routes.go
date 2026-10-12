@@ -83,6 +83,11 @@ type PWAApiCache struct {
 	// than this (default 2 MiB) so one huge payload cannot evict
 	// everything else.
 	MaxEntrySizeBytes int64 `json:"maxEntrySizeBytes,omitempty"`
+	// Version bumps this endpoint's cache when the backend's results
+	// change (new lexicon, bug fix in the computation): the string is
+	// part of the cache name, so changing it invalidates the old
+	// entries at the next SW activation.
+	Version string `json:"version,omitempty"`
 }
 
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:

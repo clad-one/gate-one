@@ -111,7 +111,8 @@ func TestServiceWorkerApiCache(t *testing.T) {
 
 	for _, want := range []string{
 		"url.pathname === '/api/process_stream'",
-		"caches.open('gateway-pwa-api-api-process_stream')",
+		// nom de cache suffixé par la version du SW (hash)
+		"caches.open('gateway-pwa-api-api-process_stream-",
 		"storeCompleteResponse",
 		"body.tee()",
 		"cache.match(request)",
@@ -153,9 +154,9 @@ func TestServiceWorkerApiCachesMultiple(t *testing.T) {
 			t.Errorf("sw.js multi-apiCache missing %s", want)
 		}
 	}
-	// chaque endpoint son cache
-	if !strings.Contains(sw, "caches.open('gateway-pwa-api-api-process_stream')") ||
-		!strings.Contains(sw, "caches.open('gateway-pwa-api-api-poems')") {
+	// chaque endpoint son cache (suffixe version SW)
+	if !strings.Contains(sw, "caches.open('gateway-pwa-api-api-process_stream-") ||
+		!strings.Contains(sw, "caches.open('gateway-pwa-api-api-poems-") {
 		t.Errorf("per-endpoint cache names missing:\n%s", sw)
 	}
 }
@@ -175,6 +176,92 @@ func TestServiceWorkerWithoutApiCache(t *testing.T) {
 	if strings.Contains(sw, "gateway-pwa-api") {
 		t.Errorf("apiCache route generated without policy:\n%s", sw)
 	}
+}
+
+func TestServiceWorkerVersioning(t *testing.T) {
+	sw := New(emptyPolicy()).swJS()
+
+	for _, want := range []string{
+		"const CACHE_VERSION = '", // hash injecté
+		"self.skipWaiting()",
+		"addEventListener('activate'",
+		"caches.delete(k)",
+		// le placeholder ne doit jamais survivre à la génération
+	} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("sw.js versioning missing %s", want)
+		}
+	}
+	if strings.Contains(sw, "@@CACHE_VERSION@@") {
+		t.Error("CACHE_VERSION placeholder not substituted")
+	}
+}
+
+// Tout changement de politique (même un seul champ) doit changer les
+// noms de caches => purge automatique à l'activation.
+func TestServiceWorkerVersionChangesWithPolicy(t *testing.T) {
+	sw1 := New(emptyPolicy()).swJS()
+
+	pol := emptyPolicy()
+	pol.ApiCaches = []*core.PWAApiCache{{Path: "/api/process_stream"}}
+	sw2 := New(pol).swJS()
+
+	v1 := extractCacheVersion(sw1)
+	v2 := extractCacheVersion(sw2)
+	if v1 == "" || v2 == "" {
+		t.Fatalf("versions vides: %q / %q", v1, v2)
+	}
+	if v1 == v2 {
+		t.Errorf("policy change did not change cache version: %q", v1)
+	}
+
+	// même politique => même version (cache préservé entre deploys sans
+	// changement)
+	sw2b := New(pol).swJS()
+	if extractCacheVersion(sw2b) != v2 {
+		t.Errorf("identical policy changed cache version: %q vs %q", v2, extractCacheVersion(sw2b))
+	}
+}
+
+// Le champ version d'un apiCache change le nom du cache de l'endpoint
+// ET la version globale : l'ancienne entrée est purgée à l'activation.
+func TestApiCacheVersionField(t *testing.T) {
+	pol := emptyPolicy()
+	pol.ApiCaches = []*core.PWAApiCache{{
+		Path:    "/api/process_stream",
+		Version: "morphalou",
+	}}
+	sw := New(pol).swJS()
+	if !strings.Contains(sw, "gateway-pwa-api-api-process_stream-morphalou-") {
+		t.Errorf("apiCache version not in cache name:\n%s", sw)
+	}
+
+	pol2 := emptyPolicy()
+	pol2.ApiCaches = []*core.PWAApiCache{{
+		Path:    "/api/process_stream",
+		Version: "morphalou-2",
+	}}
+	sw2 := New(pol2).swJS()
+	if !strings.Contains(sw2, "gateway-pwa-api-api-process_stream-morphalou-2-") {
+		t.Errorf("bumped apiCache version missing:\n%s", sw2)
+	}
+	if extractCacheVersion(sw) == extractCacheVersion(sw2) {
+		t.Error("apiCache version bump did not change global cache version")
+	}
+}
+
+func extractCacheVersion(sw string) string {
+	const marker = "const CACHE_VERSION = '"
+	i := strings.Index(sw, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := sw[i+len(marker):]
+	j := strings.Index(rest, "'")
+	if j < 0 {
+		return ""
+	}
+	return rest[:j]
 }
 
 func TestWorkboxEmbedded(t *testing.T) {
