@@ -36,7 +36,12 @@
         "enabled": true,
         "name": "Versifier",
         "themeColor": "#4285f4",
-        "icons": ["/icon-192.png", "/icon-512.png"]
+        "icons": ["/icon-192.png", "/icon-512.png"],
+        "apiCache": {
+          "path": "/api/process_stream",
+          "maxEntries": 50,
+          "maxAgeSeconds": 86400
+        }
       }
     },
     {

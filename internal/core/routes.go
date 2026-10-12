@@ -67,6 +67,17 @@ type MCPPolicy struct {
 	Operations []MCPOperation `json:"operations"`
 }
 
+// PWAApiCache declares a size-bounded offline cache for API responses
+// (typically POST+SSE streams like /api/process_stream): responses are
+// stored keyed by request (URL + body) while streaming normally to the
+// app, and replayed from cache when the network fails. Only complete,
+// successful responses are cached.
+type PWAApiCache struct {
+	Path          string `json:"path"`
+	MaxEntries    int    `json:"maxEntries,omitempty"`    // default 50
+	MaxAgeSeconds int    `json:"maxAgeSeconds,omitempty"` // default 86400
+}
+
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:
 // virtual endpoints under /__gateway_pwa/ (manifest, service worker,
 // self-hosted Workbox runtime) and <head> injection on HTML responses.
@@ -80,6 +91,8 @@ type PWAPolicy struct {
 	// for a fully installable app. Legacy single "icon" is still read.
 	Icon  string   `json:"icon,omitempty"`
 	Icons []string `json:"icons,omitempty"`
+	// ApiCache: offline replay of API responses (POST/SSE included).
+	ApiCache *PWAApiCache `json:"apiCache,omitempty"`
 }
 
 type Route struct {

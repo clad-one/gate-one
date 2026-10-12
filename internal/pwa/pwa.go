@@ -82,9 +82,11 @@ func (h *Handler) manifest() []byte {
 // swJS is the gateway-generated service worker. Workbox is loaded from
 // the self-hosted copy embedded below (modulePathPrefix), never from a
 // CDN. Auth traffic is explicitly NetworkOnly so the service worker
-// never caches or intercepts Keycloak/auth-bridge exchanges.
+// never caches or intercepts Keycloak/auth-bridge exchanges. When the
+// route declares an apiCache policy, API responses (POST/SSE included)
+// are cached keyed by request and replayed offline.
 func (h *Handler) swJS() string {
-	return `// Généré par la gateway — workbox ` + workboxVersion + ` auto-hébergé
+	js := `// Généré par la gateway — workbox ` + workboxVersion + ` auto-hébergé
 importScripts('` + PathPrefix + `workbox/workbox-sw.js');
 
 workbox.setConfig({ modulePathPrefix: '` + PathPrefix + `workbox/' });
@@ -103,8 +105,99 @@ if (workbox) {
     ({url}) => url.pathname.includes('/protocol/openid-connect') || url.pathname.includes('/auth'),
     new workbox.strategies.NetworkOnly()
   );
-}
+` + h.apiCacheJS() + `}
 `
+	return js
+}
+
+// apiCacheJS generates the offline-replay route for the declared API
+// cache policy. The response is streamed to the app via one tee branch
+// while the other branch accumulates and is only written to the cache
+// once the stream completes cleanly (partial SSE responses are never
+// cached). Keyed by URL + body so identical POST payloads replay.
+func (h *Handler) apiCacheJS() string {
+	c := h.policy.ApiCache
+	if c == nil || c.Path == "" {
+		return ""
+	}
+
+	maxEntries := c.MaxEntries
+	if maxEntries <= 0 {
+		maxEntries = 50
+	}
+	maxAge := c.MaxAgeSeconds
+	if maxAge <= 0 {
+		maxAge = 86400
+	}
+
+	return `
+  // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement,
+  // clé = URL + corps de la requête ; les flux SSE partiels ne sont
+  // jamais cachés). ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s.
+  workbox.routing.registerRoute(
+    ({url}) => url.pathname === '` + c.Path + `',
+    async ({event}) => {
+      const request = event.request.clone();
+      const cache = await caches.open('gateway-pwa-api');
+      try {
+        const response = await fetch(event.request);
+        if (response.ok && response.body) {
+          const [toApp, toCache] = response.body.tee();
+          storeCompleteResponse(cache, request, toCache);
+          return new Response(toApp, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+        }
+        return response;
+      } catch (err) {
+        // hors ligne (ou réseau instable) : rejouer la réponse
+        // complète précédemment stockée pour cette requête exacte
+        const cached = await cache.match(request);
+        if (cached) return cached;
+        throw err;
+      }
+    }
+  );
+
+  // Accumule la branche du tee et n'écrit dans le cache que lorsque le
+  // flux s'est terminé sans erreur ni annulation.
+  async function storeCompleteResponse(cache, request, stream) {
+    try {
+      const response = new Response(stream, {
+        status: 200,
+        headers: {'Content-Type': 'text/event-stream'},
+      });
+      await cache.put(request, response);
+    } catch (err) {
+      // flux annulé ou interrompu : rien n'est caché
+    }
+  }
+`
+}
+
+// fmtInt évite d'importer strconv pour deux entiers du template.
+func fmtInt(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
 }
 
 // pwaIconSizes déduit la taille déclarée du nom de fichier

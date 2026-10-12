@@ -98,6 +98,51 @@ func TestServiceWorker(t *testing.T) {
 	}
 }
 
+func TestServiceWorkerApiCache(t *testing.T) {
+	pol := emptyPolicy()
+	pol.ApiCache = &core.PWAApiCache{
+		Path:          "/api/process_stream",
+		MaxEntries:    42,
+		MaxAgeSeconds: 3600,
+	}
+	h := New(pol)
+
+	sw := h.swJS()
+
+	for _, want := range []string{
+		"url.pathname === '/api/process_stream'",
+		"caches.open('gateway-pwa-api')",
+		"storeCompleteResponse",
+		"body.tee()",
+		"cache.match(request)",
+	} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("sw.js apiCache missing %s in:\n%s", want, sw)
+		}
+	}
+	// valeurs explicites
+	if !strings.Contains(sw, "42 entrées max") || !strings.Contains(sw, "3600s") {
+		t.Errorf("sw.js apiCache limits not rendered:\n%s", sw)
+	}
+}
+
+func TestServiceWorkerApiCacheDefaults(t *testing.T) {
+	pol := emptyPolicy()
+	pol.ApiCache = &core.PWAApiCache{Path: "/api/x"}
+	sw := New(pol).swJS()
+
+	if !strings.Contains(sw, "50 entrées max") || !strings.Contains(sw, "86400s") {
+		t.Errorf("apiCache defaults not applied:\n%s", sw)
+	}
+}
+
+func TestServiceWorkerWithoutApiCache(t *testing.T) {
+	sw := New(emptyPolicy()).swJS()
+	if strings.Contains(sw, "gateway-pwa-api") {
+		t.Errorf("apiCache route generated without policy:\n%s", sw)
+	}
+}
+
 func TestWorkboxEmbedded(t *testing.T) {
 	h := New(emptyPolicy())
 
