@@ -110,17 +110,70 @@ if (workbox) {
 	return js
 }
 
-// apiCacheJS generates the offline-replay route for the declared API
-// cache policy. The response is streamed to the app via one tee branch
-// while the other branch accumulates and is only written to the cache
-// once the stream completes cleanly (partial SSE responses are never
-// cached). Keyed by URL + body so identical POST payloads replay.
+// apiCacheJS generates the offline-replay routes for the declared API
+// cache policies (one block per endpoint). The response is streamed to
+// the app via one tee branch while the other branch accumulates and is
+// only written to the cache once the stream completes cleanly (partial
+// SSE responses are never cached). Keyed by URL + body so identical
+// POST payloads replay. Each policy gets its own ExpirationPlugin and
+// size guard.
 func (h *Handler) apiCacheJS() string {
-	c := h.policy.ApiCache
-	if c == nil || c.Path == "" {
+	caches := core.EffectiveApiCaches(h.policy)
+	if len(caches) == 0 {
 		return ""
 	}
 
+	var sb strings.Builder
+	// storeCompleteResponse: shared helper, defined once.
+	sb.WriteString(`
+  // Accumule la branche du tee et n'écrit dans le cache que lorsque le
+  // flux s'est terminé sans erreur ni annulation ; l'ExpirationPlugin
+  // fait ensuite le ménage (ancienneté + quota). Les réponses dépassant
+  // maxEntrySizeBytes ne sont pas cachées.
+  async function storeCompleteResponse(cache, request, stream, expiration, maxSize) {
+    try {
+      let size = 0;
+      const parts = [];
+      const reader = stream.getReader();
+      for (;;) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (maxSize > 0 && size > maxSize) {
+          await reader.cancel();
+          return; // réponse trop volumineuse : pas de cache
+        }
+        parts.push(value);
+      }
+      const blob = new Blob(parts);
+      const response = new Response(blob, {
+        status: 200,
+        headers: {'Content-Type': 'text/event-stream'},
+      });
+      await cache.put(request, response);
+      await expiration.cacheDidUpdate({
+        cacheName: cache._name,
+        request: request,
+        oldResponse: null,
+        newResponse: response,
+      });
+    } catch (err) {
+      // flux annulé ou interrompu, ou quota dépassé : rien n'est caché
+    }
+  }
+`)
+
+	for _, c := range caches {
+		if c.Path == "" {
+			continue
+		}
+		sb.WriteString(h.apiCacheRouteJS(c))
+	}
+	return sb.String()
+}
+
+// apiCacheRouteJS generates one endpoint's route + expiration plugin.
+func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	maxEntries := c.MaxEntries
 	if maxEntries <= 0 {
 		maxEntries = 50
@@ -129,13 +182,20 @@ func (h *Handler) apiCacheJS() string {
 	if maxAge <= 0 {
 		maxAge = 86400
 	}
+	maxSize := c.MaxEntrySizeBytes
+	if maxSize <= 0 {
+		maxSize = 2 << 20 // 2 MiB per entry
+	}
+
+	cacheName := "gateway-pwa-api-" + strings.TrimPrefix(c.Path, "/")
+	cacheName = strings.ReplaceAll(cacheName, "/", "-")
 
 	return `
   // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement,
   // clé = URL + corps de la requête ; les flux SSE partiels ne sont
   // jamais cachés). ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s,
-  // appliqué par l'ExpirationPlugin après chaque écriture.
-  const apiCacheExpiration = new workbox.expiration.ExpirationPlugin({
+  // ` + fmtInt64(maxSize) + ` octets max par entrée.
+  const exp_` + jsIdent(c.Path) + ` = new workbox.expiration.ExpirationPlugin({
     maxEntries: ` + fmtInt(maxEntries) + `,
     maxAgeSeconds: ` + fmtInt(maxAge) + `,
     purgeOnQuotaError: true
@@ -145,12 +205,12 @@ func (h *Handler) apiCacheJS() string {
     ({url}) => url.pathname === '` + c.Path + `',
     async ({event}) => {
       const request = event.request.clone();
-      const cache = await caches.open('gateway-pwa-api');
+      const cache = await caches.open('` + cacheName + `');
       try {
         const response = await fetch(event.request);
         if (response.ok && response.body) {
           const [toApp, toCache] = response.body.tee();
-          storeCompleteResponse(cache, request, toCache, apiCacheExpiration);
+          storeCompleteResponse(cache, request, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `);
           return new Response(toApp, {
             status: response.status,
             statusText: response.statusText,
@@ -167,31 +227,26 @@ func (h *Handler) apiCacheJS() string {
       }
     }
   );
-
-  // Accumule la branche du tee et n'écrit dans le cache que lorsque le
-  // flux s'est terminé sans erreur ni annulation ; l'ExpirationPlugin
-  // fait ensuite le ménage (ancienneté + quota).
-  async function storeCompleteResponse(cache, request, stream, expiration) {
-    try {
-      const response = new Response(stream, {
-        status: 200,
-        headers: {'Content-Type': 'text/event-stream'},
-      });
-      await cache.put(request, response);
-      await expiration.cacheDidUpdate({
-        cacheName: 'gateway-pwa-api',
-        request: request,
-        oldResponse: null,
-        newResponse: response,
-      });
-    } catch (err) {
-      // flux annulé ou interrompu, ou quota dépassé : rien n'est caché
-    }
-  }
 `
 }
 
+// jsIdent convertit un chemin en identifiant JS utilisable.
+func jsIdent(path string) string {
+	ident := strings.TrimPrefix(path, "/")
+	ident = strings.ReplaceAll(ident, "/", "_")
+	ident = strings.ReplaceAll(ident, "-", "_")
+	// préfixe si le premier caractère n'est pas une lettre
+	if ident == "" || (ident[0] < 'a' || ident[0] > 'z') && (ident[0] < 'A' || ident[0] > 'Z') {
+		ident = "api_" + ident
+	}
+	return ident
+}
+
 // fmtInt évite d'importer strconv pour deux entiers du template.
+func fmtInt64(n int64) string {
+	return fmtInt(int(n))
+}
+
 func fmtInt(n int) string {
 	if n == 0 {
 		return "0"

@@ -111,13 +111,14 @@ func TestServiceWorkerApiCache(t *testing.T) {
 
 	for _, want := range []string{
 		"url.pathname === '/api/process_stream'",
-		"caches.open('gateway-pwa-api')",
+		"caches.open('gateway-pwa-api-api-process_stream')",
 		"storeCompleteResponse",
 		"body.tee()",
 		"cache.match(request)",
 		"ExpirationPlugin",
 		"maxEntries: 42",
 		"maxAgeSeconds: 3600",
+		"maxEntrySizeBytes", // mention dans le commentaire
 		"purgeOnQuotaError: true",
 	} {
 		if !strings.Contains(sw, want) {
@@ -127,6 +128,35 @@ func TestServiceWorkerApiCache(t *testing.T) {
 	// valeurs explicites
 	if !strings.Contains(sw, "42 entrées max") || !strings.Contains(sw, "3600s") {
 		t.Errorf("sw.js apiCache limits not rendered:\n%s", sw)
+	}
+}
+
+func TestServiceWorkerApiCachesMultiple(t *testing.T) {
+	pol := emptyPolicy()
+	pol.ApiCaches = []*core.PWAApiCache{
+		{Path: "/api/process_stream", MaxEntries: 10, MaxAgeSeconds: 600, MaxEntrySizeBytes: 1048576},
+		{Path: "/api/poems", MaxEntries: 200, MaxAgeSeconds: 604800},
+	}
+	sw := New(pol).swJS()
+
+	for _, want := range []string{
+		"url.pathname === '/api/process_stream'",
+		"url.pathname === '/api/poems'",
+		"maxEntries: 10",
+		"maxEntries: 200",
+		"maxAgeSeconds: 600",
+		"maxAgeSeconds: 604800",
+		// défaut de taille par entrée pour le second bloc
+		"2097152",
+	} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("sw.js multi-apiCache missing %s", want)
+		}
+	}
+	// chaque endpoint son cache
+	if !strings.Contains(sw, "caches.open('gateway-pwa-api-api-process_stream')") ||
+		!strings.Contains(sw, "caches.open('gateway-pwa-api-api-poems')") {
+		t.Errorf("per-endpoint cache names missing:\n%s", sw)
 	}
 }
 

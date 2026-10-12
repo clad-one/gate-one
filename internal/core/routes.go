@@ -71,11 +71,18 @@ type MCPPolicy struct {
 // (typically POST+SSE streams like /api/process_stream): responses are
 // stored keyed by request (URL + body) while streaming normally to the
 // app, and replayed from cache when the network fails. Only complete,
-// successful responses are cached.
+// successful responses are cached. Multiple blocks may be declared
+// (one per endpoint policy).
 type PWAApiCache struct {
-	Path          string `json:"path"`
-	MaxEntries    int    `json:"maxEntries,omitempty"`    // default 50
-	MaxAgeSeconds int    `json:"maxAgeSeconds,omitempty"` // default 86400
+	Path string `json:"path"`
+	// MaxEntries bounds the number of cached responses (default 50).
+	MaxEntries int `json:"maxEntries,omitempty"`
+	// MaxAgeSeconds bounds entry age (default 86400 = 24h).
+	MaxAgeSeconds int `json:"maxAgeSeconds,omitempty"`
+	// MaxEntrySizeBytes refuses to cache individual responses larger
+	// than this (default 2 MiB) so one huge payload cannot evict
+	// everything else.
+	MaxEntrySizeBytes int64 `json:"maxEntrySizeBytes,omitempty"`
 }
 
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:
@@ -91,8 +98,20 @@ type PWAPolicy struct {
 	// for a fully installable app. Legacy single "icon" is still read.
 	Icon  string   `json:"icon,omitempty"`
 	Icons []string `json:"icons,omitempty"`
-	// ApiCache: offline replay of API responses (POST/SSE included).
-	ApiCache *PWAApiCache `json:"apiCache,omitempty"`
+	// ApiCaches: offline replay of API responses (POST/SSE included),
+	// one block per endpoint policy. ApiCache is the legacy singular
+	// form, still read.
+	ApiCache  *PWAApiCache   `json:"apiCache,omitempty"`
+	ApiCaches []*PWAApiCache `json:"apiCaches,omitempty"`
+}
+
+// EffectiveApiCaches merges the legacy singular form with the list.
+func EffectiveApiCaches(p *PWAPolicy) []*PWAApiCache {
+	out := p.ApiCaches
+	if p.ApiCache != nil {
+		out = append(out, p.ApiCache)
+	}
+	return out
 }
 
 type Route struct {
