@@ -31,7 +31,12 @@
       "path": "/*",
       "frontend": true,
       "backend": "http://versifier:9292",
-      "autoHead": true
+      "autoHead": true,
+      "pwa": {
+        "enabled": true,
+        "name": "Versifier",
+        "themeColor": "#4285f4"
+      }
     },
     {
       "host": "cladone.com",
