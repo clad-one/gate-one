@@ -34,6 +34,12 @@
       "autoHead": true
     },
     {
+      "host": "cladone.com",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://landing:80"
+    },
+    {
       "host": "feedback.cladone.com",
       "path": "/*",
       "frontend": true,
