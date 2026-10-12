@@ -1,0 +1,27 @@
+
+LICENCE D'UTILISATION ET DE CONTRIBUTION SOURCE-DISPONIBLE (BSL-CUSTOM)
+
+Version 1.0 — Droits d'Auteur © [2026] [Benoit Rolland - Cladone-IT]. Tous droits réservés.
+
+1. PERMISSIONS ET ACCÈS AU CODE
+
+L'accès au code source du présent logiciel (le « Logiciel ») est fourni gratuitement à des fins d'étude, de test, de développement interne et d'usage personnel. Vous êtes autorisé à copier, modifier et créer des travaux dérivés (y compris sous forme de "fork") du Logiciel, sous réserve du respect strict des conditions de la présente Licence.
+
+2. CONDITION CRUCIALE DE CESSION DE DROITS SUR LES TRAVAUX DÉRIVÉS
+
+Le Logiciel est fourni selon un principe de réciprocité commerciale asymétrique. En modifiant le Logiciel, en créant un travail dérivé ou en publiant un "fork" (ci-après dénommé « le Contributeur »), vous acceptez de manière irrévocable les conditions suivantes :
+• Octroi de Licence à l'Auteur Initial : Le Contributeur accorde par la présente au titulaire initial des droits d'auteur (le « Concédant Initial ») une licence mondiale, non exclusive, perpétuelle, irrévocable, transférable, sous-licenciable et libre de redevance (royalty-free).
+• Étendue des Droits : Cette licence autorise le Concédant Initial à copier, modifier, intégrer, distribuer, vendre et exploiter commercialement, sous quelque forme que ce soit (y compris dans des produits propriétaires, fermés, ou des services Cloud/SaaS), tout ou partie des modifications, améliorations ou travaux dérivés créés par le Contributeur.
+• Automatisme : Cet octroi de licence est automatique et prend effet dès la création ou la distribution du travail dérivé par le Contributeur, sans qu'aucune signature de contrat supplémentaire (type CLA) ne soit nécessaire.
+
+3. RESTRICTIONS COMMERCIALES POUR LES TIERS
+
+Il est strictement interdit à tout tiers ou Contributeur d'utiliser le Logiciel ou ses travaux dérivés pour fournir un service concurrent direct du Concédant Initial, ou pour héberger le logiciel en tant que service payant (SaaS/Cloud), sauf autorisation écrite préalable et expresse du Concédant Initial.
+
+4. CONSERVATION DES NOTICES
+
+Toute copie ou travail dérivé du Logiciel doit inclure la présente licence dans son intégralité, ainsi que les mentions de copyright originales de l'auteur initial.
+
+5. EXCLUSION DE GARANTIE
+
+LE LOGICIEL EST FOURNI "EN L'ÉTAT", SANS GARANTIE D'AUCUNE SORTE, EXPRESSE OU IMPLICITE. EN AUCUN CAS LES AUTEURS NE POURRONT ÊTRE TENUS RESPONSABLES DE QUELQUE RÉCLAMATION OU DOMMAGE QUE CE SOIT LIÉ À L'UTILISATION DU LOGICIEL.
