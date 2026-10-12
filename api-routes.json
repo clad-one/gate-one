@@ -35,7 +35,8 @@
       "pwa": {
         "enabled": true,
         "name": "Versifier",
-        "themeColor": "#4285f4"
+        "themeColor": "#4285f4",
+        "icons": ["/icon-192.png", "/icon-512.png"]
       }
     },
     {

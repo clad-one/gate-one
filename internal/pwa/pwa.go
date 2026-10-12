@@ -60,13 +60,19 @@ func (h *Handler) manifest() []byte {
 	}
 
 	if h.policy.Icon != "" {
-		manifest["icons"] = []map[string]any{
-			{
-				"src":   h.policy.Icon,
-				"sizes": "192x192",
+		h.policy.Icons = append(h.policy.Icons, h.policy.Icon)
+	}
+
+	if len(h.policy.Icons) > 0 {
+		icons := make([]map[string]any, 0, len(h.policy.Icons))
+		for _, src := range h.policy.Icons {
+			icons = append(icons, map[string]any{
+				"src":   src,
+				"sizes": pwaIconSizes(src),
 				"type":  "image/png",
-			},
+			})
 		}
+		manifest["icons"] = icons
 	}
 
 	data, _ := json.MarshalIndent(manifest, "", "  ")
@@ -99,6 +105,17 @@ if (workbox) {
   );
 }
 `
+}
+
+// pwaIconSizes déduit la taille déclarée du nom de fichier
+// (icon-192.png => "192x192"). Défaut : "512x512".
+func pwaIconSizes(src string) string {
+	for _, size := range []string{"512", "384", "256", "192", "144", "96"} {
+		if strings.Contains(src, size) {
+			return size + "x" + size
+		}
+	}
+	return "512x512"
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

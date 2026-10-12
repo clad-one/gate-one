@@ -17,7 +17,7 @@ func makePolicy() *core.PWAPolicy {
 		Name:       "TestApp",
 		ShortName:  "TA",
 		ThemeColor: "#123456",
-		Icon:       "/icon-192.png",
+		Icons:      []string{"/icon-192.png", "/icon-512.png"},
 	}
 }
 
@@ -43,6 +43,9 @@ func TestManifest(t *testing.T) {
 		`"theme_color": "#123456"`,
 		`"start_url": "/"`,
 		`"src": "/icon-192.png"`,
+		`"sizes": "192x192"`,
+		`"src": "/icon-512.png"`,
+		`"sizes": "512x512"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("manifest missing %s in:\n%s", want, body)
