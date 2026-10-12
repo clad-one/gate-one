@@ -56,6 +56,11 @@ func InjectResponse(resp *http.Response) error {
 		updated = body
 	}
 
+	// The body was re-serialized uncompressed by the transport; a
+	// stale Content-Encoding would corrupt the page (same fix as the
+	// 401/403 guard injection).
+	resp.Header.Del("Content-Encoding")
+
 	resp.Body = io.NopCloser(bytes.NewReader(updated))
 	resp.ContentLength = int64(len(updated))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(updated)))
