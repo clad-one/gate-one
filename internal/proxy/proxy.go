@@ -119,7 +119,17 @@ func New(cfg *core.Config) (*Gateway, error) {
 
 			// Inject the manifest link + SW registration into
 			// successful HTML responses proxied for this route.
-			rp.ModifyResponse = pwa.InjectResponse
+			// Chain with any ModifyResponse already set (e.g. the
+			// 401/403 guard) so both run.
+			previous := rp.ModifyResponse
+			rp.ModifyResponse = func(resp *http.Response) error {
+				if previous != nil {
+					if err := previous(resp); err != nil {
+						return err
+					}
+				}
+				return pwa.InjectResponse(resp)
+			}
 
 			log.Printf(
 				"PWA enabled host=%s path=%s",
