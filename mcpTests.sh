@@ -159,7 +159,7 @@ TOKEN=$(
     -d "client_secret=$MCP_TEST_CLIENT_SECRET" \
     -d "username=$MCP_TEST_USERNAME" \
     -d "password=$MCP_TEST_PASSWORD" \
-    -d "scope=openid mcp:tools" |
+    -d "scope=openid mcp-tools" |
   jq -r '.access_token'
 )
 
@@ -171,7 +171,7 @@ curl -s -X POST \
     -d "client_secret=$MCP_TEST_CLIENT_SECRET" \
     -d "username=$MCP_TEST_USERNAME" \
     -d "password=$MCP_TEST_PASSWORD" \
-    -d "scope=openid mcp:tools" |
+    -d "scope=openid mcp-tools" |
   jq -r '.access_token'
 null
 
@@ -183,7 +183,7 @@ $ curl -sS -X POST \
   --data-urlencode "client_secret=$MCP_TEST_CLIENT_SECRET" \
   --data-urlencode "username=$MCP_TEST_USERNAME" \
   --data-urlencode "password=$MCP_TEST_PASSWORD" \
-  --data-urlencode "scope=openid mcp:tools" | jq
+  --data-urlencode "scope=openid mcp-tools" | jq
 {
   "error": "invalid_grant",
   "error_description": "Invalid user credentials"
