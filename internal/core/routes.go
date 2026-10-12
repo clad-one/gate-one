@@ -48,7 +48,9 @@ type OpenAPIPolicy struct {
 }
 
 // AuthGuardPolicy controls the injection of the gateway's 401/403 guard
-// script into HTML responses of frontend routes. When the script sees a
+// script into HTML responses of frontend routes. Unlike the AuthPolicy
+// (which enforces authentication on a route), the guard only reacts to
+// 401/403 answers already produced: when the injected script sees a
 // fetch() answer 401/403 it redirects the browser to the login page.
 // Absent policy = guard active on frontend routes, no-op elsewhere.
 type AuthGuardPolicy struct {
