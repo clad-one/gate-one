@@ -69,6 +69,19 @@ type MCPPolicy struct {
 	Operations []MCPOperation `json:"operations"`
 }
 
+// PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:
+// virtual endpoints under /__gateway_pwa/ (manifest, service worker,
+// self-hosted Workbox runtime) and <head> injection on HTML responses.
+type PWAPolicy struct {
+	Enabled    bool   `json:"enabled"`
+	Name       string `json:"name,omitempty"`
+	ShortName  string `json:"shortName,omitempty"`
+	ThemeColor string `json:"themeColor,omitempty"`
+	// Icon is a path on the same host (e.g. "/icon-192.png"); it is
+	// referenced from the generated manifest, not proxied.
+	Icon string `json:"icon,omitempty"`
+}
+
 type Route struct {
     Host string `json:"host"`
     Path string `json:"path"`
@@ -84,6 +97,7 @@ type Route struct {
 	
 	OpenAPI *OpenAPIPolicy `json:"openapi,omitempty"`
 	MCP     *MCPPolicy     `json:"mcp,omitempty"`
+	PWA     *PWAPolicy     `json:"pwa,omitempty"`
 
 	AuthGuard *AuthGuardPolicy `json:"authGuard,omitempty"`
 }

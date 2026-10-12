@@ -10,6 +10,7 @@ import (
     "net/url"
     "cladone/gateway/internal/core"
 	mcpserver "cladone/gateway/internal/mcp"
+	"cladone/gateway/internal/pwa"
 )
 
 type compiledRoute struct {
@@ -19,8 +20,12 @@ type compiledRoute struct {
 
     // true when this route is intended to return HTML pages
     pageRoute bool
-	
+
 	mcp *mcpserver.Server
+
+	// non-nil when the route declares a pwa policy: serves
+	// /__gateway_pwa/* and injects PWA tags into HTML responses
+	pwa *pwa.Handler
 }
 
 type Gateway struct {
@@ -105,6 +110,21 @@ func New(cfg *core.Config) (*Gateway, error) {
 				"MCP enabled host=%s path=%s",
 				route.Host,
 				route.MCP.Path,
+			)
+		}
+
+		if route.PWA != nil && route.PWA.Enabled {
+
+			cr.pwa = pwa.New(route.PWA)
+
+			// Inject the manifest link + SW registration into
+			// successful HTML responses proxied for this route.
+			rp.ModifyResponse = pwa.InjectResponse
+
+			log.Printf(
+				"PWA enabled host=%s path=%s",
+				route.Host,
+				route.Path,
 			)
 		}
 
@@ -275,6 +295,20 @@ func (g *Gateway) isPubliclyForbidden(
 	return false
 }
 
+// pwaHandlerForHost returns the PWA handler of the first PWA-enabled
+// route matching the host, or nil when the host has none.
+func (g *Gateway) pwaHandlerForHost(host string) *pwa.Handler {
+	for _, r := range g.routes {
+		if r.pwa == nil {
+			continue
+		}
+		if normalizeHost(r.route.Host) == normalizeHost(host) {
+			return r.pwa
+		}
+	}
+	return nil
+}
+
 func (g *Gateway) mcpResourceURLForHost(host string) (string, bool) {
 	for _, cr := range g.routes {
 		if cr.route.MCP == nil || !cr.route.MCP.Enabled {
@@ -335,7 +369,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     	http.NotFound(w, r)
     	return
     }
-	
+
+	//
+	// PWA virtual endpoints (gateway-served, never proxied)
+	//
+	if strings.HasPrefix(ctx.Path, pwa.PathPrefix) {
+		if h := g.pwaHandlerForHost(ctx.Host); h != nil {
+			h.ServeHTTP(w, r)
+			return
+		}
+	}
+
     //
     // MCP
     //
