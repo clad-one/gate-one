@@ -159,19 +159,39 @@ func (h *Handler) apiCacheJS() string {
 	}
 
 	var sb strings.Builder
-	// storeCompleteResponse: shared helper, defined once.
+	// Shared helpers, defined once.
 	sb.WriteString(`
-  // Accumule la branche du tee et n'écrit dans le cache que lorsque le
-  // flux s'est terminé sans erreur ni annulation ; l'ExpirationPlugin
-  // fait ensuite le ménage (ancienneté + quota). Les réponses dépassant
-  // maxEntrySizeBytes ne sont pas cachées.
+  // Clé de cache explicite : Cache Storage ignore le corps des requêtes
+  // POST dans sa clé (toutes les segmentations s'écraseraient), donc le
+  // corps est hashé dans un paramètre artificiel de l'URL.
+  async function buildCacheKey(url, bodyText, method) {
+    let key = url;
+    if (bodyText) {
+      const digest = await crypto.subtle.digest('SHA-256',
+        new TextEncoder().encode(bodyText));
+      const hex = [...new Uint8Array(digest)]
+        .map((b) => b.toString(16).padStart(2, '0')).join('');
+      key = url + (url.includes('?') ? '&' : '?')
+        + '__pwa_key=' + hex + '&__pwa_m=' + method;
+    }
+    return new Request(key);
+  }
+
+  // Accumule la branche du tee et écrit dans le cache : à la fin propre
+  // du flux, OU après 1,5 s sans nouveau chunk (les SSE ne se ferment
+  // pas toujours : attendre done indéfiniment ne cacherait jamais
+  // rien). Les réponses dépassant maxEntrySizeBytes ne sont pas cachées.
   async function storeCompleteResponse(cache, request, stream, expiration, maxSize) {
     try {
       let size = 0;
       const parts = [];
       const reader = stream.getReader();
       for (;;) {
-        const {done, value} = await reader.read();
+        const timeout = new Promise((resolve) => {
+          setTimeout(() => resolve({done: true, value: undefined, idle: true}), 1500);
+        });
+        const {done, value, idle} = await Promise.race([reader.read(), timeout]);
+        if (idle && parts.length > 0) break; // silence prolongé : finaliser
         if (done) break;
         size += value.byteLength;
         if (maxSize > 0 && size > maxSize) {
@@ -232,9 +252,8 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	cacheName += "-@@CACHE_VERSION@@"
 
 	return `
-  // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement,
-  // clé = URL + corps de la requête ; les flux SSE partiels ne sont
-  // jamais cachés). ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s,
+  // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement).
+  // ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s,
   // ` + fmtInt64(maxSize) + ` octets max par entrée.
   const exp_` + jsIdent(c.Path) + ` = new workbox.expiration.ExpirationPlugin({
     maxEntries: ` + fmtInt(maxEntries) + `,
@@ -245,13 +264,18 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
   workbox.routing.registerRoute(
     ({url}) => url.pathname === '` + c.Path + `',
     async ({event}) => {
-      const request = event.request.clone();
+      const req = event.request;
       const cache = await caches.open('` + cacheName + `');
       try {
-        const response = await fetch(event.request);
+        const response = await fetch(req);
         if (response.ok && response.body) {
+          // Clé de cache explicite : Cache Storage ignore le corps des
+          // POST dans sa clé (toutes les segmentations s'écraseraient),
+          // donc on hashe l'URL + le corps dans un paramètre artificiel.
+          const bodyText = req.method === 'GET' ? '' : await req.clone().text();
+          const keyReq = await buildCacheKey(req.url, bodyText, req.method);
           const [toApp, toCache] = response.body.tee();
-          storeCompleteResponse(cache, request, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `);
+          storeCompleteResponse(cache, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `);
           return new Response(toApp, {
             status: response.status,
             statusText: response.statusText,
@@ -261,8 +285,10 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
         return response;
       } catch (err) {
         // hors ligne (ou réseau instable) : rejouer la réponse
-        // complète précédemment stockée pour cette requête exacte
-        const cached = await cache.match(request);
+        // précédemment stockée pour cette requête exacte
+        const bodyText = req.method === 'GET' ? '' : await req.clone().text();
+        const keyReq = await buildCacheKey(req.url, bodyText, req.method);
+        const cached = await cache.match(keyReq);
         if (cached) return cached;
         throw err;
       }
