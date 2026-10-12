@@ -2,6 +2,7 @@ package proxy
 
 import (
     "encoding/json"
+    "fmt"
     "log"
     "strings"
     "net/http"
@@ -59,6 +60,29 @@ func New(cfg *core.Config) (*Gateway, error) {
 			proxy:     rp,
 			prefix:    normalizePath(route.Path),
 			pageRoute: route.Frontend,
+		}
+
+		// 401/403 guard script injection on frontend HTML responses
+		if guardEnabledFor(route) {
+			script := fmt.Sprintf(guardScript, guardLoginURL(route))
+			rp.ModifyResponse = func(resp *http.Response) error {
+				if resp.StatusCode != http.StatusOK ||
+					!strings.Contains(
+						resp.Header.Get("Content-Type"),
+						"text/html",
+					) {
+					return nil
+				}
+				if err := injectGuardScript(resp, script); err != nil {
+					// forward unmodified rather than break the page
+					log.Printf(
+						"GUARD injection failed host=%s: %v",
+						route.Host,
+						err,
+					)
+				}
+				return nil
+			}
 		}
 
 		if route.MCP != nil &&
@@ -433,7 +457,7 @@ log.Printf("matched=%v", ok)
                 http.Redirect(
                     w,
                     r,
-                    "https://login.cladone.com/login?returnTo="+
+                    LoginPageURL+"?returnTo="+
                         url.QueryEscape(returnTo),
                     http.StatusFound,
                 )
