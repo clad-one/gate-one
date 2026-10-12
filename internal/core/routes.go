@@ -47,6 +47,17 @@ type OpenAPIPolicy struct {
 	Public bool   `json:"public,omitempty"`
 }
 
+// AuthGuardPolicy controls the injection of the gateway's 401/403 guard
+// script into HTML responses of frontend routes. Unlike the AuthPolicy
+// (which enforces authentication on a route), the guard only reacts to
+// 401/403 answers already produced: when the injected script sees a
+// fetch() answer 401/403 it redirects the browser to the login page.
+// Absent policy = guard active on frontend routes, no-op elsewhere.
+type AuthGuardPolicy struct {
+	Enabled  *bool  `json:"enabled,omitempty"`  // false = opt-out
+	LoginURL string `json:"loginUrl,omitempty"` // default: shared constant
+}
+
 type MCPOperation struct {
 	Name        string `json:"name"`
 	OperationID string `json:"operationId"`
@@ -73,6 +84,8 @@ type Route struct {
 	
 	OpenAPI *OpenAPIPolicy `json:"openapi,omitempty"`
 	MCP     *MCPPolicy     `json:"mcp,omitempty"`
+
+	AuthGuard *AuthGuardPolicy `json:"authGuard,omitempty"`
 }
 
 type Config struct {
