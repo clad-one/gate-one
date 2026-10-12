@@ -133,7 +133,14 @@ func (h *Handler) apiCacheJS() string {
 	return `
   // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement,
   // clé = URL + corps de la requête ; les flux SSE partiels ne sont
-  // jamais cachés). ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s.
+  // jamais cachés). ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s,
+  // appliqué par l'ExpirationPlugin après chaque écriture.
+  const apiCacheExpiration = new workbox.expiration.ExpirationPlugin({
+    maxEntries: ` + fmtInt(maxEntries) + `,
+    maxAgeSeconds: ` + fmtInt(maxAge) + `,
+    purgeOnQuotaError: true
+  });
+
   workbox.routing.registerRoute(
     ({url}) => url.pathname === '` + c.Path + `',
     async ({event}) => {
@@ -143,7 +150,7 @@ func (h *Handler) apiCacheJS() string {
         const response = await fetch(event.request);
         if (response.ok && response.body) {
           const [toApp, toCache] = response.body.tee();
-          storeCompleteResponse(cache, request, toCache);
+          storeCompleteResponse(cache, request, toCache, apiCacheExpiration);
           return new Response(toApp, {
             status: response.status,
             statusText: response.statusText,
@@ -162,16 +169,23 @@ func (h *Handler) apiCacheJS() string {
   );
 
   // Accumule la branche du tee et n'écrit dans le cache que lorsque le
-  // flux s'est terminé sans erreur ni annulation.
-  async function storeCompleteResponse(cache, request, stream) {
+  // flux s'est terminé sans erreur ni annulation ; l'ExpirationPlugin
+  // fait ensuite le ménage (ancienneté + quota).
+  async function storeCompleteResponse(cache, request, stream, expiration) {
     try {
       const response = new Response(stream, {
         status: 200,
         headers: {'Content-Type': 'text/event-stream'},
       });
       await cache.put(request, response);
+      await expiration.cacheDidUpdate({
+        cacheName: 'gateway-pwa-api',
+        request: request,
+        oldResponse: null,
+        newResponse: response,
+      });
     } catch (err) {
-      // flux annulé ou interrompu : rien n'est caché
+      // flux annulé ou interrompu, ou quota dépassé : rien n'est caché
     }
   }
 `

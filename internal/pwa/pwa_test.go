@@ -115,6 +115,10 @@ func TestServiceWorkerApiCache(t *testing.T) {
 		"storeCompleteResponse",
 		"body.tee()",
 		"cache.match(request)",
+		"ExpirationPlugin",
+		"maxEntries: 42",
+		"maxAgeSeconds: 3600",
+		"purgeOnQuotaError: true",
 	} {
 		if !strings.Contains(sw, want) {
 			t.Errorf("sw.js apiCache missing %s in:\n%s", want, sw)
