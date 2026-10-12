@@ -239,7 +239,7 @@ func TestHeadFallbackNotInjected(t *testing.T) {
 			"path": "/*",
 			"frontend": true,
 			"backend": "BACKEND",
-			"headFallback": true
+			"autoHead": true
 		}]
 	}`)
 

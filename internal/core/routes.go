@@ -131,7 +131,7 @@ type Route struct {
 	Frontend bool   `json:"frontend,omitempty"`
 	Backend  string `json:"backend"`
 
-	AutoHead bool `json:"headFallback,omitempty"`
+	AutoHead bool `json:"autoHead,omitempty"`
 
 	Auth      *AuthPolicy      `json:"auth,omitempty"`
 	RateLimit *RateLimitPolicy `json:"rateLimit,omitempty"`
