@@ -64,6 +64,13 @@ func New(cfg *core.Config) (*Gateway, error) {
 
 		// 401/403 guard script injection on frontend HTML responses
 		if guardEnabledFor(route) {
+			log.Printf(
+				"GUARD enabled host=%s path=%s loginUrl=%s",
+				route.Host,
+				route.Path,
+				guardLoginURL(route),
+			)
+
 			script := fmt.Sprintf(guardScript, guardLoginURL(route))
 			rp.ModifyResponse = func(resp *http.Response) error {
 				if resp.StatusCode != http.StatusOK ||
