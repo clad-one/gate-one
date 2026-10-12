@@ -181,14 +181,14 @@ func (h *Handler) apiCacheJS() string {
   // du flux, OU après 1,5 s sans nouveau chunk (les SSE ne se ferment
   // pas toujours : attendre done indéfiniment ne cacherait jamais
   // rien). Les réponses dépassant maxEntrySizeBytes ne sont pas cachées.
-  async function storeCompleteResponse(cache, request, stream, expiration, maxSize) {
+  async function storeCompleteResponse(cache, request, stream, expiration, maxSize, idleMs) {
     try {
       let size = 0;
       const parts = [];
       const reader = stream.getReader();
       for (;;) {
         const timeout = new Promise((resolve) => {
-          setTimeout(() => resolve({done: true, value: undefined, idle: true}), 1500);
+          setTimeout(() => resolve({done: true, value: undefined, idle: true}), idleMs);
         });
         const {done, value, idle} = await Promise.race([reader.read(), timeout]);
         if (idle && parts.length > 0) break; // silence prolongé : finaliser
@@ -241,6 +241,10 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	if maxSize <= 0 {
 		maxSize = 2 << 20 // 2 MiB per entry
 	}
+	idleMs := c.IdleFinalizeMs
+	if idleMs <= 0 {
+		idleMs = 1500 // finalisation du cache après ce silence du flux
+	}
 
 	cacheName := "gateway-pwa-api-" + strings.TrimPrefix(c.Path, "/")
 	if c.Version != "" {
@@ -254,7 +258,8 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	return `
   // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement).
   // ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s,
-  // ` + fmtInt64(maxSize) + ` octets max par entrée.
+  // ` + fmtInt64(maxSize) + ` octets max par entrée,
+  // finalisation après ` + fmtInt(idleMs) + ` ms de silence du flux.
   const exp_` + jsIdent(c.Path) + ` = new workbox.expiration.ExpirationPlugin({
     maxEntries: ` + fmtInt(maxEntries) + `,
     maxAgeSeconds: ` + fmtInt(maxAge) + `,
@@ -275,7 +280,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
           const bodyText = req.method === 'GET' ? '' : await req.clone().text();
           const keyReq = await buildCacheKey(req.url, bodyText, req.method);
           const [toApp, toCache] = response.body.tee();
-          storeCompleteResponse(cache, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `);
+          storeCompleteResponse(cache, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `, ` + fmtInt(idleMs) + `);
           return new Response(toApp, {
             status: response.status,
             statusText: response.statusText,

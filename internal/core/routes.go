@@ -88,6 +88,11 @@ type PWAApiCache struct {
 	// part of the cache name, so changing it invalidates the old
 	// entries at the next SW activation.
 	Version string `json:"version,omitempty"`
+	// IdleFinalizeMs: the cached response is finalized after this many
+	// milliseconds without a new chunk from the SSE stream (default
+	// 1500). Handles backends that keep the connection open (keep-alive
+	// SSE) instead of closing it after the last event.
+	IdleFinalizeMs int `json:"idleFinalizeMs,omitempty"`
 }
 
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:

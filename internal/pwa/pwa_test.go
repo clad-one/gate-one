@@ -121,6 +121,7 @@ func TestServiceWorkerApiCache(t *testing.T) {
 		"maxEntries: 42",
 		"maxAgeSeconds: 3600",
 		"maxEntrySizeBytes", // mention dans le commentaire
+		"1500",              // défaut idleFinalizeMs rendu dans le SW
 		"purgeOnQuotaError: true",
 	} {
 		if !strings.Contains(sw, want) {
@@ -136,7 +137,7 @@ func TestServiceWorkerApiCache(t *testing.T) {
 func TestServiceWorkerApiCachesMultiple(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCaches = []*core.PWAApiCache{
-		{Path: "/api/process_stream", MaxEntries: 10, MaxAgeSeconds: 600, MaxEntrySizeBytes: 1048576},
+		{Path: "/api/process_stream", MaxEntries: 10, MaxAgeSeconds: 600, MaxEntrySizeBytes: 1048576, IdleFinalizeMs: 3000},
 		{Path: "/api/poems", MaxEntries: 200, MaxAgeSeconds: 604800},
 	}
 	sw := New(pol).swJS()
@@ -147,6 +148,8 @@ func TestServiceWorkerApiCachesMultiple(t *testing.T) {
 		"maxEntries: 10",
 		"maxEntries: 200",
 		"maxAgeSeconds: 600",
+		"3000", // idleFinalizeMs déclaré explicitement
+		"1500", // défaut pour le bloc qui ne le déclare pas
 		"maxAgeSeconds: 604800",
 		// défaut de taille par entrée pour le second bloc
 		"2097152",

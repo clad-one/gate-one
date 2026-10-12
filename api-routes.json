@@ -42,7 +42,8 @@
             "path": "/api/process_stream",
             "maxEntries": 50,
             "maxAgeSeconds": 86400,
-            "maxEntrySizeBytes": 2097152
+            "maxEntrySizeBytes": 2097152,
+            "idleFinalizeMs": 1500
           }
         ]
       }
