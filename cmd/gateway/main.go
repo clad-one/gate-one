@@ -1,6 +1,7 @@
 package main
 
 import (
+    "flag"
     "log"
     "net/http"
 
@@ -10,7 +11,19 @@ import (
 
 func main() {
 
-    cfg, err := core.Load("api-routes.json")
+    configPath := flag.String(
+        "config",
+        "api-routes.json",
+        "chemin du fichier de routes",
+    )
+    addr := flag.String(
+        "addr",
+        ":3000",
+        "adresse d'écoute",
+    )
+    flag.Parse()
+
+    cfg, err := core.Load(*configPath)
 
     if err != nil {
         log.Fatal(err)
@@ -24,7 +37,7 @@ func main() {
         log.Fatal(err)
     }
 
-    log.Println("Gateway listening on :3000")
+    log.Printf("Gateway listening on %s", *addr)
 
-    log.Fatal(http.ListenAndServe(":3000", gw))
+    log.Fatal(http.ListenAndServe(*addr, gw))
 }
