@@ -280,7 +280,13 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
           const bodyText = req.method === 'GET' ? '' : await req.clone().text();
           const keyReq = await buildCacheKey(req.url, bodyText, req.method);
           const [toApp, toCache] = response.body.tee();
-          storeCompleteResponse(cache, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `, ` + fmtInt(idleMs) + `);
+          // event.waitUntil est INDISPENSABLE : sans lui, le navigateur
+          // peut suspendre le SW dès que la réponse est renvoyée, avant
+          // que l'accumulation + cache.put ne finissent (le cache API
+          // ne serait jamais écrit, surtout sur Firefox).
+          event.waitUntil(
+            storeCompleteResponse(cache, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `, ` + fmtInt(idleMs) + `)
+          );
           return new Response(toApp, {
             status: response.status,
             statusText: response.statusText,

@@ -109,11 +109,21 @@ async function dispatch(routes, req) {
   for (const r of routes) {
     const url = new URL(req.url);
     let ok = false;
-    try { ok = r.match({ request: req, url, event: { request: req } }); }
+    try { ok = r.match({ request: req, url, event: { request: req, waitUntil: () => {} } }); }
     catch (e) { ok = false; }
     if (ok) {
-      const event = { request: req, respondWith: () => r.handler({ event: { request: req }, request: req }) };
-      return r.handler({ event, request: req });
+      // waitUntil: capture les promesses comme un vrai SW (le handler
+      // doit impérativement y passer son travail de fond, sinon le
+      // navigateur suspend le SW avant la fin — bug que la sim doit
+      // pouvoir détecter)
+      const extended = [];
+      const event = {
+        request: req,
+        waitUntil: (p) => extended.push(Promise.resolve(p)),
+      };
+      const result = await r.handler({ event, request: req });
+      event._extended = extended;
+      return result;
     }
   }
   throw new Error('no route matched ' + req.url);
