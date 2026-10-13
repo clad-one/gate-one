@@ -129,12 +129,16 @@ if (workbox) {
       cacheName: ASSETS_CACHE,
     })
   );
+  // marqueur diagnostic étape 1: assets route enregistrée
+  caches.open('gateway-pwa-debug').then((c) => c.put('/step1-assets-route', new Response('ok')));
 
   // Sécurité : Ignorer explicitement toutes les requêtes d'authentification
   workbox.routing.registerRoute(
     ({url}) => url.pathname.includes('/protocol/openid-connect') || url.pathname.includes('/auth'),
     new workbox.strategies.NetworkOnly()
   );
+  // marqueur diagnostic étape 2: auth route enregistrée, apiCache va démarrer
+  caches.open('gateway-pwa-debug').then((c) => c.put('/step2-before-apicache', new Response('ok')));
 ` + h.apiCacheJS() + `
   // marqueur de diagnostic: le SW a chargé toutes ses routes
   caches.open('gateway-pwa-debug').then((c) => c.put('/__routes_loaded', new Response('ok')));
