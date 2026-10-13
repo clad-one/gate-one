@@ -26,6 +26,22 @@ var workboxFS embed.FS
 // workboxVersion must match the vendored build in workbox/.
 const workboxVersion = "7.4.1"
 
+// apiCacheLogicVersion versionne le FORMAT des entrées du cache API
+// (forme de la clé, en-têtes stockés, logique de storeCompleteResponse).
+// L'incrémenter quand la logique de stockage change : les caches
+// existants seront purgés à l'activation du nouveau SW. Il est
+// volontairement indépendant du hash du SW, pour qu'un déploiement qui
+// ne touche pas ce format ne vide pas le replay offline.
+const apiCacheLogicVersion = "1"
+
+// apiCachePolicyJSON sérialise la politique déclarative d'un endpoint
+// apiCache pour le hash de son cache : toute reconfiguration du bloc
+// dans api-routes.json change le hash, donc le nom du cache.
+func apiCachePolicyJSON(c *core.PWAApiCache) []byte {
+	data, _ := json.Marshal(c)
+	return data
+}
+
 type Handler struct {
 	policy *core.PWAPolicy
 }
@@ -88,9 +104,11 @@ func (h *Handler) manifest() []byte {
 // route declares an apiCache policy, API responses (POST/SSE included)
 // are cached keyed by request and replayed offline.
 func (h *Handler) swJS() string {
-	// Passe 1 : générer le corps avec le placeholder CACHE_VERSION ;
-	// le hash porte sur ce texte (la politique effective y est déjà,
-	// via apiCacheJS et ses noms/versions de caches).
+	// Passe 1 : générer le corps avec le placeholder CACHE_VERSION.
+	// Ce hash ne versionne que ASSETS_CACHE (pages/scripts/styles).
+	// Les caches API sont versionnés indépendamment, par endpoint :
+	// cf. apiCacheRouteJS (hash du bloc de config + apiCacheLogicVersion)
+	// pour que le replay offline survive aux déploiements sans rapport.
 	body := `importScripts('` + PathPrefix + `workbox/workbox-sw.js');
 
 workbox.setConfig({ modulePathPrefix: '` + PathPrefix + `workbox/' });
@@ -278,9 +296,15 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 		cacheName += "-" + c.Version
 	}
 	cacheName = strings.ReplaceAll(cacheName, "/", "-")
-	// @@CACHE_VERSION@@ est substitué par swJS (hash du SW entier) ;
-	// le nom dépend donc aussi de toute la politique effective.
-	cacheName += "-@@CACHE_VERSION@@"
+
+	// Versionnement par endpoint : le nom incorpore le hash du bloc de
+	// configuration JSON de CET endpoint (pas du SW entier). Reconfigurer
+	// ce worker dans api-routes.json invalide son cache, et lui seul ;
+	// le replay des autres endpoints et les caches assets survivent à un
+	// déploiement. apiCacheLogicVersion est incrémenté manuellement quand
+	// le format des entrées stockées change.
+	polHash := fmt.Sprintf("%x", sha256.Sum256(apiCachePolicyJSON(c)))[:8]
+	cacheName += "-v" + apiCacheLogicVersion + "-" + polHash
 
 	return `
   // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement).
