@@ -122,17 +122,15 @@ self.addEventListener('activate', (event) => {
 });
 
 if (workbox) {
-  // Stratégie pour les pages et les assets. StaleWhileRevalidate : le
-  // cache répond instantanément (pas d'attente réseau à chaque
-  // navigation) et la réponse réseau met le cache à jour en
-  // arrière-plan — la version suivante est donc toujours fraîche.
-  // Le CACHE_VERSION change à chaque déploiement du SW, ce qui purge
-  // les anciens caches à l'activation : pas de risque de servir une
-  // page péremptoire après une mise à jour majeure.
+  // Stratégie pour les pages et les assets, déclarée dans la politique
+  // pwa.assets de la route (défaut : staleWhileRevalidate — le cache
+  // répond instantanément, le réseau rafraîchit en arrière-plan ; le
+  // CACHE_VERSION purgé à l'activation garantit la fraîcheur après
+  // déploiement).
   workbox.routing.registerRoute(
     ({request}) => request.destination === 'document' || request.destination === 'script' || request.destination === 'style',
-    new workbox.strategies.StaleWhileRevalidate({
-      cacheName: ASSETS_CACHE,
+    new workbox.strategies.ASSETS_STRATEGY({
+      cacheName: ASSETS_CACHE@@ASSETS_OPTIONS@@
     })
   );
   // marqueur diagnostic étape 1: assets route enregistrée
@@ -151,6 +149,17 @@ if (workbox) {
   }
 self.addEventListener('fetch', () => {}); // no-op: forcer l'attachement du listener
 `
+
+	// Stratégie des assets, déclarative (pwa.assets).
+	strategy, timeout := h.policy.EffectiveAssets()
+	opts := ""
+	if timeout > 0 {
+		opts = ",\n      networkTimeoutSeconds: " + fmtInt(timeout)
+	}
+	// La politique résolue donne déjà le nom exact de la classe
+	// workbox (cf. EffectiveAssets).
+	body = strings.ReplaceAll(body, "ASSETS_STRATEGY", strategy)
+	body = strings.ReplaceAll(body, "@@ASSETS_OPTIONS@@", opts)
 
 	// Passe 2 : hash du corps (placeholder inclus), puis substitution.
 	version := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))[:8]

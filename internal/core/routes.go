@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 type Match struct {
@@ -113,6 +114,55 @@ type PWAPolicy struct {
 	// form, still read.
 	ApiCache  *PWAApiCache   `json:"apiCache,omitempty"`
 	ApiCaches []*PWAApiCache `json:"apiCaches,omitempty"`
+	// Assets tunes the strategy for pages and same-origin assets
+	// (documents, scripts, styles). If unset: StaleWhileRevalidate
+	// without timeout — the cache answers instantly, network refreshes
+	// it in the background.
+	Assets *PWAAssetsPolicy `json:"assets,omitempty"`
+}
+
+// PWAAssetsPolicy selects the workbox strategy for documents/scripts/
+// styles and, for networkFirst, how long to wait for the network
+// before falling back to the cache.
+type PWAAssetsPolicy struct {
+	// Strategy: "staleWhileRevalidate" (default), "networkFirst",
+	// "cacheFirst".
+	Strategy string `json:"strategy,omitempty"`
+	// NetworkTimeoutSeconds: for networkFirst only, seconds to wait for
+	// the network before serving the cache (default 3).
+	NetworkTimeoutSeconds int `json:"networkTimeoutSeconds,omitempty"`
+}
+
+// EffectiveAssets returns the assets policy with defaults applied.
+func (p *PWAPolicy) EffectiveAssets() (strategy string, timeout int) {
+	strategy, timeout = "staleWhileRevalidate", 0
+	if p.Assets != nil {
+		if s := strings.ToLower(p.Assets.Strategy); s != "" {
+			strategy = s
+		}
+		if p.Assets.NetworkTimeoutSeconds > 0 {
+			timeout = p.Assets.NetworkTimeoutSeconds
+		}
+	}
+	// strings.ToLower aplatit aussi les valeurs CamelCase déclarées
+	// (networkFirst -> networkfirst) : les comparaisons sont en
+	// minuscules, seule la classe workbox générée par swJS rétablit la
+	// casse.
+	switch strategy {
+	case "networkfirst":
+		if timeout <= 0 {
+			timeout = 3
+		}
+		strategy = "NetworkFirst"
+	case "cachefirst":
+		strategy = "CacheFirst"
+	default:
+		strategy = "StaleWhileRevalidate"
+		if timeout > 0 {
+			timeout = 0
+		}
+	}
+	return strategy, timeout
 }
 
 // EffectiveApiCaches merges the legacy singular form with the list.
