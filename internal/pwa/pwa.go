@@ -191,7 +191,7 @@ func (h *Handler) apiCacheJS() string {
   // du flux, OU après 1,5 s sans nouveau chunk (les SSE ne se ferment
   // pas toujours : attendre done indéfiniment ne cacherait jamais
   // rien). Les réponses dépassant maxEntrySizeBytes ne sont pas cachées.
-  async function storeCompleteResponse(cache, request, stream, expiration, maxSize, idleMs) {
+  async function storeCompleteResponse(cache, cacheName, request, stream, expiration, maxSize, idleMs) {
     try {
       let size = 0;
       const parts = [];
@@ -218,7 +218,7 @@ func (h *Handler) apiCacheJS() string {
       await cache.put(request, response);
       console.log('[gateway-pwa] cache API écrit:', request.url, size + ' octets');
       await expiration.cacheDidUpdate({
-        cacheName: cache._name,
+        cacheName: cacheName,
         request: request,
         oldResponse: null,
         newResponse: response,
@@ -306,7 +306,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
           // ne serait jamais écrit, surtout sur Firefox).
           if (keyReq) {
             event.waitUntil(
-              storeCompleteResponse(cache, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `, ` + fmtInt(idleMs) + `)
+              storeCompleteResponse(cache, ` + fmtJSLit(cacheName) + `, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `, ` + fmtInt(idleMs) + `)
             );
           }
           return new Response(toApp, {
@@ -329,7 +329,12 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
         }
         throw err;
       }
-    }
+    },
+    // Cache Storage ignore les POST dans sa clé et workbox route les
+    // requêtes non-GET SEULEMENT si la méthode est explicite (Route
+    // constructor, method défaut "GET") : sans ce 3e argument, la route
+    // ne matchait aucun POST => "No route found", replay impossible.
+    'POST'
   );
 `
 }
@@ -344,6 +349,12 @@ func jsIdent(path string) string {
 		ident = "api_" + ident
 	}
 	return ident
+}
+
+// fmtJSLit rend une chaîne Go en littéral JS (chemins contrôlés côté
+// générateur : pas de caractères d'échappement attendus).
+func fmtJSLit(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "\\'") + "'"
 }
 
 // fmtInt évite d'importer strconv pour deux entiers du template.
