@@ -122,10 +122,16 @@ self.addEventListener('activate', (event) => {
 });
 
 if (workbox) {
-  // Stratégie pour les pages et les assets (Mode déconnecté de base)
+  // Stratégie pour les pages et les assets. StaleWhileRevalidate : le
+  // cache répond instantanément (pas d'attente réseau à chaque
+  // navigation) et la réponse réseau met le cache à jour en
+  // arrière-plan — la version suivante est donc toujours fraîche.
+  // Le CACHE_VERSION change à chaque déploiement du SW, ce qui purge
+  // les anciens caches à l'activation : pas de risque de servir une
+  // page péremptoire après une mise à jour majeure.
   workbox.routing.registerRoute(
     ({request}) => request.destination === 'document' || request.destination === 'script' || request.destination === 'style',
-    new workbox.strategies.NetworkFirst({
+    new workbox.strategies.StaleWhileRevalidate({
       cacheName: ASSETS_CACHE,
     })
   );
