@@ -322,7 +322,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	}
 	netTimeout := c.NetworkTimeoutSeconds
 	if netTimeout <= 0 {
-		netTimeout = 2 // abort du fetch sans réponse au bout de 2 s
+		netTimeout = 3 // abort du fetch sans réponse au bout de 3 s
 	}
 
 	cacheName := "gateway-pwa-api-" + strings.TrimPrefix(c.Path, "/")

@@ -95,7 +95,7 @@ type PWAApiCache struct {
 	// SSE) instead of closing it after the last event.
 	IdleFinalizeMs int `json:"idleFinalizeMs,omitempty"`
 	// NetworkTimeoutSeconds bounds how long the offline replay waits
-	// for the network BEFORE falling back to the cache (default 2).
+	// for the network BEFORE falling back to the cache (default 3).
 	// Applies to the headers only: once a response arrives, its
 	// streaming duration is unbounded. The OS offline flag
 	// (navigator.onLine === false) skips the network entirely.

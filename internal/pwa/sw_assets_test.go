@@ -48,7 +48,7 @@ func emptyPolicyWithApiCache() *core.PWAPolicy {
 
 // Le replay offline ne doit pas subir le timeout TCP complet d'un
 // réseau mort : navigator.onLine=false court-circuite le fetch, et
-// en ligne le fetch est aborté après networkTimeoutSeconds (défaut 2).
+// en ligne le fetch est aborté après networkTimeoutSeconds (défaut 3).
 func TestSWApiCacheOfflineFastPath(t *testing.T) {
 	sw := New(emptyPolicyWithApiCache()).swJS()
 
@@ -57,7 +57,7 @@ func TestSWApiCacheOfflineFastPath(t *testing.T) {
 		"replay offline (onLine=false)",       // log distinct
 		"function fetchNetwork(req, timeoutSec)", // helper abort
 		"AbortController()",
-		"await fetchNetwork(req, 2)", // défaut 2 s rendu
+		"await fetchNetwork(req, 3)", // défaut 3 s rendu
 	} {
 		if !strings.Contains(sw, want) {
 			t.Errorf("sw.js apiCache offline fast path missing %s", want)
