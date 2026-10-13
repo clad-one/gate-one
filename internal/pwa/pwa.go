@@ -206,6 +206,7 @@ func (h *Handler) apiCacheJS() string {
         headers: {'Content-Type': 'text/event-stream'},
       });
       await cache.put(request, response);
+      console.log('[gateway-pwa] cache API écrit:', request.url, size + ' octets');
       await expiration.cacheDidUpdate({
         cacheName: cache._name,
         request: request,
@@ -213,6 +214,7 @@ func (h *Handler) apiCacheJS() string {
         newResponse: response,
       });
     } catch (err) {
+      console.error('[gateway-pwa] cache API ÉCHEC:', err && err.message);
       // flux annulé ou interrompu, ou quota dépassé : rien n'est caché
     }
   }
@@ -308,7 +310,11 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
         // précédemment stockée pour cette requête exacte
         if (keyReq) {
           const cached = await cache.match(keyReq);
-          if (cached) return cached;
+          if (cached) {
+            console.log('[gateway-pwa] replay offline:', keyReq.url);
+            return cached;
+          }
+          console.warn('[gateway-pwa] pas de cache pour cette requête:', keyReq.url);
         }
         throw err;
       }
