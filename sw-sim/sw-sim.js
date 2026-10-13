@@ -84,6 +84,8 @@ async function loadSW(swPath) {
     strategies: {
       NetworkFirst: class { constructor(opts) { this.opts = opts; } },
       NetworkOnly: class { constructor(opts) { this.opts = opts; } },
+      StaleWhileRevalidate: class { constructor(opts) { this.opts = opts; } },
+      CacheFirst: class { constructor(opts) { this.opts = opts; } },
     },
     expiration: {
       ExpirationPlugin: class {

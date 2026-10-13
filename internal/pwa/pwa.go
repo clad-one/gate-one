@@ -343,6 +343,13 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
       try {
         const bodyText = req.method === 'GET' ? '' : await req.clone().text();
         keyReq = await buildCacheKey(req.url, bodyText, req.method);
+        // Diagnostic de clé : la clé = SHA-256 du corps. Deux
+        // segmentations "identiques" aux yeux de l'utilisateur mais
+        // avec une clé différente => un champ du corps a changé.
+        // Logguer le corps permet de voir immédiatement LE champ en
+        // cause (phonetic, meters, espace en fin de texte...).
+        console.log('[gateway-pwa] clé:', keyReq.url.slice(keyReq.url.indexOf('__pwa_key=')),
+          '\n  corps:', bodyText);
       } catch (e) { keyReq = null; } // corps illisible : pas de replay
       try {
         const response = await fetch(req);
