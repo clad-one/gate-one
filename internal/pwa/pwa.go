@@ -135,7 +135,11 @@ if (workbox) {
     ({url}) => url.pathname.includes('/protocol/openid-connect') || url.pathname.includes('/auth'),
     new workbox.strategies.NetworkOnly()
   );
-` + h.apiCacheJS() + `}
+` + h.apiCacheJS() + `
+  // marqueur de diagnostic: le SW a chargé toutes ses routes
+  caches.open('gateway-pwa-debug').then((c) => c.put('/__routes_loaded', new Response('ok')));
+  }
+self.addEventListener('fetch', () => {}); // no-op: forcer l'attachement du listener
 `
 
 	// Passe 2 : hash du corps (placeholder inclus), puis substitution.
