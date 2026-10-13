@@ -271,22 +271,31 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
     async ({event}) => {
       const req = event.request;
       const cache = await caches.open('` + cacheName + `');
+      // Clé de cache explicite : Cache Storage ignore le corps des POST
+      // dans sa clé (toutes les segmentations s'écraseraient), donc on
+      // hashe l'URL + le corps dans un paramètre artificiel.
+      // IMPORTANT : construite AVANT le fetch — le corps d'une requête
+      // ne peut être lu qu'une fois, et après un fetch échoué (offline)
+      // req.clone().text() throwerait "Failed to fetch" au lieu du
+      // replay attendu.
+      let keyReq = null;
+      try {
+        const bodyText = req.method === 'GET' ? '' : await req.clone().text();
+        keyReq = await buildCacheKey(req.url, bodyText, req.method);
+      } catch (e) { keyReq = null; } // corps illisible : pas de replay
       try {
         const response = await fetch(req);
         if (response.ok && response.body) {
-          // Clé de cache explicite : Cache Storage ignore le corps des
-          // POST dans sa clé (toutes les segmentations s'écraseraient),
-          // donc on hashe l'URL + le corps dans un paramètre artificiel.
-          const bodyText = req.method === 'GET' ? '' : await req.clone().text();
-          const keyReq = await buildCacheKey(req.url, bodyText, req.method);
           const [toApp, toCache] = response.body.tee();
           // event.waitUntil est INDISPENSABLE : sans lui, le navigateur
           // peut suspendre le SW dès que la réponse est renvoyée, avant
           // que l'accumulation + cache.put ne finissent (le cache API
           // ne serait jamais écrit, surtout sur Firefox).
-          event.waitUntil(
-            storeCompleteResponse(cache, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `, ` + fmtInt(idleMs) + `)
-          );
+          if (keyReq) {
+            event.waitUntil(
+              storeCompleteResponse(cache, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `, ` + fmtInt(idleMs) + `)
+            );
+          }
           return new Response(toApp, {
             status: response.status,
             statusText: response.statusText,
@@ -297,10 +306,10 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
       } catch (err) {
         // hors ligne (ou réseau instable) : rejouer la réponse
         // précédemment stockée pour cette requête exacte
-        const bodyText = req.method === 'GET' ? '' : await req.clone().text();
-        const keyReq = await buildCacheKey(req.url, bodyText, req.method);
-        const cached = await cache.match(keyReq);
-        if (cached) return cached;
+        if (keyReq) {
+          const cached = await cache.match(keyReq);
+          if (cached) return cached;
+        }
         throw err;
       }
     }
