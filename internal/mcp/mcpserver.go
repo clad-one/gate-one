@@ -29,7 +29,7 @@ func New(
 	mcp.AddTool(
 		server,
 		&mcp.Tool{
-			Name: "processStream",
+			Name:        "processStream",
 			Description: "Process French text and stream the processing results.",
 		},
 		process.Tool,

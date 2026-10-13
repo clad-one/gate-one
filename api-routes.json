@@ -8,6 +8,7 @@
       "mcp": {
         "enabled": true,
         "path": "/mcp",
+        "scope": "mcp-tools",
         "operations": [
           {
             "name": "processStream",

@@ -2,7 +2,7 @@ package proxy
 
 import (
 	"errors"
-    "fmt"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -11,12 +11,13 @@ import (
 var ErrRedirect = errors.New("auth redirect")
 var ErrUnauthorized = errors.New("unauthorized")
 
-func writeMCPAuthChallenge(w http.ResponseWriter, resourceMetadataURL string) {
+func writeMCPAuthChallenge(w http.ResponseWriter, resourceMetadataURL, scope string) {
 	w.Header().Set(
 		"WWW-Authenticate",
 		fmt.Sprintf(
-			`Bearer resource_metadata="%s", scope="mcp-tools"`,
+			`Bearer resource_metadata="%s", scope="%s"`,
 			resourceMetadataURL,
+			scope,
 		),
 	)
 
@@ -61,7 +62,7 @@ func (g *Gateway) checkAuth(
 	)
 	req, err := http.NewRequest(
 		http.MethodGet,
-		"http://auth-bridge:3000/auth",
+		g.authBridgeBaseURLFor()+"/auth",
 		nil,
 	)
 	if err != nil {
@@ -114,11 +115,12 @@ func (g *Gateway) checkMCPAuth(
 	r *http.Request,
 	ctx *RequestContext,
 	resourceMetadataURL string,
+	scope string,
 ) (*RequestContext, error) {
 
 	req, err := http.NewRequest(
 		http.MethodGet,
-		"http://auth-bridge:3000/auth/mcp",
+		g.authBridgeBaseURLFor()+"/auth/mcp",
 		nil,
 	)
 	if err != nil {
@@ -128,6 +130,12 @@ func (g *Gateway) checkMCPAuth(
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
+
+	// Header interne : le scope exigé déclaré par la policy mcp de la
+	// route (X-MCP-Scope). La requête est construite ici, jamais
+	// recopiée des headers d'entrée : un client externe ne peut pas le
+	// forger.
+	req.Header.Set("X-MCP-Scope", scope)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -146,22 +154,25 @@ func (g *Gateway) checkMCPAuth(
 	switch resp.StatusCode {
 
 	case http.StatusUnauthorized:
-		writeMCPAuthChallenge(w, resourceMetadataURL)
+		writeMCPAuthChallenge(w, resourceMetadataURL, scope)
 		return nil, ErrUnauthorized
 
 	case http.StatusForbidden:
 		w.Header().Set(
 			"WWW-Authenticate",
-			`Bearer error="insufficient_scope", scope="mcp-tools"`,
+			fmt.Sprintf(
+				`Bearer error="insufficient_scope", scope="%s"`,
+				scope,
+			),
 		)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 
-		_, _ = w.Write([]byte(`{
+		_, _ = w.Write([]byte(fmt.Sprintf(`{
   "error": "insufficient_scope",
-  "error_description": "mcp-tools scope required"
-}`))
+  "error_description": "%s scope required"
+}`, scope)))
 
 		return nil, ErrUnauthorized
 

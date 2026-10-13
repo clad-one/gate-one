@@ -53,10 +53,10 @@ func TestSWApiCacheOfflineFastPath(t *testing.T) {
 	sw := New(emptyPolicyWithApiCache()).swJS()
 
 	for _, want := range []string{
-		"const OFFLINE_FAST_api_process_stream = true;", // fast-path par défaut
+		"const OFFLINE_FAST_api_process_stream = true;",                  // fast-path par défaut
 		"if (OFFLINE_FAST_api_process_stream && !self.navigator.onLine)", // court-circuit offline
-		"replay offline (onLine=false)",       // log distinct
-		"function fetchNetwork(req, timeoutSec)", // helper abort
+		"replay offline (onLine=false)",                                  // log distinct
+		"function fetchNetwork(req, timeoutSec)",                         // helper abort
 		"AbortController()",
 		"await fetchNetwork(req, 3)", // défaut 3 s rendu
 	} {

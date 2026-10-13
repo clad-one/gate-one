@@ -63,8 +63,15 @@ type MCPOperation struct {
 }
 
 type MCPPolicy struct {
-	Enabled    bool           `json:"enabled"`
-	Path       string         `json:"path,omitempty"`
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path,omitempty"`
+	// Scope: le client scope Keycloak exigé des clients MCP (porté par
+	// le claim `scope` du bearer). Annoncé dans
+	// /.well-known/oauth-protected-resource et vérifié par auth-bridge
+	// (transmis via le header interne X-MCP-Scope). Défaut :
+	// defaultMCPScope. Le realm doit accorder le même scope (client
+	// scope optionnel du même nom dans cladone-realm.json).
+	Scope      string         `json:"scope,omitempty"`
 	Operations []MCPOperation `json:"operations"`
 }
 

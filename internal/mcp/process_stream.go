@@ -145,11 +145,11 @@ func (s *ProcessStreamServer) Tool(
 
 	contentType := resp.Header.Get("Content-Type")
 
-    data, err := readStream(resp.Body, contentType)
-    if err != nil {
-    	return nil, ProcessStreamOutput{}, err
-    }
-	
+	data, err := readStream(resp.Body, contentType)
+	if err != nil {
+		return nil, ProcessStreamOutput{}, err
+	}
+
 	if err != nil {
 		return nil, ProcessStreamOutput{}, err
 	}
