@@ -12,8 +12,7 @@ import (
 // injection sniffs successful HTML responses and injects the PWA
 // wiring (manifest link + service worker registration) into <head>.
 const injection = `<link rel="manifest" href="/__gateway_pwa/manifest.json">` +
-	`<script>navigator.serviceWorker.register('/__gateway_pwa/sw.js',{scope:'/'})` +
-	`.then(function(r){r.addEventListener('updatefound',function(){location.reload();});});</script>`
+	`<script>navigator.serviceWorker.register('/__gateway_pwa/sw.js',{scope:'/'})</script>`
 
 // InjectResponse modifies an upstream HTML response in place, adding
 // the PWA tags. Non-HTML or non-200 responses pass through untouched.
