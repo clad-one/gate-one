@@ -132,7 +132,16 @@ self.addEventListener('activate', (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((k) => k.startsWith('gateway-pwa-') && !k.includes(CACHE_VERSION))
+            // Purger uniquement les caches dont on connaît le régime de
+            // version : assets = hash du SW (CACHE_VERSION) ; api = la
+            // version est encodée dans le nom (v<logique>-<hash>) et la
+            // purge par CACHE_VERSION ne doit PAS les toucher — seuls
+            // les caches API au format périmé sont supprimés.
+            .filter((k) =>
+              (k.startsWith('gateway-pwa-assets-') && !k.includes(CACHE_VERSION)) ||
+              (k.startsWith('gateway-pwa-api-') &&
+               !/^gateway-pwa-api-.*-v\d+-[0-9a-f]{8}$/.test(k))
+            )
             .map((k) => caches.delete(k))
         )
       )

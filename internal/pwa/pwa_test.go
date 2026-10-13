@@ -177,7 +177,9 @@ func TestServiceWorkerApiCacheDefaults(t *testing.T) {
 
 func TestServiceWorkerWithoutApiCache(t *testing.T) {
 	sw := New(emptyPolicy()).swJS()
-	if strings.Contains(sw, "gateway-pwa-api") {
+	// Le filtre de purge d'activation mentionne le préfixe api, mais
+	// aucune route de cache API ne doit être générée.
+	if strings.Contains(sw, "registerRoute(\n    ({url}) => url.pathname === '") {
 		t.Errorf("apiCache route generated without policy:\n%s", sw)
 	}
 }
