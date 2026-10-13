@@ -271,6 +271,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
   workbox.routing.registerRoute(
     ({url}) => url.pathname === '` + c.Path + `',
     async ({event}) => {
+      console.log('[gateway-pwa] route apiCache interceptée:', event.request.method, event.request.url);
       const req = event.request;
       const cache = await caches.open('` + cacheName + `');
       // Clé de cache explicite : Cache Storage ignore le corps des POST
