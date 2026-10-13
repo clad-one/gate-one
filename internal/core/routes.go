@@ -100,6 +100,14 @@ type PWAApiCache struct {
 	// streaming duration is unbounded. The OS offline flag
 	// (navigator.onLine === false) skips the network entirely.
 	NetworkTimeoutSeconds int `json:"networkTimeoutSeconds,omitempty"`
+	// OfflineFastPath (default true): when navigator.onLine === false,
+	// serve the cached response directly instead of attempting the
+	// network first. Disable for endpoints where replaying a cached
+	// write would be wrong (the app would see success while nothing
+	// was sent); with false, the offline detection is by fetch
+	// failure (bounded by NetworkTimeoutSeconds). Pointer: absent
+	// (nil) means the default, an explicit false disables.
+	OfflineFastPath *bool `json:"offlineFastPath,omitempty"`
 }
 
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:

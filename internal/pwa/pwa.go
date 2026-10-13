@@ -324,6 +324,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	if netTimeout <= 0 {
 		netTimeout = 3 // abort du fetch sans réponse au bout de 3 s
 	}
+	offlineFast := c.OfflineFastPath == nil || *c.OfflineFastPath
 
 	cacheName := "gateway-pwa-api-" + strings.TrimPrefix(c.Path, "/")
 	if c.Version != "" {
@@ -346,6 +347,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
   // ` + fmtInt64(maxSize) + ` octets max par entrée,
   // finalisation après ` + fmtInt(idleMs) + ` ms de silence du flux,
   // attente réseau abortée après ` + fmtInt(netTimeout) + ` s.
+  const OFFLINE_FAST_` + jsIdent(c.Path) + ` = ` + jsBool(offlineFast) + `;
   const exp_` + jsIdent(c.Path) + ` = new workbox.expiration.ExpirationPlugin({
     maxEntries: ` + fmtInt(maxEntries) + `,
     maxAgeSeconds: ` + fmtInt(maxAge) + `,
@@ -379,14 +381,16 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
       } catch (e) { keyReq = null; } // corps illisible : pas de replay
       try {
         // Hors ligne (l'OS le sait : wifi coupé, avion) : pas de
-        // fetch du tout, le cache répond immédiatement. En ligne :
-        // fetch d'abord (fraîcheur), aborté au bout de
+        // fetch du tout, le cache répond immédiatement (fast-path,
+        // offlineFastPath: true par défaut ; false pour un endpoint
+        // où rejouer un caché serait faux, p.ex. une écriture).
+        // En ligne : fetch d'abord (fraîcheur), aborté au bout de
         // networkTimeoutSeconds si aucune réponse — le replay ne
         // subit plus le timeout TCP complet (~5 s) d'un réseau mort.
         // Le timeout ne couvre QUE l'attente des headers : le
         // listener est retiré dès que la réponse arrive, le
         // streaming de la réponse elle-même reste libre.
-        if (!self.navigator.onLine) {
+        if (OFFLINE_FAST_` + jsIdent(c.Path) + ` && !self.navigator.onLine) {
           const offlineHit = keyReq ? await cache.match(keyReq) : null;
           if (offlineHit) {
             console.log('[gateway-pwa] replay offline (onLine=false):', keyReq.url);
@@ -436,6 +440,14 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
     'POST'
   );
 `
+}
+
+// jsBool rend un booléen Go en littéral JS.
+func jsBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // jsIdent convertit un chemin en identifiant JS utilisable.

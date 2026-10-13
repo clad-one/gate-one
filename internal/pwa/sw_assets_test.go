@@ -73,7 +73,40 @@ func TestSWApiCacheNetworkTimeoutDeclared(t *testing.T) {
 	if !strings.Contains(sw, "await fetchNetwork(req, 5)") {
 		t.Error("networkTimeoutSeconds=5 non rendu dans le SW")
 	}
-	if strings.Contains(sw, "await fetchNetwork(req, 2)") {
-		t.Error("le défaut 2 s ne doit pas apparaître avec un timeout déclaré")
+	if strings.Contains(sw, "await fetchNetwork(req, 3)") {
+		t.Error("le défaut 3 s ne doit pas apparaître avec un timeout déclaré")
+	}
+}
+
+// offlineFastPath par endpoint : actif par défaut, désactivable.
+func TestSWApiCacheOfflineFastPathConfig(t *testing.T) {
+	// par défaut : fast-path actif
+	sw := New(emptyPolicyWithApiCache()).swJS()
+	if !strings.Contains(sw, "const OFFLINE_FAST_api_process_stream = true;") {
+		t.Error("offlineFastPath devrait être actif par défaut")
+	}
+
+	// désactivé : le check onLine ne doit plus court-circuiter CETTE
+	// endpoint (const false), et la logique réseau reste inchangée
+	falseVal := false
+	pol := emptyPolicyWithApiCache()
+	pol.ApiCaches[0].OfflineFastPath = &falseVal
+	sw2 := New(pol).swJS()
+	if !strings.Contains(sw2, "const OFFLINE_FAST_api_process_stream = false;") {
+		t.Error("offlineFastPath=false non rendu dans le SW")
+	}
+
+	// deux endpoints : chacun son flag
+	pol2 := emptyPolicy()
+	pol2.ApiCaches = []*core.PWAApiCache{
+		{Path: "/api/process_stream", OfflineFastPath: &falseVal},
+		{Path: "/api/other"},
+	}
+	sw3 := New(pol2).swJS()
+	if !strings.Contains(sw3, "const OFFLINE_FAST_api_process_stream = false;") {
+		t.Error("endpoint 1: fast-path désactivé non rendu")
+	}
+	if !strings.Contains(sw3, "const OFFLINE_FAST_api_other = true;") {
+		t.Error("endpoint 2: fast-path actif par défaut non rendu")
 	}
 }
