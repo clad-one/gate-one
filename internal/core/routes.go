@@ -94,6 +94,12 @@ type PWAApiCache struct {
 	// 1500). Handles backends that keep the connection open (keep-alive
 	// SSE) instead of closing it after the last event.
 	IdleFinalizeMs int `json:"idleFinalizeMs,omitempty"`
+	// NetworkTimeoutSeconds bounds how long the offline replay waits
+	// for the network BEFORE falling back to the cache (default 2).
+	// Applies to the headers only: once a response arrives, its
+	// streaming duration is unbounded. The OS offline flag
+	// (navigator.onLine === false) skips the network entirely.
+	NetworkTimeoutSeconds int `json:"networkTimeoutSeconds,omitempty"`
 }
 
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:

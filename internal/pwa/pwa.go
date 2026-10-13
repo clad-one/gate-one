@@ -229,6 +229,27 @@ func (h *Handler) apiCacheJS() string {
     return new Request(key);
   }
 
+  // fetch avec un abort limité à l'attente des HEADERS : dès que la
+  // réponse (headers) arrive, le listener abort est retiré et le
+  // streaming de la réponse peut durer librement. Un abort n'est
+  // donc possible qu'avant toute réponse : DNS/TCP down, serveur
+  // muet. Renvoie {response, error} sans lever : le catch du
+  // handler décide du replay selon response.ok ou error.
+  async function fetchNetwork(req, timeoutSec) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
+    const done = () => clearTimeout(timer);
+    controller.signal.addEventListener('abort', done, { once: true });
+    try {
+      const response = await fetch(req, { signal: controller.signal });
+      done();
+      return { response: response, error: null };
+    } catch (err) {
+      done();
+      return { response: null, error: err };
+    }
+  }
+
   // Accumule la branche du tee et écrit dans le cache : à la fin propre
   // du flux, OU après 1,5 s sans nouveau chunk (les SSE ne se ferment
   // pas toujours : attendre done indéfiniment ne cacherait jamais
@@ -299,6 +320,10 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	if idleMs <= 0 {
 		idleMs = 1500 // finalisation du cache après ce silence du flux
 	}
+	netTimeout := c.NetworkTimeoutSeconds
+	if netTimeout <= 0 {
+		netTimeout = 2 // abort du fetch sans réponse au bout de 2 s
+	}
 
 	cacheName := "gateway-pwa-api-" + strings.TrimPrefix(c.Path, "/")
 	if c.Version != "" {
@@ -319,7 +344,8 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
   // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement).
   // ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s,
   // ` + fmtInt64(maxSize) + ` octets max par entrée,
-  // finalisation après ` + fmtInt(idleMs) + ` ms de silence du flux.
+  // finalisation après ` + fmtInt(idleMs) + ` ms de silence du flux,
+  // attente réseau abortée après ` + fmtInt(netTimeout) + ` s.
   const exp_` + jsIdent(c.Path) + ` = new workbox.expiration.ExpirationPlugin({
     maxEntries: ` + fmtInt(maxEntries) + `,
     maxAgeSeconds: ` + fmtInt(maxAge) + `,
@@ -352,7 +378,25 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
           '\n  corps:', bodyText);
       } catch (e) { keyReq = null; } // corps illisible : pas de replay
       try {
-        const response = await fetch(req);
+        // Hors ligne (l'OS le sait : wifi coupé, avion) : pas de
+        // fetch du tout, le cache répond immédiatement. En ligne :
+        // fetch d'abord (fraîcheur), aborté au bout de
+        // networkTimeoutSeconds si aucune réponse — le replay ne
+        // subit plus le timeout TCP complet (~5 s) d'un réseau mort.
+        // Le timeout ne couvre QUE l'attente des headers : le
+        // listener est retiré dès que la réponse arrive, le
+        // streaming de la réponse elle-même reste libre.
+        if (!self.navigator.onLine) {
+          const offlineHit = keyReq ? await cache.match(keyReq) : null;
+          if (offlineHit) {
+            console.log('[gateway-pwa] replay offline (onLine=false):', keyReq.url);
+            return offlineHit;
+          }
+          // rien de caché : tenter le fetch malgré tout (offline
+          // pas toujours détecté, p.ex. serveur local)
+        }
+        const { response, error } = await fetchNetwork(req, ` + fmtInt(netTimeout) + `);
+        if (error) throw error;
         if (response.ok && response.body) {
           const [toApp, toCache] = response.body.tee();
           // event.waitUntil est INDISPENSABLE : sans lui, le navigateur

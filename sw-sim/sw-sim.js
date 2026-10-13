@@ -61,6 +61,10 @@ async function loadSW(swPath) {
     },
     skipWaiting() { swGlobals.skipWaitingCalled = true; return Promise.resolve(); },
     clients: { async claim() { return []; } },
+    // navigator.onLine : le SW du replay offline le lit pour
+    // court-circuiter le fetch quand l'OS sait le réseau down.
+    // Mutables par les tests : self.navigator.onLine = false.
+    navigator: { onLine: true },
   };
 
   let backend = async () => new Response('default', { status: 404 });
@@ -68,9 +72,9 @@ async function loadSW(swPath) {
     set(fn) { backend = fn; },
     calls: [],
   };
-  const fetchFn = async (req) => {
+  const fetchFn = async (req, opts) => {
     fetchCtrl.calls.push(req);
-    return backend(req);
+    return backend(req, opts);
   };
 
   function importScripts() {}
@@ -100,6 +104,7 @@ async function loadSW(swPath) {
     Request, Response, Blob, ReadableStream, TextEncoder, TextDecoder,
     URL, console, Promise, crypto: require('crypto').webcrypto,
     setTimeout, clearTimeout, setInterval, clearInterval,
+    AbortController,
   });
   vm.runInContext(code, ctx, { filename: swPath });
 
