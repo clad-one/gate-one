@@ -5,6 +5,7 @@ import (
 	mcpserver "cladone/gateway/internal/mcp"
 	"cladone/gateway/internal/pwa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -459,6 +460,22 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			)
 
 			if err != nil {
+				// checkMCPAuth a déjà répondu (challenge 401/403)
+				// sauf sur erreur réseau/transport : là, la réponse
+				// est encore vierge — écrire un 502 plutôt que
+				// laisser Go émettre un 200 vide.
+				if errors.Is(err, ErrUnauthorized) {
+					return
+				}
+				log.Printf(
+					"MCP auth-bridge unreachable: %v",
+					err,
+				)
+				http.Error(
+					w,
+					"authentication service unavailable",
+					http.StatusBadGateway,
+				)
 				return
 			}
 		}
