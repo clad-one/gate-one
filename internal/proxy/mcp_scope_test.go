@@ -20,6 +20,18 @@ func newMCPTestGateway(
 	t *testing.T,
 	scope string,
 ) (http.Handler, *[]string) {
+	return newMCPTestGatewayWithBridgeStatus(t, scope, http.StatusUnauthorized)
+}
+
+// newMCPTestGatewayWithBridgeStatus est la variante paramétrable :
+// le stub auth-bridge répond toujours bridgeStatus, ce qui permet de
+// tester le relais du 401 (challenge) comme du 403 (insufficient
+// scope).
+func newMCPTestGatewayWithBridgeStatus(
+	t *testing.T,
+	scope string,
+	bridgeStatus int,
+) (http.Handler, *[]string) {
 	t.Helper()
 
 	var seen []string
@@ -27,7 +39,7 @@ func newMCPTestGateway(
 	bridge := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			seen = append(seen, r.Header.Get("X-MCP-Scope"))
-			w.WriteHeader(http.StatusUnauthorized)
+			w.WriteHeader(bridgeStatus)
 		},
 	))
 	t.Cleanup(bridge.Close)
@@ -108,6 +120,33 @@ func TestMCPChallengeDefaultsToMcpTools(t *testing.T) {
 	}
 	if (*seen)[0] != defaultMCPScope {
 		t.Errorf("X-MCP-Scope = %q, want %q", (*seen)[0], defaultMCPScope)
+	}
+}
+
+// TestMCPInsufficientScopeChallenge vérifie le relais du 403
+// auth-bridge (token valide mais scope manquant) : la gateway doit
+// renvoyer error="insufficient_scope", le scope exigé et
+// resource_metadata (MCP 2026-07-28, cohérence avec le 401).
+func TestMCPInsufficientScopeChallenge(t *testing.T) {
+	gw, _ := newMCPTestGatewayWithBridgeStatus(t, "custom-scope", http.StatusForbidden)
+
+	resp := doGet(t, gw, "gram.test", "/mcp")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+
+	wwwAuth := resp.Header.Get("WWW-Authenticate")
+	if !strings.Contains(wwwAuth, `error="insufficient_scope"`) {
+		t.Errorf("challenge = %q, want error=insufficient_scope", wwwAuth)
+	}
+	if !strings.Contains(wwwAuth, `scope="custom-scope"`) {
+		t.Errorf("challenge = %q, want scope=custom-scope", wwwAuth)
+	}
+	if !strings.Contains(
+		wwwAuth,
+		`resource_metadata="https://gram.test/.well-known/oauth-protected-resource"`,
+	) {
+		t.Errorf("challenge = %q, missing resource_metadata", wwwAuth)
 	}
 }
 
