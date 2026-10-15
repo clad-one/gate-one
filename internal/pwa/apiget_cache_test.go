@@ -270,3 +270,23 @@ func TestSWNetworkOnlyAbsent(t *testing.T) {
 		t.Error("aucune RegExp d'exclusion sans pwa.networkOnly déclaré")
 	}
 }
+
+// L'ordre d'enregistrement fait foi : la route networkOnly doit être
+// ENREGISTRÉE AVANT la route assets — workbox s'arrête à la première
+// route matchante, et la page de callback OIDC est un document
+// (destination 'document') que la route assets cacherait si elle
+// était consultée en premier.
+func TestSWNetworkOnlyBeforeAssets(t *testing.T) {
+	pol := emptyPolicy()
+	pol.NetworkOnly = &core.PWANetworkOnlyPolicy{ExcludePatterns: []string{"[?&]code="}}
+	sw := New(pol).swJS()
+
+	iNo := strings.Index(sw, "NO_CACHE_RE_0.test(url.href)")
+	iAssets := strings.Index(sw, "request.destination === 'document'")
+	if iNo < 0 || iAssets < 0 {
+		t.Fatalf("routes attendues absentes: networkOnly=%d assets=%d", iNo, iAssets)
+	}
+	if iNo > iAssets {
+		t.Error("networkOnly enregistré APRÈS assets: un document de callback serait caché par assets avant l'exclusion")
+	}
+}

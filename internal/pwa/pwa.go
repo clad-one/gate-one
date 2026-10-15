@@ -154,16 +154,16 @@ if (workbox) {
   // répond instantanément, le réseau rafraîchit en arrière-plan ; le
   // CACHE_VERSION purgé à l'activation garantit la fraîcheur après
   // déploiement).
+@@NETWORK_ONLY@@
   workbox.routing.registerRoute(
     ({request}) => request.destination === 'document' || request.destination === 'script' || request.destination === 'style',
     new workbox.strategies.ASSETS_STRATEGY({
       cacheName: ASSETS_CACHE@@ASSETS_OPTIONS@@
     })
   );
-  // marqueur diagnostic étape 1: assets route enregistrée
+  // marqueur diagnostic étape 1: routes networkOnly + assets enregistrées
   caches.open('gateway-pwa-debug').then((c) => c.put('/step1-assets-route', new Response('ok')));
-@@NETWORK_ONLY@@
-  // marqueur diagnostic étape 2: routes d'exclusion enregistrées, apiCache va démarrer
+  // marqueur diagnostic étape 2: apiCache va démarrer
   caches.open('gateway-pwa-debug').then((c) => c.put('/step2-before-apicache', new Response('ok')));
 ` + h.apiCacheJS() + `
   // marqueur de diagnostic: le SW a chargé toutes ses routes
