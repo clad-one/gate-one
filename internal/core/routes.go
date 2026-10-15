@@ -76,6 +76,11 @@ type MCPPolicy struct {
 // (one per endpoint policy).
 type PWAApiCache struct {
 	Path string `json:"path"`
+	// Method selects the cached method: "POST" (default) for the
+	// network-first offline replay of POST/SSE calls, or "GET" for a
+	// stale-while-revalidate cache of that exact path (offline is
+	// covered by SWR itself, so OfflineFastPath does not apply).
+	Method string `json:"method,omitempty"`
 	// MaxEntries bounds the number of cached responses (default 50).
 	MaxEntries int `json:"maxEntries,omitempty"`
 	// MaxAgeSeconds bounds entry age (default 86400 = 24h).
@@ -110,6 +115,15 @@ type PWAApiCache struct {
 	OfflineFastPath *bool `json:"offlineFastPath,omitempty"`
 }
 
+// PWAApiGETCache configures the universal no-config GET cache
+// (pwa.apiGETCache). Its presence enables it.
+type PWAApiGETCache struct {
+	// Excludes: path prefixes never cached by the catch-all (on top
+	// of the declared apiCaches[] paths and the virtual /__gateway_pwa/
+	// prefix, which are always excluded).
+	Excludes []string `json:"excludes,omitempty"`
+}
+
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:
 // virtual endpoints under /__gateway_pwa/ (manifest, service worker,
 // self-hosted Workbox runtime) and <head> injection on HTML responses.
@@ -125,9 +139,18 @@ type PWAPolicy struct {
 	Icons []string `json:"icons,omitempty"`
 	// ApiCaches: offline replay of API responses (POST/SSE included),
 	// one block per endpoint policy. ApiCache is the legacy singular
-	// form, still read.
+	// form, still read. Method selects the cached method ("POST" by
+	// default, or "GET" for a SWR cache of that exact path — declared
+	// endpoints are excluded from the apiGETCache catch-all for
+	// every method).
 	ApiCache  *PWAApiCache   `json:"apiCache,omitempty"`
 	ApiCaches []*PWAApiCache `json:"apiCaches,omitempty"`
+	// ApiGETCache, when present, adds a catch-all GET cache for
+	// the requests nothing else covers (fetch() data calls, images,
+	// fonts — anything the assets route does not match). Declared
+	// apiCaches[] paths are excluded (an endpoint declared is master
+	// of its path, every method); Excludes removes further prefixes.
+	ApiGETCache *PWAApiGETCache `json:"apiGETCache,omitempty"`
 	// Assets tunes the strategy for pages and same-origin assets
 	// (documents, scripts, styles). If unset: StaleWhileRevalidate
 	// without timeout — the cache answers instantly, network refreshes

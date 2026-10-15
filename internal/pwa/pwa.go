@@ -37,7 +37,7 @@ const apiCacheLogicVersion = "1"
 // apiCachePolicyJSON sérialise la politique déclarative d'un endpoint
 // apiCache pour le hash de son cache : toute reconfiguration du bloc
 // dans api-routes.json change le hash, donc le nom du cache.
-func apiCachePolicyJSON(c *core.PWAApiCache) []byte {
+func apiCachePolicyJSON(c any) []byte {
 	data, _ := json.Marshal(c)
 	return data
 }
@@ -206,7 +206,7 @@ self.addEventListener('fetch', () => {}); // no-op: forcer l'attachement du list
 // size guard.
 func (h *Handler) apiCacheJS() string {
 	caches := core.EffectiveApiCaches(h.policy)
-	if len(caches) == 0 {
+	if len(caches) == 0 && h.policy.ApiGETCache == nil {
 		return ""
 	}
 
@@ -299,10 +299,121 @@ func (h *Handler) apiCacheJS() string {
 		}
 		sb.WriteString(h.apiCacheRouteJS(c))
 	}
+	if h.policy.ApiGETCache != nil {
+		sb.WriteString(h.apiGETCatchAllJS(caches))
+	}
 	return sb.String()
 }
 
+// apiGETCatchAllJS generates the universal no-config GET catch-all.
+// It must be registered AFTER the explicit apiCaches[] routes (the
+// first matching route wins), and never matches a declared endpoint's
+// path — an endpoint declared in apiCaches[] is master of its path
+// for every method. Assets (documents/scripts/styles) are already
+// covered by the SWR assets route, registered even earlier.
+func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
+	all := h.policy.ApiGETCache
+
+	// Défauts catch-all (sans config déclarable pour l'instant).
+	const (
+		allMaxEntries = 200
+		allMaxAgeSec  = 86400
+		allMaxSize    = 2 << 20 // 2 MiB par entrée
+		allTimeoutSec = 3
+	)
+
+	cacheName := "gateway-pwa-api-all"
+	// Versionnement : hash du bloc de configuration (excludes inclus)
+	// + la version logique commune. Reconfigurer la catch-all
+	// n'invalide pas les caches des endpoints explicites, et inversement.
+	polHash := fmt.Sprintf("%x", sha256.Sum256(apiCachePolicyJSON(all)))[:8]
+	cacheName += "-v" + apiCacheLogicVersion + "-" + polHash
+
+	// Filtre d'exclusion : préfixe virtuel de la gateway, préfixes
+	// déclarés, et paths des endpoints déclarés (variante A : un
+	// endpoint déclaré est maître de son path, toutes méthodes).
+	excludes := []string{PathPrefix}
+	excludes = append(excludes, all.Excludes...)
+	for _, c := range declared {
+		excludes = append(excludes, c.Path)
+	}
+	var checks strings.Builder
+	for _, ex := range excludes {
+		if ex == "" {
+			continue
+		}
+		checks.WriteString(" && !url.pathname.startsWith(" + fmtJSLit(ex) + ")")
+	}
+	if checks.Len() == 0 {
+		checks.WriteString(" && true")
+	}
+
+	return `
+  // Cache GET universel (apiGETCache) : les requêtes GET que
+  // rien d'autre ne couvre (fetch data API, images, fonts). SWR :
+  // le cache répond immédiatement, le réseau rafraîchit en fond ;
+  // hors ligne -> le cache. Un path déclaré dans apiCaches[] est
+  // maître de son path (toutes méthodes) et n'atteint pas ce bloc ;
+  // les assets (document/script/style) sont couverts par la route
+  // assets, enregistrée avant. Défauts : ` + fmtInt(allMaxEntries) + ` entrées,
+  // ` + fmtInt(allMaxAgeSec) + `s, ` + fmtInt64(allMaxSize) + ` octets max, abort ` + fmtInt(allTimeoutSec) + ` s.
+  const exp_api_all = new workbox.expiration.ExpirationPlugin({
+    maxEntries: ` + fmtInt(allMaxEntries) + `,
+    maxAgeSeconds: ` + fmtInt(allMaxAgeSec) + `,
+    purgeOnQuotaError: true
+  });
+
+  workbox.routing.registerRoute(
+    ({url}) => url.pathname.startsWith('/')` + checks.String() + `,
+    async ({event}) => {
+      const req = event.request;
+      if (req.method !== 'GET') {
+        // la catch-all ne matche que les GET (méthode 'GET' déclarée
+        // ci-dessous) — garde-fou défensif pour les GET d'URL
+        // exotiques (about:, blob:) déjà exclus par workbox.
+        return fetch(req);
+      }
+      console.log('[gateway-pwa] apiGETCache intercepté:', req.url);
+      const cache = await caches.open('` + cacheName + `');
+      const hit = await cache.match(req);
+      const refresh = () => fetchNetwork(req, ` + fmtInt(allTimeoutSec) + `).then(({response}) => {
+        if (!response || !response.ok || !response.body
+            || response.headers.has('set-cookie')) return;
+        event.waitUntil(response.arrayBuffer().then((buf) =>
+          cache.put(req, new Response(buf, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          }))
+        ));
+      }).catch(() => {});
+      if (hit) {
+        refresh();
+        return hit;
+      }
+      const { response, error } = await fetchNetwork(req, ` + fmtInt(allTimeoutSec) + `);
+      if (error) throw error;
+      if (response.ok && response.body && !response.headers.has('set-cookie')) {
+        const clone = response.clone();
+        event.waitUntil(clone.arrayBuffer().then((buf) =>
+          cache.put(req, new Response(buf, {
+            status: clone.status,
+            statusText: clone.statusText,
+            headers: clone.headers,
+          }))
+        ));
+      }
+      return response;
+    },
+    'GET'
+  );
+`
+}
+
 // apiCacheRouteJS generates one endpoint's route + expiration plugin.
+// Method "GET" generates a stale-while-revalidate route (cache answers
+// instantly, network refreshes in the background); method "POST" (or
+// empty) generates the network-first offline replay.
 func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	maxEntries := c.MaxEntries
 	if maxEntries <= 0 {
@@ -324,7 +435,14 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	if netTimeout <= 0 {
 		netTimeout = 3 // abort du fetch sans réponse au bout de 3 s
 	}
-	offlineFast := c.OfflineFastPath == nil || *c.OfflineFastPath
+	method := strings.ToUpper(c.Method)
+	if method != "GET" {
+		method = "POST" // défaut (et compat) : replay network-first
+	}
+	// offlineFastPath : POST seulement (pour un GET, SWR sert déjà le
+	// caché immédiatement — sans objet).
+	offlineFast := method == "POST" &&
+		(c.OfflineFastPath == nil || *c.OfflineFastPath)
 
 	cacheName := "gateway-pwa-api-" + strings.TrimPrefix(c.Path, "/")
 	if c.Version != "" {
@@ -342,12 +460,11 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	cacheName += "-v" + apiCacheLogicVersion + "-" + polHash
 
 	return `
-  // Cache offline déclaratif : ` + c.Path + ` (réponses complètes seulement).
+  // Cache API déclaratif : ` + c.Path + ` (méthode ` + method + `).
   // ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s,
   // ` + fmtInt64(maxSize) + ` octets max par entrée,
-  // finalisation après ` + fmtInt(idleMs) + ` ms de silence du flux,
-  // attente réseau abortée après ` + fmtInt(netTimeout) + ` s.
-  const OFFLINE_FAST_` + jsIdent(c.Path) + ` = ` + jsBool(offlineFast) + `;
+  // offlineFastPath: ` + jsBool(offlineFast) + ` (POST only).
+  const OFFLINE_FAST_` + jsIdent(c.Path) + ` = ` + jsBool(offlineFast) + `; // POST only
   const exp_` + jsIdent(c.Path) + ` = new workbox.expiration.ExpirationPlugin({
     maxEntries: ` + fmtInt(maxEntries) + `,
     maxAgeSeconds: ` + fmtInt(maxAge) + `,
@@ -359,7 +476,45 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
     async ({event}) => {
       console.log('[gateway-pwa] route apiCache interceptée:', event.request.method, event.request.url);
       const req = event.request;
-      const cache = await caches.open('` + cacheName + `');
+      const cache = await caches.open('` + cacheName + `');` + func() string {
+		if method == "GET" {
+			return `
+      // SWR : le cache répond immédiatement (même en ligne), le
+      // réseau rafraîchit en fond ; offline strict -> le cache.
+      // Clé = URL seule (pas de corps pour un GET). Les réponses
+      // non-200 ou avec Set-Cookie ne sont pas mises en cache.
+      const hit = await cache.match(req);
+      const refresh = () => fetchNetwork(req, ` + fmtInt(netTimeout) + `).then(({response}) => {
+        if (!response || !response.ok || response.headers.has('set-cookie')) return;
+        // réponse opaque ou vide : rien à stocker
+        if (!response.body) return;
+        event.waitUntil(response.arrayBuffer().then((buf) =>
+          cache.put(req, new Response(buf, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          }))
+        ));
+      }).catch(() => {});
+      if (hit) {
+        refresh();
+        return hit;
+      }
+      const { response, error } = await fetchNetwork(req, ` + fmtInt(netTimeout) + `);
+      if (error) throw error;
+      if (response.ok && response.body && !response.headers.has('set-cookie')) {
+        const clone = response.clone();
+        event.waitUntil(clone.arrayBuffer().then((buf) =>
+          cache.put(req, new Response(buf, {
+            status: clone.status,
+            statusText: clone.statusText,
+            headers: clone.headers,
+          }))
+        ));
+      }
+      return response;`
+		}
+		return `
       // Clé de cache explicite : Cache Storage ignore le corps des POST
       // dans sa clé (toutes les segmentations s'écraseraient), donc on
       // hashe l'URL + le corps dans un paramètre artificiel.
@@ -431,13 +586,15 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
           console.warn('[gateway-pwa] pas de cache pour cette requête:', keyReq.url);
         }
         throw err;
-      }
+      }`
+	}() + `
     },
     // Cache Storage ignore les POST dans sa clé et workbox route les
     // requêtes non-GET SEULEMENT si la méthode est explicite (Route
-    // constructor, method défaut "GET") : sans ce 3e argument, la route
-    // ne matchait aucun POST => "No route found", replay impossible.
-    'POST'
+    // constructor, method défaut "GET") : sans le 3e argument pour un
+    // POST, la route ne matchait aucun POST => "No route found",
+    // replay impossible.
+    '` + method + `'
   );
 `
 }
