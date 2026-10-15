@@ -81,15 +81,60 @@ async function loadSW(swPath) {
   const workbox = {
     setConfig() {},
     routing: {
-      registerRoute(match, handler) {
-        routes.push({ match, handler });
+      // 3e argument = méthode exigée ('GET' par défaut, comme le
+      // Route constructor de workbox : une route sans méthode
+      // explicite ne matche QUE les GET).
+      registerRoute(match, handler, method) {
+        routes.push({ match, handler, method: method || 'GET' });
       },
     },
     strategies: {
-      NetworkFirst: class { constructor(opts) { this.opts = opts; } },
-      NetworkOnly: class { constructor(opts) { this.opts = opts; } },
-      StaleWhileRevalidate: class { constructor(opts) { this.opts = opts; } },
-      CacheFirst: class { constructor(opts) { this.opts = opts; } },
+      // Les stratégies sont des objets avec .handle({event, url,
+      // request, params}) dans workbox ; la sim implémente le
+      // comportement réel minimal attendu par les routes générées :
+      // NetworkOnly = fetch direct ; NetworkFirst = réseau puis cache ;
+      // StaleWhileRevalidate = cache puis réseau en fond ; CacheFirst =
+      // cache puis réseau. cacheName/networkTimeoutSeconds sont lus
+      // depuis opts.
+      NetworkFirst: class { constructor(opts) { this.opts = opts; }
+        async handle({event, request, url}) {
+          try {
+            const resp = await fetchFn(request);
+            if (resp.ok) {
+              const c = await caches.open(this.opts.cacheName);
+              event.waitUntil(c.put(request, resp.clone()));
+              return resp;
+            }
+          } catch (e) { /* offline */ }
+          const c = await caches.open(this.opts.cacheName);
+          const hit = await c.match(request);
+          if (hit) return hit;
+          throw new TypeError('Failed to fetch');
+        } },
+      NetworkOnly: class { constructor(opts) { this.opts = opts; }
+        async handle({event, request}) { return fetchFn(request); } },
+      StaleWhileRevalidate: class { constructor(opts) { this.opts = opts; }
+        async handle({event, request, url}) {
+          const c = await caches.open(this.opts.cacheName);
+          const hit = await c.match(request);
+          const refresh = () => (async () => {
+            try {
+              const resp = await fetchFn(request);
+              if (resp.ok) event.waitUntil(c.put(request, resp.clone()));
+            } catch (e) { /* offline */ }
+          })();
+          if (hit) { event.waitUntil(refresh()); return hit; }
+          const resp = await fetchFn(request);
+          if (resp.ok) event.waitUntil(c.put(request, resp.clone()));
+          return resp;
+        } },
+      CacheFirst: class { constructor(opts) { this.opts = opts; }
+        async handle({event, request, url}) {
+          const c = await caches.open(this.opts.cacheName);
+          const hit = await c.match(request);
+          if (hit) return hit;
+          return fetchFn(request);
+        } },
     },
     expiration: {
       ExpirationPlugin: class {
@@ -108,12 +153,14 @@ async function loadSW(swPath) {
   });
   vm.runInContext(code, ctx, { filename: swPath });
 
-  return { routes, caches, fetchCtrl, swGlobals, self: ctx.self };
+  return { routes, caches, fetchCtrl, fetch: fetchFn, swGlobals, self: ctx.self };
 }
 
 // exécute la route qui matche la requête, comme le ferait le navigateur
 async function dispatch(routes, req) {
   for (const r of routes) {
+    // workbox : la méthode exigée par la route doit correspondre
+    if ((r.method || 'GET') !== req.method) continue;
     const url = new URL(req.url);
     let ok = false;
     try { ok = r.match({ request: req, url, event: { request: req, waitUntil: () => {} } }); }
@@ -128,7 +175,10 @@ async function dispatch(routes, req) {
         request: req,
         waitUntil: (p) => extended.push(Promise.resolve(p)),
       };
-      const result = await r.handler({ event, request: req });
+      const handlerFn = typeof r.handler === "function"
+        ? r.handler
+        : () => r.handler.handle({ event, request: req, url: new URL(req.url) });
+      const result = await handlerFn({ event, request: req });
       event._extended = extended;
       return result;
     }
