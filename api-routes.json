@@ -38,6 +38,11 @@
         "name": "Versifier",
         "themeColor": "#4285f4",
         "icons": ["/icon-192.png", "/icon-512.png"],
+        "apiGETCache": {
+          "excludePatterns": [
+            "^https://vers\\.cladone\\.com/api/poems\\?.*user=admin"
+          ]
+        },
         "apiCaches": [
           {
             "path": "/api/process_stream",
