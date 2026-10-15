@@ -132,3 +132,39 @@ func extractCatchAllName(sw string) string {
 	}
 	return rest[:j]
 }
+
+// method "none" : le path est opt-out du caching — aucune route
+// générée pour lui, la catch-all l'ignore (path déclaré = maître).
+func TestSWApiCacheMethodNone(t *testing.T) {
+	pol := emptyPolicy()
+	pol.ApiCaches = []*core.PWAApiCache{
+		{Path: "/api/live", Method: "none"},
+		{Path: "/api/poems", Method: "GET"},
+	}
+	pol.ApiGETCache = &core.PWAApiGETCache{}
+	sw := New(pol).swJS()
+
+	// aucune route pour /api/live
+	if strings.Contains(sw, "url.pathname === '/api/live'") {
+		t.Error("method none: aucune route ne doit être générée pour le path")
+	}
+	if strings.Contains(sw, "gateway-pwa-api-api-live-") {
+		t.Error("method none: aucun cache dédié ne doit être créé")
+	}
+	// la catch-all l'exclut tout de même (défense en profondeur si un
+	// autre jour l'exclusion des paths déclarés change de forme)
+	if !strings.Contains(sw, "!url.pathname.startsWith('/api/live')") {
+		t.Error("method none: le path doit rester exclu de la catch-all")
+	}
+	// l'autre endpoint fonctionne normalement
+	if !strings.Contains(sw, "url.pathname === '/api/poems'") {
+		t.Error("method none: l'endpoint voisin doit rester générés")
+	}
+	// case-insensitive
+	pol2 := emptyPolicy()
+	pol2.ApiCaches = []*core.PWAApiCache{{Path: "/api/x", Method: "NONE"}}
+	sw2 := New(pol2).swJS()
+	if strings.Contains(sw2, "url.pathname === '/api/x'") {
+		t.Error("method NONE (majuscule) doit aussi opt-out")
+	}
+}

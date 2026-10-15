@@ -84,9 +84,13 @@ type MCPPolicy struct {
 type PWAApiCache struct {
 	Path string `json:"path"`
 	// Method selects the cached method: "POST" (default) for the
-	// network-first offline replay of POST/SSE calls, or "GET" for a
+	// network-first offline replay of POST/SSE calls, "GET" for a
 	// stale-while-revalidate cache of that exact path (offline is
-	// covered by SWR itself, so OfflineFastPath does not apply).
+	// covered by SWR itself, so OfflineFastPath does not apply), or
+	// "none" to opt this path OUT of caching entirely: no route is
+	// generated and the apiGETCache catch-all also ignores it — the
+	// endpoint always goes to the network. Useful to exempt an
+	// endpoint from the universal GET cache.
 	Method string `json:"method,omitempty"`
 	// MaxEntries bounds the number of cached responses (default 50).
 	MaxEntries int `json:"maxEntries,omitempty"`
@@ -147,9 +151,9 @@ type PWAPolicy struct {
 	// ApiCaches: offline replay of API responses (POST/SSE included),
 	// one block per endpoint policy. ApiCache is the legacy singular
 	// form, still read. Method selects the cached method ("POST" by
-	// default, or "GET" for a SWR cache of that exact path — declared
-	// endpoints are excluded from the apiGETCache catch-all for
-	// every method).
+	// default, "GET" for a SWR cache of that exact path, "none" to
+	// opt the path out of caching entirely — declared endpoints are
+	// excluded from the apiGETCache catch-all for every method).
 	ApiCache  *PWAApiCache   `json:"apiCache,omitempty"`
 	ApiCaches []*PWAApiCache `json:"apiCaches,omitempty"`
 	// ApiGETCache, when present, adds a catch-all GET cache for

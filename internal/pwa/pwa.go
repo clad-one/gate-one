@@ -297,6 +297,12 @@ func (h *Handler) apiCacheJS() string {
 		if c.Path == "" {
 			continue
 		}
+		// method "none" : le path est explicitement hors cache — pas de
+		// route générée ; la catch-all l'ignore déjà (path déclaré =
+		// maître de son path, toutes méthodes).
+		if strings.EqualFold(strings.TrimSpace(c.Method), "none") {
+			continue
+		}
 		sb.WriteString(h.apiCacheRouteJS(c))
 	}
 	if h.policy.ApiGETCache != nil {
