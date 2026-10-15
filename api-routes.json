@@ -43,6 +43,16 @@
             "^https://vers\\.cladone\\.com/api/poems\\?.*user=admin"
           ]
         },
+        "networkOnly": {
+          "excludePatterns": [
+            "/protocol/openid-connect",
+            "/auth",
+            "[?&]code=",
+            "[?&]state=",
+            "[?&]session_state=",
+            "[?&]iss="
+          ]
+        },
         "apiCaches": [
           {
             "path": "/api/process_stream",

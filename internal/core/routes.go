@@ -144,6 +144,19 @@ type PWAApiGETCache struct {
 	ExcludePatterns []string `json:"excludePatterns,omitempty"`
 }
 
+// PWANetworkOnlyPolicy declares URLs that must never be cached by any
+// strategy of the generated service worker (pwa.networkOnly). Its
+// presence enables the catch-all "never cache" route.
+type PWANetworkOnlyPolicy struct {
+	// ExcludePatterns: JS regular expressions tested against the FULL
+	// URL (path + query). Typical use: the auth server's paths
+	// ("/protocol/openid-connect", "/auth") and OAuth/OIDC callback
+	// parameters ("[?&]code=", "[?&]state=", …) — one-time codes must
+	// never land in a cache. Nothing is hard-coded: declare what YOUR
+	// auth server needs. Invalid syntax is rejected at config load.
+	ExcludePatterns []string `json:"excludePatterns,omitempty"`
+}
+
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:
 // virtual endpoints under /__gateway_pwa/ (manifest, service worker,
 // self-hosted Workbox runtime) and <head> injection on HTML responses.
@@ -171,6 +184,15 @@ type PWAPolicy struct {
 	// apiCaches[] paths are excluded (an endpoint declared is master
 	// of its path, every method); Excludes removes further prefixes.
 	ApiGETCache *PWAApiGETCache `json:"apiGETCache,omitempty"`
+	// NetworkOnly, when present, adds a catch-all "never cache" route:
+	// every URL matching one of its patterns goes straight to the
+	// network, untouched by any cache (authentication exchanges,
+	// OAuth/OIDC callbacks carrying one-time codes, health endpoints…).
+	// Nothing is hard-coded: which URLs are excluded is a deployment
+	// decision — the gateway works with any auth server. Patterns are
+	// JS regular expressions tested against the FULL URL (path + query);
+	// invalid syntax is rejected at config load.
+	NetworkOnly *PWANetworkOnlyPolicy `json:"networkOnly,omitempty"`
 	// Assets tunes the strategy for pages and same-origin assets
 	// (documents, scripts, styles). If unset: StaleWhileRevalidate
 	// without timeout — the cache answers instantly, network refreshes
@@ -227,6 +249,20 @@ func EffectiveApiCaches(p *PWAPolicy) []*PWAApiCache {
 	out := p.ApiCaches
 	if p.ApiCache != nil {
 		out = append(out, p.ApiCache)
+	}
+	return out
+}
+
+// networkOnlyPatterns returns every exclusion pattern declared on the
+// PWA policy (apiGETCache.excludePatterns + networkOnly.excludePatterns),
+// for a single validation pass.
+func (p *PWAPolicy) networkOnlyPatterns() []string {
+	var out []string
+	if p.ApiGETCache != nil {
+		out = append(out, p.ApiGETCache.ExcludePatterns...)
+	}
+	if p.NetworkOnly != nil {
+		out = append(out, p.NetworkOnly.ExcludePatterns...)
 	}
 	return out
 }
@@ -304,13 +340,13 @@ func Load(path string) (*Config, error) {
 func (c *Config) validate() error {
 	for i := range c.Routes {
 		p := c.Routes[i].PWA
-		if p == nil || p.ApiGETCache == nil {
+		if p == nil {
 			continue
 		}
-		for _, pat := range p.ApiGETCache.ExcludePatterns {
+		for _, pat := range p.networkOnlyPatterns() {
 			if _, err := regexp.Compile(pat); err != nil {
 				return fmt.Errorf(
-					"route %s: pwa.apiGETCache.excludePatterns: expression invalide %q: %v",
+					"route %s: expression invalide dans les exclusions PWA %q: %v",
 					c.Routes[i].Host, pat, err)
 			}
 		}

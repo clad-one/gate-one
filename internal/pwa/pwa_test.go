@@ -93,8 +93,11 @@ func TestServiceWorker(t *testing.T) {
 	if !strings.Contains(body, "modulePathPrefix: '/__gateway_pwa/workbox/'") {
 		t.Error("sw.js must use the self-hosted modulePathPrefix")
 	}
-	if !strings.Contains(body, "NetworkOnly") {
-		t.Error("sw.js must route auth traffic through NetworkOnly")
+	// Aucune exclusion d'auth en dur : sans pwa.networkOnly déclaré,
+	// le SW généré ne contient aucune route NetworkOnly (la gateway
+	// supporte tout serveur d'authentification — le choix est déclaratif).
+	if strings.Contains(body, "NetworkOnly") {
+		t.Error("sw.js must not hard-code auth exclusions (config-only)")
 	}
 }
 

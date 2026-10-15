@@ -1,6 +1,7 @@
 package pwa
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -225,20 +226,47 @@ func TestConfigRejectsInvalidExcludePattern(t *testing.T) {
 	}
 }
 
-// La page de callback OIDC (query code/state/session_state/iss) doit
-// être exclue de TOUT cache : la route auth-exclusion matche la query,
-// pas seulement le pathname — un code d'autorisation à usage unique ne
-// doit jamais finir dans le Cache Storage.
-func TestSWOIDCCallbackNotCached(t *testing.T) {
-	sw := New(emptyPolicy()).swJS()
-	for _, want := range []string{
-		"url.searchParams.has('code')",
-		"url.searchParams.has('state')",
-		"url.searchParams.has('session_state')",
-		"url.searchParams.has('iss')",
-	} {
+// pwa.networkOnly déclaratif : la route NetworkOnly est générée à
+// partir des patterns de la config (aucun filtre en dur — la gateway
+// supporte tout serveur d'authentification). Les URLs de callback OIDC
+// (query code/state/session_state/iss) doivent être exclues par les
+// patterns déclarés.
+func TestSWNetworkOnlyGenerated(t *testing.T) {
+	pol := emptyPolicy()
+	pol.NetworkOnly = &core.PWANetworkOnlyPolicy{
+		ExcludePatterns: []string{
+			"/protocol/openid-connect",
+			"/auth",
+			"[?&]code=",
+			"[?&]state=",
+			"[?&]session_state=",
+			"[?&]iss=",
+		},
+	}
+	sw := New(pol).swJS()
+
+	if !strings.Contains(sw, "new workbox.strategies.NetworkOnly()") {
+		t.Error("route NetworkOnly attendue quand networkOnly est déclaré")
+	}
+	for i, pat := range pol.NetworkOnly.ExcludePatterns {
+		want := fmt.Sprintf("const NO_CACHE_RE_%d = new RegExp('%s');", i, pat)
 		if !strings.Contains(sw, want) {
-			t.Errorf("callback OIDC non exclu: %q attendu dans:\n%s", want, sw)
+			t.Errorf("NO_CACHE_RE_%d attendu: %q", i, want)
 		}
+		wantTest := fmt.Sprintf("NO_CACHE_RE_%d.test(url.href)", i)
+		if !strings.Contains(sw, wantTest) {
+			t.Errorf("test d'URL complet attendu: %q", wantTest)
+		}
+	}
+}
+
+// networkOnly absent => aucune route NetworkOnly, aucune NO_CACHE_RE.
+func TestSWNetworkOnlyAbsent(t *testing.T) {
+	sw := New(emptyPolicy()).swJS()
+	if strings.Contains(sw, "NetworkOnly") {
+		t.Error("aucune route NetworkOnly sans pwa.networkOnly déclaré")
+	}
+	if strings.Contains(sw, "NO_CACHE_RE") {
+		t.Error("aucune RegExp d'exclusion sans pwa.networkOnly déclaré")
 	}
 }

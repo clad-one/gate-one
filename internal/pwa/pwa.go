@@ -162,27 +162,8 @@ if (workbox) {
   );
   // marqueur diagnostic étape 1: assets route enregistrée
   caches.open('gateway-pwa-debug').then((c) => c.put('/step1-assets-route', new Response('ok')));
-
-  // Sécurité : Ignorer explicitement toutes les requêtes
-  // d'authentification. Deux formes :
-  //  - URLs des serveurs OIDC (paths /protocol/openid-connect, /auth) ;
-  //  - URLs de CALLBACK sur le host de l'app : la query contient les
-  //    paramètres OIDC (code à usage unique, state, session_state,
-  //    iss). Le pathname seul ne les révèle pas — la page de callback
-  //    est un document comme les autres, la route assets la cacherait
-  //    avec un code d'autorisation consommable dans la clé. Jamais
-  //    cacher une réponse dont l'URL porte un secret OIDC.
-  workbox.routing.registerRoute(
-    ({url, request}) =>
-      url.pathname.includes('/protocol/openid-connect') ||
-      url.pathname.includes('/auth') ||
-      url.searchParams.has('code') ||
-      url.searchParams.has('state') ||
-      url.searchParams.has('session_state') ||
-      url.searchParams.has('iss'),
-    new workbox.strategies.NetworkOnly()
-  );
-  // marqueur diagnostic étape 2: auth route enregistrée, apiCache va démarrer
+@@NETWORK_ONLY@@
+  // marqueur diagnostic étape 2: routes d'exclusion enregistrées, apiCache va démarrer
   caches.open('gateway-pwa-debug').then((c) => c.put('/step2-before-apicache', new Response('ok')));
 ` + h.apiCacheJS() + `
   // marqueur de diagnostic: le SW a chargé toutes ses routes
@@ -202,6 +183,11 @@ self.addEventListener('fetch', () => {}); // no-op: forcer l'attachement du list
 	body = strings.ReplaceAll(body, "ASSETS_STRATEGY", strategy)
 	body = strings.ReplaceAll(body, "@@ASSETS_OPTIONS@@", opts)
 
+	// Exclusions réseau-seul, déclaratives (pwa.networkOnly) — rien
+	// n'est en dur : quelles URLs ne jamais cacher est un choix de
+	// déploiement (la gateway supporte tout serveur d'authentification).
+	body = strings.ReplaceAll(body, "@@NETWORK_ONLY@@", h.networkOnlyJS())
+
 	// Passe 2 : hash du corps (placeholder inclus), puis substitution.
 	version := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))[:8]
 	body = strings.ReplaceAll(body, "@@CACHE_VERSION@@", version)
@@ -209,6 +195,39 @@ self.addEventListener('fetch', () => {}); // no-op: forcer l'attachement du list
 	js := `// Généré par la gateway — workbox ` + workboxVersion + ` auto-hébergé
 // version caches: ` + version + "\n" + body
 	return js
+}
+
+// networkOnlyJS generates the "never cache" catch-all route declared
+// by pwa.networkOnly (empty output when absent): every URL matching one
+// of the declared patterns goes straight to the network. The route is
+// registered after assets and before the apiCaches/catch-all routes
+// (first matching route wins), so an excluded URL reaches no cache.
+func (h *Handler) networkOnlyJS() string {
+	no := h.policy.NetworkOnly
+	if no == nil || len(no.ExcludePatterns) == 0 {
+		return ""
+	}
+
+	var decls, tests strings.Builder
+	for i, pat := range no.ExcludePatterns {
+		if pat == "" {
+			continue
+		}
+		decls.WriteString("\n  const NO_CACHE_RE_" + fmtInt(i) + " = new RegExp(" + fmtJSLit(pat) + ");")
+		if tests.Len() > 0 {
+			tests.WriteString(" || ")
+		}
+		tests.WriteString("NO_CACHE_RE_" + fmtInt(i) + ".test(url.href)")
+	}
+
+	return decls.String() + `
+  // URLs déclarées networkOnly (pwa.networkOnly) : jamais cachées,
+  // jamais rejouées — authentification, callbacks OAuth/OIDC avec codes
+  // à usage unique, tout ce que la configuration du déploiement exclut.
+  workbox.routing.registerRoute(
+    ({url}) => ` + tests.String() + `,
+    new workbox.strategies.NetworkOnly()
+  );` + "\n"
 }
 
 // apiCacheJS generates the offline-replay routes for the declared API
