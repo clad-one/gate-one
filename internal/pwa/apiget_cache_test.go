@@ -224,3 +224,21 @@ func TestConfigRejectsInvalidExcludePattern(t *testing.T) {
 		t.Fatalf("pattern valide rejeté: %v", err)
 	}
 }
+
+// La page de callback OIDC (query code/state/session_state/iss) doit
+// être exclue de TOUT cache : la route auth-exclusion matche la query,
+// pas seulement le pathname — un code d'autorisation à usage unique ne
+// doit jamais finir dans le Cache Storage.
+func TestSWOIDCCallbackNotCached(t *testing.T) {
+	sw := New(emptyPolicy()).swJS()
+	for _, want := range []string{
+		"url.searchParams.has('code')",
+		"url.searchParams.has('state')",
+		"url.searchParams.has('session_state')",
+		"url.searchParams.has('iss')",
+	} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("callback OIDC non exclu: %q attendu dans:\n%s", want, sw)
+		}
+	}
+}

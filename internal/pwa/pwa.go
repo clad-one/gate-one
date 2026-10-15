@@ -163,9 +163,23 @@ if (workbox) {
   // marqueur diagnostic étape 1: assets route enregistrée
   caches.open('gateway-pwa-debug').then((c) => c.put('/step1-assets-route', new Response('ok')));
 
-  // Sécurité : Ignorer explicitement toutes les requêtes d'authentification
+  // Sécurité : Ignorer explicitement toutes les requêtes
+  // d'authentification. Deux formes :
+  //  - URLs des serveurs OIDC (paths /protocol/openid-connect, /auth) ;
+  //  - URLs de CALLBACK sur le host de l'app : la query contient les
+  //    paramètres OIDC (code à usage unique, state, session_state,
+  //    iss). Le pathname seul ne les révèle pas — la page de callback
+  //    est un document comme les autres, la route assets la cacherait
+  //    avec un code d'autorisation consommable dans la clé. Jamais
+  //    cacher une réponse dont l'URL porte un secret OIDC.
   workbox.routing.registerRoute(
-    ({url}) => url.pathname.includes('/protocol/openid-connect') || url.pathname.includes('/auth'),
+    ({url, request}) =>
+      url.pathname.includes('/protocol/openid-connect') ||
+      url.pathname.includes('/auth') ||
+      url.searchParams.has('code') ||
+      url.searchParams.has('state') ||
+      url.searchParams.has('session_state') ||
+      url.searchParams.has('iss'),
     new workbox.strategies.NetworkOnly()
   );
   // marqueur diagnostic étape 2: auth route enregistrée, apiCache va démarrer
