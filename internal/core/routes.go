@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -133,6 +134,14 @@ type PWAApiGETCache struct {
 	// of the declared apiCaches[] paths and the virtual /__gateway_pwa/
 	// prefix, which are always excluded).
 	Excludes []string `json:"excludes,omitempty"`
+	// ExcludePatterns: regular expressions (JS RegExp syntax, tested
+	// against the FULL URL) of requests the catch-all must never cache.
+	// Use when a prefix is not selective enough — e.g. exclude a
+	// parameterized endpoint while keeping the rest of its path cached:
+	// "^https://vers\\.cladone\\.com/api/poems\\?.*user=" . A pattern
+	// with invalid syntax is rejected at config load (the gateway fails
+	// fast rather than silently caching what should be excluded).
+	ExcludePatterns []string `json:"excludePatterns,omitempty"`
 }
 
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:
@@ -283,5 +292,28 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
 	return &cfg, nil
+}
+
+// validate rejects configs that cannot work at runtime — fail fast at
+// load instead of silently caching what should have been excluded.
+func (c *Config) validate() error {
+	for i := range c.Routes {
+		p := c.Routes[i].PWA
+		if p == nil || p.ApiGETCache == nil {
+			continue
+		}
+		for _, pat := range p.ApiGETCache.ExcludePatterns {
+			if _, err := regexp.Compile(pat); err != nil {
+				return fmt.Errorf(
+					"route %s: pwa.apiGETCache.excludePatterns: expression invalide %q: %v",
+					c.Routes[i].Host, pat, err)
+			}
+		}
+	}
+	return nil
 }

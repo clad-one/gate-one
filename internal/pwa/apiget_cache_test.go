@@ -1,6 +1,7 @@
 package pwa
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -166,5 +167,60 @@ func TestSWApiCacheMethodNone(t *testing.T) {
 	sw2 := New(pol2).swJS()
 	if strings.Contains(sw2, "url.pathname === '/api/x'") {
 		t.Error("method NONE (majuscule) doit aussi opt-out")
+	}
+}
+
+// excludePatterns : RegExp testées contre l'URL complète (pathname +
+// query) — un paramètre particulier disqualifie la requête.
+func TestSWApiGETExcludePatterns(t *testing.T) {
+	pol := emptyPolicy()
+	pol.ApiGETCache = &core.PWAApiGETCache{
+		ExcludePatterns: []string{"^https://x\\.test/api/poems\\?.*user=admin"},
+	}
+	sw := New(pol).swJS()
+
+	wantRE := "const EXCLUDE_RE_0 = new RegExp('" + pol.ApiGETCache.ExcludePatterns[0] + "');"
+	for _, want := range []string{
+		wantRE,
+		".test(url.href)",
+	} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("excludePatterns attendu %q dans:\n%s", want, sw)
+		}
+	}
+	// plusieurs patterns => index incrémentés
+	pol2 := emptyPolicy()
+	pol2.ApiGETCache = &core.PWAApiGETCache{
+		ExcludePatterns: []string{"/a/", "/b/"},
+	}
+	sw2 := New(pol2).swJS()
+	if !strings.Contains(sw2, "EXCLUDE_RE_0") || !strings.Contains(sw2, "EXCLUDE_RE_1") {
+		t.Error("plusieurs patterns attendus (EXCLUDE_RE_0, EXCLUDE_RE_1)")
+	}
+	// aucun pattern => aucune déclaration, match inchangé
+	sw3 := New(emptyPolicy()).swJS()
+	if strings.Contains(sw3, "EXCLUDE_RE_") {
+		t.Error("aucune RegExp attendue sans excludePatterns")
+	}
+}
+
+// Config load : pattern invalide => rejet au chargement (fail fast),
+// pas de SW qui cacherait ce qui devait être exclu.
+func TestConfigRejectsInvalidExcludePattern(t *testing.T) {
+	tmp := t.TempDir() + "/routes.json"
+	cfg := `{"routes":[{"host":"x.test","path":"/*","backend":"http://b","pwa":{"enabled":true,"apiGETCache":{"excludePatterns":["([bad"]}}}]}` + "\n"
+	if err := os.WriteFile(tmp, []byte(cfg), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.Load(tmp); err == nil {
+		t.Fatal("config avec RegExp invalide doit être rejetée au chargement")
+	}
+	// pattern valide accepté
+	cfg2 := `{"routes":[{"host":"x.test","path":"/*","backend":"http://b","pwa":{"enabled":true,"apiGETCache":{"excludePatterns":["^https://x\\.test/api/poems\\?"]}}}]}` + "\n"
+	if err := os.WriteFile(tmp, []byte(cfg2), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.Load(tmp); err != nil {
+		t.Fatalf("pattern valide rejeté: %v", err)
 	}
 }

@@ -336,8 +336,10 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
 	cacheName += "-v" + apiCacheLogicVersion + "-" + polHash
 
 	// Filtre d'exclusion : préfixe virtuel de la gateway, préfixes
-	// déclarés, et paths des endpoints déclarés (variante A : un
-	// endpoint déclaré est maître de son path, toutes méthodes).
+	// déclarés, paths des endpoints déclarés (variante A : un endpoint
+	// déclaré est maître de son path, toutes méthodes), et expressions
+	// régulières testées contre l'URL COMPLÈTE (pathname + query — un
+	// paramètre particulier peut disqualifier une requête).
 	excludes := []string{PathPrefix}
 	excludes = append(excludes, all.Excludes...)
 	for _, c := range declared {
@@ -353,6 +355,17 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
 	if checks.Len() == 0 {
 		checks.WriteString(" && true")
 	}
+	patternDecls := ""
+	patternTests := ""
+	for i, pat := range all.ExcludePatterns {
+		if pat == "" {
+			continue
+		}
+		// Déclaration d'une RegExp nommée (l'index suffit à l'unicité
+		// dans le scope du SW) + test contre l'URL complète.
+		patternDecls += "\n  const EXCLUDE_RE_" + fmtInt(i) + " = new RegExp(" + fmtJSLit(pat) + ");"
+		patternTests += " && !EXCLUDE_RE_" + fmtInt(i) + ".test(url.href)"
+	}
 
 	return `
   // Cache GET universel (apiGETCache) : les requêtes GET que
@@ -360,17 +373,17 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
   // le cache répond immédiatement, le réseau rafraîchit en fond ;
   // hors ligne -> le cache. Un path déclaré dans apiCaches[] est
   // maître de son path (toutes méthodes) et n'atteint pas ce bloc ;
-  // les assets (document/script/style) sont couverts par la route
-  // assets, enregistrée avant. Défauts : ` + fmtInt(allMaxEntries) + ` entrées,
+  // les excludesPatterns sont des RegExp testées contre l'URL
+  // complète (pathname + query). Défauts : ` + fmtInt(allMaxEntries) + ` entrées,
   // ` + fmtInt(allMaxAgeSec) + `s, ` + fmtInt64(allMaxSize) + ` octets max, abort ` + fmtInt(allTimeoutSec) + ` s.
   const exp_api_all = new workbox.expiration.ExpirationPlugin({
     maxEntries: ` + fmtInt(allMaxEntries) + `,
     maxAgeSeconds: ` + fmtInt(allMaxAgeSec) + `,
     purgeOnQuotaError: true
-  });
+  });` + patternDecls + `
 
   workbox.routing.registerRoute(
-    ({url}) => url.pathname.startsWith('/')` + checks.String() + `,
+    ({url}) => url.pathname.startsWith('/')` + checks.String() + patternTests + `,
     async ({event}) => {
       const req = event.request;
       if (req.method !== 'GET') {
