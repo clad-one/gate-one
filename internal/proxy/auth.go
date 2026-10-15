@@ -158,11 +158,14 @@ func (g *Gateway) checkMCPAuth(
 		return nil, ErrUnauthorized
 
 	case http.StatusForbidden:
+		// resource_metadata est attendu aussi sur le 403
+		// (MCP 2026-07-28, cohérence avec le 401).
 		w.Header().Set(
 			"WWW-Authenticate",
 			fmt.Sprintf(
-				`Bearer error="insufficient_scope", scope="%s"`,
+				`Bearer error="insufficient_scope", scope="%s", resource_metadata="%s"`,
 				scope,
+				resourceMetadataURL,
 			),
 		)
 
