@@ -52,10 +52,12 @@ const AuthStatePath = "/__gateway/auth"
 // Declarative gating (opt-in, zero app code): pages may mark elements
 // with data-cladone-auth — hidden while anonymous, shown once the
 // session is active — and data-cladone-auth="login" — shown while
-// anonymous, click opens the login tab, hidden once authed. The
-// script probes the gateway-served AuthStatePath endpoint and toggles
-// a class on <html>. Pages using no attribute make no probe request
-// and stay fully transparent (auth handled mid-flow by the wrapper).
+// anonymous, click opens the login tab, hidden once authed. While
+// anonymous, any click inside a <label> holding a gated control is
+// turned into a login attempt (label activation would otherwise
+// silently toggle the display:none control). Pages using no attribute
+// make no probe request and stay fully transparent (auth handled
+// mid-flow by the wrapper, with the banner as login affordance).
 //
 // Notes:
 //   - only fetch() calls are wrapped; document navigations are already
@@ -211,6 +213,10 @@ const guardScript = `<script>
   var stateWaiters = [];
 
   function settleState(v) {
+    // Une session acquise (login réussi, message popup-done) ne doit
+    // jamais être rétrogradée par une réponse de sonde arrivant en
+    // retard (connexion lente) : l'état ne descend pas de true à false.
+    if (authed && !v) return;
     probeDone = true;
     authed = v;
     if (v) {
@@ -255,12 +261,20 @@ const guardScript = `<script>
 
   // Click on a login affordance while anonymous (capture phase, so
   // the app never sees it and label toggles are prevented).
+  // Second case: a click in the padding of a <label> whose control is
+  // hidden-gated — label activation toggles even a display:none
+  // input, so such a click must not silently pre-tick the control;
+  // it becomes a login attempt instead (matches the locked-padlock
+  // UX: the whole area invites login).
   document.addEventListener("click", function (ev) {
     if (authed) return;
     var t = ev.target;
     if (!t || !t.closest) return;
     var el = t.closest("[data-cladone-auth='login']");
-    if (!el) return;
+    if (!el) {
+      var lbl = t.closest("label");
+      if (!lbl || !lbl.querySelector("[data-cladone-auth]")) return;
+    }
     ev.preventDefault();
     ev.stopPropagation();
     window.__cladoneAuth.login();
