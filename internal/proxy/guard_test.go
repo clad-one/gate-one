@@ -17,11 +17,11 @@ import (
 // testGateway builds a Gateway from a routes JSON (same schema as
 // api-routes.json) and starts a backend answering htmlBody on /,
 // jsBody on /js/app.js and 401 JSON on /api/x. Returns the gateway
-// handler plus the host names used by the test routes.
+// plus the host names used by the test routes.
 func testGateway(
 	t *testing.T,
 	routesJSON string,
-) (http.Handler, map[string]string) {
+) (*Gateway, map[string]string) {
 	t.Helper()
 
 	htmlBody := `<!DOCTYPE html>
@@ -284,5 +284,111 @@ func TestLoginPageURLConstantSharedWithRedirect(t *testing.T) {
 	// and must be URL-parseable
 	if _, err := url.Parse(LoginPageURL); err != nil {
 		t.Errorf("LoginPageURL not parseable: %v", err)
+	}
+}
+
+// testGatewayWithAuthBridge is testGateway with the Gateway pointed
+// at a mock auth-bridge base URL (checkAuth target).
+func testGatewayWithAuthBridge(
+	t *testing.T,
+	routesJSON string,
+	authBridgeURL string,
+) (*Gateway, map[string]string) {
+	t.Helper()
+
+	gw, hosts := testGateway(t, routesJSON)
+	gw.authBridgeBaseURL = authBridgeURL
+	return gw, hosts
+}
+
+func TestAuthStateEndpointAuthenticated(t *testing.T) {
+	// mock auth-bridge: accepts any token
+	bridge := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-User-Id", "u1")
+			w.Header().Set("X-Username", "alice")
+			w.WriteHeader(http.StatusOK)
+		},
+	))
+	t.Cleanup(bridge.Close)
+
+	gw, hosts := testGatewayWithAuthBridge(t, `{
+		"routes": [{
+			"host": "front.test",
+			"path": "/*",
+			"frontend": true,
+			"backend": "BACKEND"
+		}]
+	}`, bridge.URL)
+	host := hosts["front.test"]
+
+	resp := doGet(t, gw, host, "/__gateway/auth")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	if b := body(t, resp); b != "" {
+		t.Errorf("204 must have no body, got %q", b)
+	}
+}
+
+func TestAuthStateEndpointAnonymous(t *testing.T) {
+	// mock auth-bridge: rejects every token
+	bridge := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		},
+	))
+	t.Cleanup(bridge.Close)
+
+	gw, hosts := testGatewayWithAuthBridge(t, `{
+		"routes": [{
+			"host": "front.test",
+			"path": "/*",
+			"frontend": true,
+			"backend": "BACKEND"
+		}]
+	}`, bridge.URL)
+	host := hosts["front.test"]
+
+	resp := doGet(t, gw, host, "/__gateway/auth")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	if b := body(t, resp); !strings.Contains(b, "authentication_required") {
+		t.Errorf("body = %q, want authentication_required error", b)
+	}
+}
+
+func TestAuthStateEndpointAbsentWithoutGuard(t *testing.T) {
+	// on a host without a guard-enabled frontend route, the probe
+	// path is NOT claimed by the gateway: it is proxied to the
+	// backend like any other path (here: 200 HTML default handler).
+	gw, hosts := testGateway(t, `{
+		"routes": [
+			{
+				"host": "api.test",
+				"path": "/*",
+				"backend": "BACKEND"
+			},
+			{
+				"host": "noguard.test",
+				"path": "/*",
+				"frontend": true,
+				"backend": "BACKEND",
+				"authGuard": { "enabled": false }
+			}
+		]
+	}`)
+
+	for _, host := range []string{hosts["api.test"], hosts["noguard.test"]} {
+		resp := doGet(t, gw, host, "/__gateway/auth")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("host %s: status = %d, want 200 (proxied)", host, resp.StatusCode)
+		}
 	}
 }

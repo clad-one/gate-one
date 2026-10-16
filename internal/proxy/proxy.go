@@ -94,7 +94,11 @@ func New(cfg *core.Config) (*Gateway, error) {
 				guardLoginURL(route),
 			)
 
-			script := fmt.Sprintf(guardScript, guardLoginURL(route))
+			script := fmt.Sprintf(
+				guardScript,
+				guardLoginURL(route),
+				AuthStatePath,
+			)
 			rp.ModifyResponse = func(resp *http.Response) error {
 				if resp.StatusCode != http.StatusOK ||
 					!strings.Contains(
@@ -337,6 +341,39 @@ func (g *Gateway) pwaHandlerForHost(host string) *pwa.Handler {
 	return nil
 }
 
+// guardRouteForHost returns the first guard-enabled frontend route
+// matching the host. The auth-state probe endpoint exists only there.
+func (g *Gateway) guardRouteForHost(host string) (*compiledRoute, bool) {
+	for _, cr := range g.routes {
+		if cr.route.Frontend != true || !guardEnabledFor(cr.route) {
+			continue
+		}
+		if normalizeHost(cr.route.Host) != normalizeHost(host) {
+			continue
+		}
+		return cr, true
+	}
+	return nil, false
+}
+
+// serveAuthState answers the session probe: 204 when the request
+// carries a valid session (Bearer header or cookies), 401 otherwise.
+// checkAuth propagates into w any session cookie it silently
+// refreshed, so a 401 probe can still extend the session.
+func (g *Gateway) serveAuthState(
+	w http.ResponseWriter,
+	r *http.Request,
+	ctx *RequestContext,
+) {
+	if _, err := g.checkAuth(w, r, ctx); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"authentication_required"}`))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // mcpRouteForHost retourne la route MCP activée d'un host.
 func (g *Gateway) mcpRouteForHost(host string) (*core.Route, bool) {
 	for _, cr := range g.routes {
@@ -424,6 +461,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(ctx.Path, pwa.PathPrefix) {
 		if h := g.pwaHandlerForHost(ctx.Host); h != nil {
 			h.ServeHTTP(w, r)
+			return
+		}
+	}
+
+	//
+	// Auth-state probe (gateway-served, never proxied): 204 when the
+	// caller holds a valid session, 401 otherwise. Consumed by the
+	// injected guard for the declarative [data-cladone-auth] gating.
+	//
+	if ctx.Path == AuthStatePath {
+		if _, ok := g.guardRouteForHost(ctx.Host); ok {
+			g.serveAuthState(w, r, ctx)
 			return
 		}
 	}
