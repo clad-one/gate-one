@@ -49,6 +49,10 @@ const AuthStatePath = "/__gateway/auth"
 //   - if the tab is closed without completing (user, blocker), the
 //     banner reappears — still dismissable: abandoning must never
 //     lock the user out of the page ;
+//   - the banner is closable without any login action: ×, click
+//     anywhere outside it, or Escape. Closing it closes the linked
+//     login tab (if open) at the same time, resolves pending
+//     requests with their original 401 and login() with false ;
 //   - fallback to the historical full-page redirect when the request
 //     cannot be cloned (streaming bodies) or window.open is
 //     unavailable.
@@ -169,12 +173,16 @@ const guardScript = `<script>
     if (banner) { banner.remove(); banner = null; }
   }
 
-  // Abandon (×) : les requêtes en attente reçoivent leur réponse 401
-  // d'origine (l'application continue en anonyme, retentable plus
-  // tard) et les promesses login() résolvent false. Rester bloqué
-  // derrière une bannière indémissible est une impasse UX.
+  // Abandon (×, clic hors bannière, Échap) : les requêtes en attente
+  // reçoivent leur réponse 401 d'origine (l'application continue en
+  // anonyme, retentable plus tard), les promesses login() résolvent
+  // false, et l'onglet de login lié — s'il est ouvert — se referme en
+  // même temps. Rester bloqué derrière une bannière indémissible est
+  // une impasse UX.
   function dismiss() {
     hideBanner();
+    if (loginTab && !loginTab.closed) loginTab.close();
+    loginTab = null;
     var pending = queue.splice(0, queue.length);
     pending.forEach(function (entry) {
       if (entry.barrier) { entry.resolve(false); return; }
@@ -312,6 +320,19 @@ const guardScript = `<script>
     ev.preventDefault();
     ev.stopPropagation();
     showBanner();
+  }, true);
+
+  // La bannière se referme sans action d'authentification : clic
+  // n'importe où en dehors d'elle, ou Échap — et l'onglet de login
+  // lié se ferme avec elle (cf. dismiss). Enregistrés APRÈS le
+  // handler d'affordance ci-dessus : un clic sur un élément de
+  // login (ou sur un bouton de la bannière) gagne toujours.
+  document.addEventListener("click", function (ev) {
+    if (banner && !banner.contains(ev.target)) dismiss();
+  }, true);
+
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && banner) dismiss();
   }, true);
 
   // Opt-in API for apps willing to trigger the same no-reload login
