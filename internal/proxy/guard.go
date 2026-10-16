@@ -29,22 +29,26 @@ const AuthStatePath = "/__gateway/auth"
 //
 //   - every fetch is cloned before being sent (a Request body can
 //     only be read once), keeping a replayable copy ;
-//   - on 401/403 the failed request is queued and the login page
-//     opens in a separate TAB (window.open without features renders
-//     as a normal tab, friendlier than a chromeless popup in
-//     installed PWAs) ;
-//   - when the async 401 arrives there is no user activation left,
-//     so browsers may block the open: a banner with a "Se
-//     connecter" button is then shown, and its click (a genuine user
-//     gesture) opens the tab reliably. No code in the app ;
+//   - on 401/403 the failed request is queued and a DISMISSABLE
+//     banner ("Se connecter" / ×) is shown: mid-flow 401s never open
+//     a tab automatically (a background 401 must not steal focus).
+//     The tab opens only on an explicit click: a
+//     data-cladone-auth="login" element (locked padlock) or the
+//     banner button. Dismissing resolves the pending requests with
+//     their original 401 response (the app continues anonymously,
+//     retryable later) and login() promises resolve false ;
+//   - when the tab opens from the banner button, the click is a
+//     genuine user gesture, so no popup-blocker issue ; if the tab
+//     were opened programmatically on a stale activation, the
+//     banner is the reliable path. No code in the app ;
 //   - auth-bridge /auth/popup-done (same origin as the login page)
 //     postMessages "cladone-auth:ok" to this page and closes the
 //     tab. Queued requests are replayed and the ORIGINAL fetch
 //     promises resolve with the replayed responses: the application
 //     code never sees the authentication happen ;
 //   - if the tab is closed without completing (user, blocker), the
-//     banner reappears and requests stay pending (same contract as
-//     the historical never-resolving promise) ;
+//     banner reappears — still dismissable: abandoning must never
+//     lock the user out of the page ;
 //   - fallback to the historical full-page redirect when the request
 //     cannot be cloned (streaming bodies) or window.open is
 //     unavailable.
@@ -147,11 +151,33 @@ const guardScript = `<script>
     };
     banner.appendChild(msg);
     banner.appendChild(btn);
+    var no = document.createElement("button");
+    no.type = "button";
+    no.title = "Fermer";
+    no.textContent = "×";
+    no.style.cssText =
+      "border:0;background:transparent;color:#aab;cursor:pointer;" +
+      "font:20px/1 system-ui,sans-serif;padding:0 2px";
+    no.onclick = dismiss;
+    banner.appendChild(no);
     document.body.appendChild(banner);
   }
 
   function hideBanner() {
     if (banner) { banner.remove(); banner = null; }
+  }
+
+  // Abandon (×) : les requêtes en attente reçoivent leur réponse 401
+  // d'origine (l'application continue en anonyme, retentable plus
+  // tard) et les promesses login() résolvent false. Rester bloqué
+  // derrière une bannière indémissible est une impasse UX.
+  function dismiss() {
+    hideBanner();
+    var pending = queue.splice(0, queue.length);
+    pending.forEach(function (entry) {
+      if (entry.barrier) { entry.resolve(false); return; }
+      entry.resolve(entry.res401);
+    });
   }
 
   function ensureLogin() {
@@ -184,7 +210,7 @@ const guardScript = `<script>
   function flushQueue() {
     var pending = queue.splice(0, queue.length);
     pending.forEach(function (entry) {
-      if (entry.barrier) { entry.resolve(); return; }
+      if (entry.barrier) { entry.resolve(true); return; }
       orig(entry.req).then(entry.resolve, entry.reject);
     });
   }
@@ -281,9 +307,10 @@ const guardScript = `<script>
   }, true);
 
   // Opt-in API for apps willing to trigger the same no-reload login
-  // from their own UI, or to know the session state. The login
-  // promise settles once the gateway session is active (cookies
-  // set), after queued requests are replayed.
+  // from their own UI, or to know the session state. login() opens
+  // the tab directly (explicit user intent) and resolves true once
+  // the gateway session is active, false if abandoned (×). state()
+  // resolves to the current session state (probe result).
   window.__cladoneAuth = {
     login: function () {
       return new Promise(function (resolve, reject) {
@@ -321,8 +348,14 @@ const guardScript = `<script>
       }
 
       return new Promise(function (resolve, reject) {
-        queue.push({ req: replay, resolve: resolve, reject: reject });
-        ensureLogin();
+        // 401 en flux (clic hors affordance de login) : bannière
+        // ONLY — jamais d'onglet en ouverture automatique, un 401
+        // de fond ne doit pas voler le focus. L'onglet ne s'ouvre
+        // que sur un clic explicite (cadenas, bouton de la
+        // bannière). Bannière refermable (×) : les requêtes
+        // repartent avec leur 401 d'origine, l'app continue.
+        queue.push({ req: replay, res401: res, resolve: resolve, reject: reject });
+        showBanner();
       });
     });
   };
