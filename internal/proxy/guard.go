@@ -57,17 +57,22 @@ const AuthStatePath = "/__gateway/auth"
 //     cannot be cloned (streaming bodies) or window.open is
 //     unavailable.
 //
-// Declarative gating (opt-in, zero app code): pages may mark elements
-// with data-cladone-auth — hidden while anonymous, shown once the
-// session is active — and data-cladone-auth="login" — shown while
-// anonymous, click opens the login tab, hidden once authed. The
-// attribute is the only tab trigger: while anonymous, any other
-// click inside a <label> holding a gated control (padding, unmarked
-// element) shows the banner and neutralizes the click (label
-// activation would otherwise silently toggle the display:none
-// control). Pages using no attribute
-// make no probe request and stay fully transparent (auth handled
-// mid-flow by the wrapper, with the banner as login affordance).
+// Declarative gating (opt-in, zero app code): the data-cladone-auth
+// value decides the behavior while anonymous:
+//   - bare: element VISIBLE and clickable, a click ALSO opens the
+//     login tab (the native action proceeds — a ticked checkbox
+//     fires its request, the 401 is queued and replayed after
+//     login) ;
+//   - "login": visible while anonymous, click opens the login tab
+//     (native action prevented), hidden once authed — a pure
+//     affordance like a padlock ;
+//   - "hide": hidden while anonymous, shown once authed — silent
+//     cosmetic gate, never a trigger; clicks that would activate it
+//     (label padding, synthetic activation) are neutralized and show
+//     the banner instead.
+// Pages using no attribute make no probe request and stay fully
+// transparent (auth handled mid-flow by the wrapper, with the
+// banner as login affordance).
 //
 // Notes:
 //   - only fetch() calls are wrapped; document navigations are already
@@ -100,6 +105,9 @@ const guardScript = `<script>
   var queue = [];
   var loginTab = null;
   var banner = null;
+  var shownBy = null; // le clic à l'origine de l'affichage : ne doit
+                      // pas être requalifié en « clic extérieur »
+                      // par l'handler de dismiss (même dispatch)
   var watching = false;
 
   function buildReplay(input, init) {
@@ -133,8 +141,9 @@ const guardScript = `<script>
     }
   }
 
-  function showBanner() {
+  function showBanner(ev) {
     if (banner || !document.body) return;
+    shownBy = ev || null;
     banner = document.createElement("div");
     banner.style.cssText =
       "position:fixed;left:0;right:0;bottom:20px;margin:0 auto;" +
@@ -265,11 +274,12 @@ const guardScript = `<script>
   try {
     var css = document.createElement("style");
     css.textContent =
-      "html:not(.cladone-authed) [data-cladone-auth]" +
+      "html:not(.cladone-authed) [data-cladone-auth='hide']" +
       "{display:none !important}" +
       "html.cladone-authed [data-cladone-auth='login']" +
       "{display:none !important}" +
-      "[data-cladone-auth='login']{cursor:pointer}";
+      "html:not(.cladone-authed) [data-cladone-auth]" +
+      ":not([data-cladone-auth='hide']){cursor:pointer}";
     (document.head || document.documentElement).appendChild(css);
   } catch (e) { /* never break the page over gating */ }
 
@@ -295,31 +305,47 @@ const guardScript = `<script>
     probeSession();
   }
 
-  // Click handling while anonymous (capture phase, so the app never
-  // sees these clicks). The ATTRIBUTE is the only tab trigger:
-  //   - click on a data-cladone-auth="login" element → login tab
-  //     opens directly (explicit affordance) ;
-  //   - click anywhere else inside a <label> holding a gated control
-  //     (padding, unmarked lock…) → BANNER only: label activation
-  //     would otherwise silently toggle the display:none control, so
-  //     the default is neutralized and the banner offers "Se
-  //     connecter" — same rule as every non-affordance element.
+  // Click handling while anonymous (capture phase). The attribute
+  // value decides:
+  //   - bare or "login": the element is a login TRIGGER — the login
+  //     tab opens on click. For a bare control the native action
+  //     PROCEEDS (a ticked checkbox fires its request, the 401 is
+  //     queued and replayed after login) ; a "login" affordance gets
+  //     preventDefault (its native action is meaningless) and hides
+  //     once authed ;
+  //   - "hide": the element is hidden while anonymous — clicks
+  //     reaching it (synthetic label activation) are neutralized:
+  //     never a silent pre-tick, the banner offers "Se connecter".
+  // A click inside a <label> holding a "hide" control gets the same
+  // neutralization.
   document.addEventListener("click", function (ev) {
     if (authed) return;
     var t = ev.target;
     if (!t || !t.closest) return;
-    var el = t.closest("[data-cladone-auth='login']");
+    var el = t.closest("[data-cladone-auth]");
     if (el) {
-      ev.preventDefault();
-      ev.stopPropagation();
+      if (el.getAttribute("data-cladone-auth") === "hide") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        showBanner(ev);
+        return;
+      }
+      if (el.getAttribute("data-cladone-auth") === "login") {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      // bare : l'action native procede (cocher la case…), la
+      // requete 401 qui en resulte sera mise en file puis rejouee
+      // apres le login
       window.__cladoneAuth.login();
       return;
     }
     var lbl = t.closest("label");
-    if (!lbl || !lbl.querySelector("[data-cladone-auth]")) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    showBanner();
+    if (lbl && lbl.querySelector("[data-cladone-auth='hide']")) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showBanner(ev);
+    }
   }, true);
 
   // La bannière se referme sans action d'authentification : clic
@@ -328,7 +354,10 @@ const guardScript = `<script>
   // handler d'affordance ci-dessus : un clic sur un élément de
   // login (ou sur un bouton de la bannière) gagne toujours.
   document.addEventListener("click", function (ev) {
-    if (banner && !banner.contains(ev.target)) dismiss();
+    if (!banner) return;
+    if (banner.contains(ev.target)) return;
+    if (shownBy === ev) return; // le clic qui a affiché la bannière
+    dismiss();
   }, true);
 
   document.addEventListener("keydown", function (ev) {
@@ -384,7 +413,9 @@ const guardScript = `<script>
         // bannière). Bannière refermable (×) : les requêtes
         // repartent avec leur 401 d'origine, l'app continue.
         queue.push({ req: replay, res401: res, resolve: resolve, reject: reject });
-        showBanner();
+        // un onglet de login deja ouvert EST l'invitation : pas de
+        // banniere redondante a cote
+        if (!(loginTab && !loginTab.closed)) showBanner();
       });
     });
   };
