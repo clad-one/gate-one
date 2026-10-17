@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Harnais comportemental du script de garde (jsdom) : matrice locale depuis guard.go + mode --served contre la page déployée.",
+  "dependencies": {
+    "jsdom": "^24"
+  }
+}

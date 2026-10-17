@@ -318,12 +318,15 @@ const guardScript = `<script>
       "html:not(.cladone-evaluated) [data-gtw-claims]" +
       "{display:none !important}" +
       "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}" +
-      // badge utilisateur : une POIGNÉE discrète (👤) au repos ;
-      // déplié au survol/focus clavier ; la classe _reveal (posée au
-      // login, retirée après 2 s) manifeste le badge discrètement
-      // puis l'escamote
+      // badge utilisateur, trois états : REplié (poignée 👤) /
+      // APERÇU au survol-focus et à la manifestation post-login
+      // (max-height partielle : l'identité apparaît) / DÉPLIÉ au
+      // clic (tout : claims + déconnexion) — la règle open est
+      // déclarée EN DERNIER : à égalité de spécificité, c'est elle
+      // qui gagne quand le survol et l'ouverture coexistent
       ".cladone-userbadge:hover,.cladone-userbadge:focus-within," +
-      ".cladone-userbadge-reveal{max-height:24em !important}";
+      ".cladone-userbadge-reveal{max-height:4.6em !important}" +
+      ".cladone-userbadge-open{max-height:24em !important}";
     // voile anti-FOUC des règles uiGate : une règle CSS PAR
     // sélecteur (un sélecteur invalide ne doit tuer que son propre
     // masquage, pas celui des autres)
@@ -609,6 +612,19 @@ const guardScript = `<script>
   document.addEventListener("click", function (ev) {
     var t = ev.target;
     if (!t || !t.closest) return;
+
+    // badge (authentifié) : clic dedans → dépliage complet (bascule) ;
+    // clic dehors → repli. Le bouton de déconnexion n'alterne pas :
+    // il navigue (son propre onclick).
+    if (authed && badgeEl) {
+      if (badgeEl.contains(t)) {
+        if (!t.closest("button")) {
+          badgeEl.classList.toggle("cladone-userbadge-open");
+        }
+        return;
+      }
+      badgeEl.classList.remove("cladone-userbadge-open");
+    }
 
     // Déconnexion (data-gtw-logout) : look entièrement à l'app, le
     // garde ne câble que le clic. Seulement AUTHENTIFIÉ — ignoré silencieusement
