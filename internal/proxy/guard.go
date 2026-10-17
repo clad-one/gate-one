@@ -333,8 +333,12 @@ const guardScript = `<script>
       ".cladone-userbadge:focus-within{opacity:1;pointer-events:auto}" +
       ".cladone-userbadge:hover,.cladone-userbadge:focus-within," +
       ".cladone-userbadge-reveal{max-height:4.6em !important}" +
-      ".cladone-userbadge-open{max-height:24em !important;" +
-      "opacity:1;pointer-events:auto}";
+      // l'état ouvert doit battre le :hover (sinon l'aperçu, plus
+      // spécifique, écrase le dépliage dès que la souris revient
+      // dessus — le bouton devient incliquable) : classe doublée =
+      // spécificité supérieure + déclarée après
+      ".cladone-userbadge.cladone-userbadge-open" +
+      "{max-height:24em !important;opacity:1;pointer-events:auto}";
     // voile anti-FOUC des règles uiGate : une règle CSS PAR
     // sélecteur (un sélecteur invalide ne doit tuer que son propre
     // masquage, pas celui des autres)
