@@ -318,13 +318,12 @@ const guardScript = `<script>
       "html:not(.cladone-evaluated) [data-gtw-claims]" +
       "{display:none !important}" +
       "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}" +
-      // badge utilisateur : INVISIBLE jusqu'au survol (opacity 0, la
-      // zone du badge reste le déclencheur), déplié au survol ou au
-      // focus clavier
-      ".cladone-userbadge{opacity:0;" +
-      "transition:opacity .2s ease,max-height .25s ease}" +
-      ".cladone-userbadge:hover,.cladone-userbadge:focus-within" +
-      "{opacity:1;max-height:24em !important}";
+      // badge utilisateur : une POIGNÉE discrète (👤) au repos ;
+      // déplié au survol/focus clavier ; la classe _reveal (posée au
+      // login, retirée après 2 s) manifeste le badge discrètement
+      // puis l'escamote
+      ".cladone-userbadge:hover,.cladone-userbadge:focus-within," +
+      ".cladone-userbadge-reveal{max-height:24em !important}";
     // voile anti-FOUC des règles uiGate : une règle CSS PAR
     // sélecteur (un sélecteur invalide ne doit tuer que son propre
     // masquage, pas celui des autres)
@@ -425,13 +424,25 @@ const guardScript = `<script>
       body.style.cssText = "padding:6px 0 2px 0";
       badgeEl.appendChild(body);
       document.body.appendChild(badgeEl);
+      // manifestation discrète post-login : déplié 2 s puis escamoté
+      badgeEl.classList.add("cladone-userbadge-reveal");
+      setTimeout(function () {
+        if (badgeEl) badgeEl.classList.remove("cladone-userbadge-reveal");
+      }, 2000);
     }
+    // poignée : l'icône seule (le nom n'apparaît qu'au dépliage)
     var tab = badgeEl.firstChild;
-    tab.textContent = "👤 " + String(sessionClaims.preferred_username || "compte");
+    tab.textContent = "👤";
     var body = badgeEl.lastChild;
     body.textContent = "";
+    // première ligne du déplié : l'identité
+    var name = document.createElement("div");
+    name.style.cssText = "font-weight:600;margin-bottom:2px";
+    name.textContent = String(sessionClaims.preferred_username || "compte");
+    body.appendChild(name);
     var claims = USERBADGE.claims || [];
     for (var i = 0; i < claims.length; i++) {
+      if (claims[i] === "preferred_username") continue; // déjà en tête
       var v = sessionClaims[claims[i]];
       if (v === undefined) continue; // claim absent : ligne omise
       var row = document.createElement("div");
