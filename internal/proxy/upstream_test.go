@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"cladone/gateway/internal/core"
 )
@@ -539,6 +540,65 @@ func TestGuardPayloadIsPureASCII(t *testing.T) {
 	}
 	if !strings.Contains(payload, `D\u00e9connexion`) {
 		t.Errorf("é non échappé: %.120s", payload)
+	}
+}
+
+// auth-bridge WEDGÉ (ne répond jamais) : la gateway ne doit pas gelée
+// — le checkAuth part en timeout (authBridgeClientTimeout) et la
+// route page répond 302 login (incident 2026-10-17 : auth-bridge en
+// busy-loop CPU = toutes les routes authentifiées mortes).
+func TestHangingAuthBridgeTimesOut(t *testing.T) {
+	old := authBridgeClientTimeout
+	authBridgeClientTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { authBridgeClientTimeout = old })
+
+	release := make(chan struct{})
+	hang := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			<-release // ne répond jamais… sauf au cleanup
+		},
+	))
+	// Server.Close attend les handlers en cours : relâche-les avant.
+	t.Cleanup(func() {
+		close(release)
+		hang.Close()
+	})
+
+	routesJSON := `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"auth": {}
+		}]
+	}`
+
+	// gateway avec auth-bridge pointant sur le serveur qui hangue :
+	// construction manuelle (le helper pointe vers son propre stub).
+	srv := upstreamTestServer(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "routes.json")
+	routesJSON = strings.ReplaceAll(routesJSON, "BACKEND", srv.URL)
+	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := core.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := New(cfg, WithAuthBridgeURL(hang.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	resp := doGet(t, gw, "public.test", "/echo")
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302 (login) après timeout", resp.StatusCode)
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("réponse en %v, want < 3s (timeout non appliqué)", elapsed)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type compiledRoute struct {
@@ -69,6 +70,12 @@ func WithAuthBridgeURL(u string) Option {
 		}
 	}
 }
+
+// authBridgeClientTimeout borne chaque appel à auth-bridge : sans
+// lui, un auth-bridge wedgé (busy-loop, incident 2026-10-17) gelait
+// TOUTES les routes authentifiées — chaque checkAuth attendait sans
+// fin. Variable package-level pour les tests.
+var authBridgeClientTimeout = 5 * time.Second
 
 func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
@@ -277,6 +284,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		routes: routes,
 		config: cfg,
 		client: &http.Client{
+			// Timeout : les appels auth-bridge ne doivent jamais
+			// geler le traitement des requêtes (voir
+			// authBridgeClientTimeout).
+			Timeout: authBridgeClientTimeout,
 			CheckRedirect: func(
 				req *http.Request,
 				via []*http.Request,
