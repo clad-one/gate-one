@@ -318,15 +318,23 @@ const guardScript = `<script>
       "html:not(.cladone-evaluated) [data-gtw-claims]" +
       "{display:none !important}" +
       "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}" +
-      // badge utilisateur, trois états : REplié (poignée 👤) /
-      // APERÇU au survol-focus et à la manifestation post-login
-      // (max-height partielle : l'identité apparaît) / DÉPLIÉ au
-      // clic (tout : claims + déconnexion) — la règle open est
-      // déclarée EN DERNIER : à égalité de spécificité, c'est elle
-      // qui gagne quand le survol et l'ouverture coexistent
+      // badge utilisateur, trois états : REplié (poignée 👤+nom,
+      // INVISIBLE tant que la souris n'approche pas le bord haut —
+      // détection mousemove, pointer-events:none au repos pour ne
+      // jamais bloquer les clics de la page) / APERÇU au survol-focus
+      // et à la manifestation post-login (max-height partielle :
+      // l'identité apparaît) / DÉPLIÉ au clic (tout : claims +
+      // déconnexion) — la règle open est déclarée EN DERNIER : à
+      // égalité de spécificité, c'est elle qui gagne quand le survol
+      // et l'ouverture coexistent
+      ".cladone-userbadge{opacity:0;pointer-events:none}" +
+      ".cladone-userbadge-near,.cladone-userbadge-reveal" +
+      "{opacity:1;pointer-events:auto}" +
+      ".cladone-userbadge:focus-within{opacity:1;pointer-events:auto}" +
       ".cladone-userbadge:hover,.cladone-userbadge:focus-within," +
       ".cladone-userbadge-reveal{max-height:4.6em !important}" +
-      ".cladone-userbadge-open{max-height:24em !important}";
+      ".cladone-userbadge-open{max-height:24em !important;" +
+      "opacity:1;pointer-events:auto}";
     // voile anti-FOUC des règles uiGate : une règle CSS PAR
     // sélecteur (un sélecteur invalide ne doit tuer que son propre
     // masquage, pas celui des autres)
@@ -410,12 +418,13 @@ const guardScript = `<script>
     if (!badgeEl) {
       badgeEl = document.createElement("div");
       badgeEl.className = "cladone-userbadge";
-      // écart de 12 px avec le bord (haut et côté), angles arrondis
+      // collé au bord du HAUT, écart latéral de 12 px, angles
+      // arrondis en bas seulement (il touche le haut)
       badgeEl.style.cssText =
-        "position:fixed;top:12px;" + pos + ":12px;z-index:2147483646;" +
+        "position:fixed;top:0;" + pos + ":12px;z-index:2147483646;" +
         "background:#20242e;color:#fff;padding:6px 12px;" +
         "font:13px/1.4 system-ui,sans-serif;" +
-        "border-radius:8px;max-width:280px;" +
+        "border-radius:0 0 8px 8px;max-width:280px;" +
         "box-shadow:0 4px 18px rgba(0,0,0,.3);" +
         "max-height:2.3em;overflow:hidden;" +
         "transition:opacity .2s ease,max-height .25s ease;cursor:default";
@@ -433,16 +442,11 @@ const guardScript = `<script>
         if (badgeEl) badgeEl.classList.remove("cladone-userbadge-reveal");
       }, 2000);
     }
-    // poignée : l'icône seule (le nom n'apparaît qu'au dépliage)
+    // première ligne (visible même replié) : l'icône + l'identité
     var tab = badgeEl.firstChild;
-    tab.textContent = "👤";
+    tab.textContent = "👤 " + String(sessionClaims.preferred_username || "compte");
     var body = badgeEl.lastChild;
     body.textContent = "";
-    // première ligne du déplié : l'identité
-    var name = document.createElement("div");
-    name.style.cssText = "font-weight:600;margin-bottom:2px";
-    name.textContent = String(sessionClaims.preferred_username || "compte");
-    body.appendChild(name);
     var claims = USERBADGE.claims || [];
     for (var i = 0; i < claims.length; i++) {
       if (claims[i] === "preferred_username") continue; // déjà en tête
@@ -465,6 +469,21 @@ const guardScript = `<script>
         encodeURIComponent(location.href);
     };
     body.appendChild(btn);
+  }
+
+  // Détection de l'approche du bord HAUT : le badge est invisible
+  // (opacity 0 + pointer-events none) tant que la souris n'approche
+  // pas (clientY <= 40) ; il reste visible tant qu'il est survolé,
+  // déplié, ou en manifestation post-login.
+  if (USERBADGE) {
+    window.addEventListener("mousemove", function (ev) {
+      if (!badgeEl) return;
+      var near = ev.clientY <= 40 ||
+        badgeEl.matches(":hover") ||
+        badgeEl.classList.contains("cladone-userbadge-open") ||
+        badgeEl.classList.contains("cladone-userbadge-reveal");
+      badgeEl.classList.toggle("cladone-userbadge-near", near);
+    });
   }
 
   // Gating par règles uiGate (config) : mêmes mécanismes que les
