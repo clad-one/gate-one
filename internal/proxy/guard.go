@@ -273,6 +273,14 @@ const guardScript = `<script>
     if (loginTab && !loginTab.closed) loginTab.close();
     loginTab = null;
     hideBanner();
+    if (sessionDied) {
+      // reconnexion après une mort de session : recharger pour
+      // restaurer le contenu (images lazy mortes avec la session) ;
+      // le navigateur restaure la position de scroll au reload.
+      sessionDied = false;
+      location.reload();
+      return;
+    }
     settleState(true);
     fetchSession(); // rôles/scopes/claims post-login (re-sonde)
     flushQueue();
@@ -290,17 +298,33 @@ const guardScript = `<script>
   var sessionRoles = [];
   var sessionScopes = [];
   var sessionClaims = {};
+  // la session est morte EN COURS de lecture (idle SSO, révocation) :
+  // le contenu déjà affiché (images lazy…) doit être restauré après
+  // la reconnexion — un rechargement le fait (le navigateur y
+  // restaure aussi la position de scroll).
+  var sessionDied = false;
 
-  function settleState(v) {
+  function settleState(v, force) {
     // Une session acquise (login réussi, message popup-done) ne doit
-    // jamais être rétrogradée par une réponse de sonde arrivant en
-    // retard (connexion lente) : l'état ne descend pas de true à false.
-    if (authed && !v) return;
+    // pas être rétrogradée par une réponse de sonde arrivant en
+    // retard ou transitoire (réseau, 5xx) : l'état ne descend pas de
+    // true à false. SEULE exception : un 401 AUTORITAIRE de la sonde
+    // (force) — la session est réellement morte en cours de route :
+    // le voile se referme, le badge disparaît, la bannière propose
+    // de se reconnecter.
+    if (authed && !v && !force) return;
+    if (authed && !v && force) sessionDied = true;
     probeDone = true;
     authed = v;
     if (v) {
       document.documentElement.classList.add("cladone-authed");
       try { buildBadge(); } catch (e) { /* le badge ne casse rien */ }
+    } else {
+      document.documentElement.classList.remove("cladone-authed");
+      if (badgeEl) {
+        badgeEl.parentNode.removeChild(badgeEl);
+        badgeEl = null;
+      }
     }
     var waiters = stateWaiters.splice(0, stateWaiters.length);
     waiters.forEach(function (r) { r(v); });
@@ -600,11 +624,19 @@ const guardScript = `<script>
 
   function fetchSession() {
     orig(AUTH_STATE, { cache: "no-store" }).then(function (res) {
-      if (res.status !== 200) {
+      if (res.status === 401) {
+        // 401 = la vérité du moment (le serveur vient de vérifier) :
+        // la session a expiré ou a été révoquée pendant la lecture.
         sessionRoles = [];
         sessionScopes = [];
         sessionClaims = {};
         applyRoleGating();
+        settleState(false, true);
+        if (sessionDied) showBanner(); // invitation à se reconnecter
+        return;
+      }
+      if (res.status !== 200) {
+        // 5xx/429… : transitoire — l'état affiché ne bouge pas.
         settleState(false);
         return;
       }
@@ -647,6 +679,16 @@ const guardScript = `<script>
   } else {
     probeSession();
   }
+
+  // Re-sonde périodique + au retour sur l'onglet : la session peut
+  // mourir EN COURS DE LECTURE (idle SSO, révocation) — le badge et
+  // le gating reflètent l'état réel, pas un état périmé. BONUS : la
+  // sonde entretient la session (silent refresh sur /auth) — lire
+  // longtemps sans charger d'images ne la laisse plus expirer.
+  setInterval(probeSession, 60000);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) probeSession();
+  });
 
   // Click handling while anonymous (capture phase). Two attributes,
   // two orthogonal dimensions:
