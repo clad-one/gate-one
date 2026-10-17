@@ -602,7 +602,7 @@ const guardScript = `<script>
       return;
     }
 
-    if (!authed) return;
+    if (authed) return; // authentifié : clics natifs (passthrough)
     var before = t.closest('[data-gtw-auth="before"]');
     if (before) {
       ev.preventDefault();
