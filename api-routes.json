@@ -34,6 +34,12 @@
       "frontend": true,
       "backend": "http://versifier:9292",
       "autoHead": true,
+      "uiGate": [
+        {
+          "selector": "#legend",
+          "roles": ["offline_access"]
+        }
+      ],
       "pwa": {
         "enabled": true,
         "name": "Versifier",

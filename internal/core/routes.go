@@ -46,6 +46,32 @@ type QuotaPolicy struct {
 	When *Match `json:"when,omitempty"`
 }
 
+// UIGateRule : règle de gating UI pilotée par la config — pour les
+// fronts dont on ne peut pas modifier le markup (filet de sécurité ;
+// si vous contrôlez le HTML, préférez les attributs data-gtw-*).
+// L'élément sélectionné n'est visible que si la session satisfait les
+// conditions (OU sur roles, OU sur scopes, ET sur claims, "* " =
+// présence). auth/hidden optionnels : mêmes sémantiques que les
+// attributs data-gtw-auth / data-gtw-auth-hidden. PRÉCÉDENCE : un
+// élément portant au moins un attribut data-gtw-* ignore les règles
+// uiGate — la déclaration la plus proche de l'élément gagne.
+type UIGateRule struct {
+	// Selector : sélecteur CSS (querySelectorAll) des éléments visés.
+	Selector string `json:"selector"`
+	// Roles : visible si AU MOINS UN de ces rôles est possédé.
+	Roles []string `json:"roles,omitempty"`
+	// Scopes : visible si AU MOINS UN de ces scopes est accordé.
+	Scopes []string `json:"scopes,omitempty"`
+	// Claims : tous doivent matcher ("*" = présence).
+	Claims map[string]string `json:"claims,omitempty"`
+	// Auth : "after" (action native préservée + onglet d'invitation)
+	// ou "before" (clic neutralisé + onglet direct).
+	Auth string `json:"auth,omitempty"`
+	// Hidden : "before" (masqué avant authentification) ou "after"
+	// (masqué une fois authentifié).
+	Hidden string `json:"hidden,omitempty"`
+}
+
 type AuthPolicy struct {
 	When *Match `json:"when,omitempty"`
 
@@ -293,6 +319,12 @@ type Route struct {
 	OpenAPI *OpenAPIPolicy `json:"openapi,omitempty"`
 	MCP     *MCPPolicy     `json:"mcp,omitempty"`
 	PWA     *PWAPolicy     `json:"pwa,omitempty"`
+
+	// UIGate : gating UI par config (sélecteurs CSS + conditions
+	// d'identité) — pour les fronts non modifiables ; embarqué dans
+	// le script de garde injecté. Précédence : le markup data-gtw-*
+	// d'un élément gagne sur les règles uiGate.
+	UIGate []*UIGateRule `json:"uiGate,omitempty"`
 
 	AuthGuard *AuthGuardPolicy `json:"authGuard,omitempty"`
 }

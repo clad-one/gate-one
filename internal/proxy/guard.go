@@ -97,6 +97,11 @@ const guardScript = `<script>
 
   var LOGIN = "%[1]s";
   var AUTH_STATE = "%[2]s";
+  // Règles uiGate de la route (gating UI par config, pour les fronts
+  // non modifiables) — sérialisées depuis api-routes.json ; un
+  // élément portant un attribut data-gtw-* ignore ces règles
+  // (précédence : le markup gagne).
+  var UIGATE = %[3]s;
   var LOGIN_ORIGIN = "";
   try { LOGIN_ORIGIN = new URL(LOGIN).origin; } catch (e) {}
 
@@ -292,8 +297,7 @@ const guardScript = `<script>
   }
 
   try {
-    var css = document.createElement("style");
-    css.textContent =
+    var cssText =
       "html:not(.cladone-authed) [data-gtw-auth-hidden='before']" +
       "{display:none !important}" +
       "html.cladone-authed [data-gtw-auth-hidden='after']" +
@@ -305,6 +309,15 @@ const guardScript = `<script>
       "html:not(.cladone-evaluated) [data-gtw-claims]" +
       "{display:none !important}" +
       "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}";
+    // voile anti-FOUC des règles uiGate : une règle CSS PAR
+    // sélecteur (un sélecteur invalide ne doit tuer que son propre
+    // masquage, pas celui des autres)
+    for (var gi = 0; gi < UIGATE.length; gi++) {
+      cssText += "html:not(.cladone-evaluated) " +
+        UIGATE[gi].selector + "{display:none !important}";
+    }
+    var css = document.createElement("style");
+    css.textContent = cssText;
     (document.head || document.documentElement).appendChild(css);
   } catch (e) { /* never break the page over gating */ }
 
@@ -360,9 +373,73 @@ const guardScript = `<script>
         n.style.display = "";
       }
     }
+    applyRuleGating();
     // l'évaluation est faite : lever le voile anti-FOUC (les
     // masquages inline des non-conformes restent en place)
     document.documentElement.classList.add("cladone-evaluated");
+  }
+
+  // Gating par règles uiGate (config) : mêmes mécanismes que les
+  // attributs markup, mais les éléments sont désignés par sélecteur
+  // CSS. Un élément portant un attribut data-gtw-* est IGNORÉ par
+  // les règles (précédence : le markup gagne). Plusieurs règles sur
+  // un même élément se cumulent en ET. Sélecteur invalide = règle
+  // ignorée, jamais d'erreur visible.
+  function rulePasses(rule) {
+    var ok = true;
+    if (ok && rule.roles && rule.roles.length) {
+      ok = rule.roles.some(function (r) {
+        return sessionRoles.indexOf(r) !== -1;
+      });
+    }
+    if (ok && rule.scopes && rule.scopes.length) {
+      ok = rule.scopes.some(function (s) {
+        return sessionScopes.indexOf(s) !== -1;
+      });
+    }
+    if (ok && rule.claims) {
+      for (var k in rule.claims) {
+        var want = rule.claims[k];
+        var have = sessionClaims[k];
+        if (want === "*") {
+          if (have === undefined) { ok = false; break; }
+        } else if (String(have) !== want) {
+          ok = false; break;
+        }
+      }
+    }
+    return ok;
+  }
+
+  function applyRuleGating() {
+    for (var i = 0; i < UIGATE.length; i++) {
+      var rule = UIGATE[i];
+      if (!rule || !rule.selector) continue;
+      var nodes;
+      try {
+        nodes = document.querySelectorAll(rule.selector);
+      } catch (e) {
+        continue; // sélecteur invalide : règle ignorée
+      }
+      for (var j = 0; j < nodes.length; j++) {
+        var n = nodes[j];
+        if (n.hasAttribute("data-gtw-auth") ||
+            n.hasAttribute("data-gtw-auth-hidden") ||
+            n.hasAttribute("data-gtw-roles") ||
+            n.hasAttribute("data-gtw-scopes") ||
+            n.hasAttribute("data-gtw-claims")) {
+          continue; // précédence : le markup gagne
+        }
+        var ok = rulePasses(rule);
+        if (!ok) {
+          n.style.display = "none";
+          n.setAttribute("data-gtw-gated-off", "1");
+        } else if (n.getAttribute("data-gtw-gated-off")) {
+          n.removeAttribute("data-gtw-gated-off");
+          n.style.display = "";
+        }
+      }
+    }
   }
 
   function fetchSession() {
@@ -396,7 +473,7 @@ const guardScript = `<script>
     if (!document.querySelector(
       "[data-gtw-auth],[data-gtw-auth-hidden]," +
       "[data-gtw-roles],[data-gtw-scopes],[data-gtw-claims]"
-    )) {
+    ) && !UIGATE.length) {
       return; // no gating declared: no probe, fully transparent
     }
     fetchSession();
@@ -457,6 +534,40 @@ const guardScript = `<script>
       showBanner(ev);
       return;
     }
+
+    // règles uiGate (config) : auth et masquage pré-auth — mêmes
+    // sémantiques que les attributs markup ; un élément markup a
+    // déjà court-circuité ci-dessus (précédence)
+    for (var gi = 0; gi < UIGATE.length; gi++) {
+      var rule = UIGATE[gi];
+      if (!rule || !rule.selector) continue;
+      var hit = null;
+      try {
+        hit = t.closest(rule.selector);
+      } catch (e) {
+        continue; // sélecteur invalide : règle ignorée (comme dans
+                  // applyRuleGating) — jamais d'exception visible
+      }
+      if (!hit) continue;
+      if (rule.hidden === "before") {
+        // contrôle masqué en anonyme : tout clic qui l'atteint est
+        // synthétique (activation label) — jamais de pré-cochage
+        ev.preventDefault();
+        ev.stopPropagation();
+        showBanner(ev);
+        return;
+      }
+      if (rule.auth) {
+        if (rule.auth === "before") {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
+        // "after" : l'action native procède, la 401 sera rejouée
+        window.__cladoneAuth.login();
+        return;
+      }
+    }
+
     var lbl = t.closest("label");
     if (lbl && lbl.querySelector('[data-gtw-auth-hidden="before"]')) {
       ev.preventDefault();
