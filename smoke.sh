@@ -41,6 +41,24 @@ cat > "$routes_tmp" <<EOF
         "scope": "smoke-scope",
         "operations": []
       }
+    },
+    {
+      "host": "upstream.smoke.local",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://127.0.0.1:${PORT_BE}",
+      "upstream": {
+        "host": true,
+        "headers": {
+          "Authorization": "Basic \${SMOKE_UPSTREAM_TOKEN}",
+          "X-Strip-Me": ""
+        },
+        "rewriteRedirects": true,
+        "responseHeaders": {
+          "remove": ["Content-Security-Policy"],
+          "set": {"X-Gateway-Smoke": "upstream"}
+        }
+      }
     }
   ]
 }
@@ -48,17 +66,43 @@ EOF
 
 cat > "$backend_tmp" <<'EOF'
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
+import json
 
 
 class H(BaseHTTPRequestHandler):
+    def _send(self, code, ctype, body, extra=None):
+        self.send_response(code)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        if self.path == '/':
+        u = urlparse(self.path)
+        if u.path == '/':
             b = b'<html><head><title>smoke</title></head><body>ok</body></html>'
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.send_header('Content-Length', str(len(b)))
+            self._send(200, 'text/html; charset=utf-8', b)
+        elif u.path == '/echo':
+            b = json.dumps({
+                'host': self.headers.get('Host', ''),
+                'authorization': self.headers.get('Authorization', ''),
+                'custom': self.headers.get('X-Custom', ''),
+                'strip_present': self.headers.get('X-Strip-Me') is not None,
+            }).encode()
+            self._send(200, 'application/json', b)
+        elif u.path == '/redirect':
+            self.send_response(302)
+            self.send_header(
+                'Location', parse_qs(u.query).get('loc', ['/'])[0])
+            self.send_header('Content-Length', '0')
             self.end_headers()
-            self.wfile.write(b)
+        elif u.path == '/page':
+            b = b'<html><head><title>upstream smoke</title></head><body>x</body></html>'
+            self._send(200, 'text/html; charset=utf-8', b, extra={
+                'Content-Security-Policy': "default-src 'self'"})
         else:
             self.send_response(404)
             self.end_headers()
@@ -91,17 +135,32 @@ EOF
 
 python3 "$backend_tmp" "$PORT_BE" & BE_PID=$!
 python3 "$bridge_tmp" "$PORT_AB" "$scopes_tmp" & AB_PID=$!
-./bin/gateway -config "$routes_tmp" -addr ":${PORT_GW}" > "$gw_log" 2>&1 & GW_PID=$!
-sleep 1
+# SMOKE_UPSTREAM_TOKEN : lu par la gateway au chargement (interpolation
+# ${...} de la policy upstream) — exactement comme en production.
+# -authBridge : la gateway doit interroger le STUB local (sans flag,
+# elle appellerait le nom de service Docker auth-bridge:3000).
+SMOKE_UPSTREAM_TOKEN=YmFzaWMtdG9rZW4= \
+  ./bin/gateway -config "$routes_tmp" -addr ":${PORT_GW}" \
+    -authBridge "http://127.0.0.1:${PORT_AB}" > "$gw_log" 2>&1 & GW_PID=$!
 
-# debug : les 3 services doivent écouter
-for p in "$PORT_BE" "$PORT_AB" "$PORT_GW"; do
-  if ! (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null; then
-    echo "SMOKE FAIL: service sur :$p n'écoute pas" >&2
-    exit 1
-  fi
-  exec 3>&- 2>/dev/null || true
-done
+# debug : les 3 services doivent écouter — attente robuste (un simple
+# `sleep 1` est racy sous charge, et set -e + exec + /dev/tcp dans un
+# if isolé tue le script en silence ; on passe par une fonction avec
+# retry, appelée en || pour désarmer set -e).
+wait_port() {
+  local port=$1 name=$2 i
+  for i in $(seq 1 50); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "SMOKE FAIL: ${name} sur :${port} n'écoute pas" >&2
+  return 1
+}
+wait_port "$PORT_BE" backend || exit 1
+wait_port "$PORT_AB" auth-bridge || exit 1
+wait_port "$PORT_GW" gateway || exit 1
 
 fail() {
   echo "SMOKE FAIL: $1" >&2
@@ -155,5 +214,39 @@ metadata=$(curl -sf -H "Host: mcp.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/.well-known/oauth-protected-resource")
 echo "$metadata" | grep -q '"scopes_supported":\["smoke-scope"\]' \
     || fail "metadata scopes_supported wrong: $metadata"
+
+# --- Policy upstream (site externe proxifié) ---
+step "upstream : Host réécrit, header statique, redirects, responseHeaders"
+
+# 1) Host réécrit vers l'origine backend + Authorization injectée par
+#    la gateway (interpolation ${SMOKE_UPSTREAM_TOKEN}) + X-Strip-Me retiré
+echo_result=$(curl -sf -H "Host: upstream.smoke.local" \
+    "http://127.0.0.1:${PORT_GW}/echo")
+echo "$echo_result" | grep -q "\"host\": \"127.0.0.1:${PORT_BE}\"" \
+    || fail "Host upstream non réécrit: $echo_result"
+echo "$echo_result" | grep -q '"authorization": "Basic YmFzaWMtdG9rZW4="' \
+    || fail "Authorization statique non injectée: $echo_result"
+echo "$echo_result" | grep -q '"strip_present": false' \
+    || fail "X-Strip-Me (valeur vide) non retiré: $echo_result"
+
+# 2) Location absolue de l'origine backend ramenée au host public
+loc=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
+    "http://127.0.0.1:${PORT_GW}/redirect?loc=http%3A%2F%2F127.0.0.1%3A${PORT_BE}%2Fcible%2F%3Fa%3D1" \
+    | grep -i '^location:' | tr -d '\r' | awk '{print $2}')
+[ "$loc" = "https://upstream.smoke.local/cible/?a=1" ] \
+    || fail "Location non réécrite: '$loc'"
+
+# 3) CSP du backend retiré + en-tête de réponse posé
+resp_headers=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
+    "http://127.0.0.1:${PORT_GW}/page")
+echo "$resp_headers" | grep -qi '^content-security-policy:' \
+    && fail "CSP d'origine non retiré"
+echo "$resp_headers" | grep -qi '^x-gateway-smoke: upstream' \
+    || fail "X-Gateway-Smoke non posé"
+
+# 4) le script de garde reste injecté sur le HTML proxifié
+curl -sf -H "Host: upstream.smoke.local" "http://127.0.0.1:${PORT_GW}/page" \
+    | grep -q '__cladoneAuthGuard' \
+    || fail "garde non injectée sur le site upstream"
 
 echo "SMOKE OK"

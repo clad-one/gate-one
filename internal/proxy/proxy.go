@@ -56,7 +56,21 @@ func (g *Gateway) authBridgeBaseURLFor() string {
 	return "http://auth-bridge:3000"
 }
 
-func New(cfg *core.Config) (*Gateway, error) {
+// Option : modificateur fonctionnel de la Gateway à la construction.
+type Option func(*Gateway)
+
+// WithAuthBridgeURL surcharge la base URL de auth-bridge (défaut :
+// http://auth-bridge:3000, nom de service du réseau Docker). Vide =
+// défaut. Utilisé par le CLI (-authBridge) et les smoke tests.
+func WithAuthBridgeURL(u string) Option {
+	return func(g *Gateway) {
+		if u != "" {
+			g.authBridgeBaseURL = u
+		}
+	}
+}
+
+func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 	var routes []*compiledRoute
 
@@ -203,7 +217,7 @@ func New(cfg *core.Config) (*Gateway, error) {
 
 	}
 
-	return &Gateway{
+	gw := &Gateway{
 		routes: routes,
 		config: cfg,
 		client: &http.Client{
@@ -214,7 +228,13 @@ func New(cfg *core.Config) (*Gateway, error) {
 				return http.ErrUseLastResponse
 			},
 		},
-	}, nil
+	}
+
+	for _, opt := range opts {
+		opt(gw)
+	}
+
+	return gw, nil
 }
 
 func (g *Gateway) serveMCPProtectedResourceMetadata(

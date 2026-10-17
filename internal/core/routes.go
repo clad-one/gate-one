@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -476,27 +477,40 @@ var envVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // expandEnvVars remplace chaque ${VAR} par la variable d'environnement
 // correspondante. Variable absente = erreur nommée (le gateway refuse
 // de démarrer plutôt que d'envoyer un identifiant vide au backend).
-func expandEnvVars(s string) (string, error) {
+// Variable PRÉSENTE MAIS VIDE = valeur entière vidée, noms signalés
+// dans emptyNames (l'appelant la traitera comme un en-tête retiré et
+// journalisera l'avertissement) — cf. compose « ${VAR:-} » qui
+// injecte une chaîne vide quand la variable manque au .env.
+func expandEnvVars(s string) (out string, err error, emptyNames []string) {
 
 	var missing []string
 
-	out := envVarPattern.ReplaceAllStringFunc(s, func(m string) string {
+	out = envVarPattern.ReplaceAllStringFunc(s, func(m string) string {
 		name := m[2 : len(m)-1]
-		if v, ok := os.LookupEnv(name); ok {
-			return v
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			missing = append(missing, name)
+			return m
 		}
-		missing = append(missing, name)
-		return m
+		if v == "" {
+			emptyNames = append(emptyNames, name)
+			return ""
+		}
+		return v
 	})
 
 	if len(missing) > 0 {
 		return "", fmt.Errorf(
 			"variable(s) d'environnement absente(s): %s",
 			strings.Join(missing, ", "),
-		)
+		), nil
 	}
 
-	return out, nil
+	if len(emptyNames) > 0 {
+		return "", nil, emptyNames
+	}
+
+	return out, nil, nil
 }
 
 // expandUpstreamEnv résout l'interpolation ${VAR} des en-têtes
@@ -516,11 +530,22 @@ func (c *Config) expandUpstreamEnv() error {
 		host := c.Routes[i].Host
 
 		for k, v := range up.Headers {
-			out, err := expandEnvVars(v)
+			out, err, emptyVars := expandEnvVars(v)
 			if err != nil {
 				return fmt.Errorf(
 					"route %s: upstream.headers[%q]: %v",
 					host, k, err,
+				)
+			}
+			if emptyVars != nil {
+				// Variable présente mais vide (typiquement absente
+				// du .env, injectée en "" par compose) : en-tête
+				// retiré plutôt qu'un parasite « Basic » tronqué.
+				// Non fatal — l'upstream répondra 401 et les autres
+				// sites restent en service.
+				log.Printf(
+					"CONFIG WARNING route %s: upstream.headers[%q]: variable(s) vide(s): %s — en-tête retiré (site cible répondra 401)",
+					host, k, strings.Join(emptyVars, ", "),
 				)
 			}
 			up.Headers[k] = out
@@ -531,11 +556,17 @@ func (c *Config) expandUpstreamEnv() error {
 		}
 
 		for k, v := range up.ResponseHeaders.Set {
-			out, err := expandEnvVars(v)
+			out, err, emptyVars := expandEnvVars(v)
 			if err != nil {
 				return fmt.Errorf(
 					"route %s: upstream.responseHeaders.set[%q]: %v",
 					host, k, err,
+				)
+			}
+			if emptyVars != nil {
+				log.Printf(
+					"CONFIG WARNING route %s: upstream.responseHeaders.set[%q]: variable(s) vide(s): %s — en-tête retiré",
+					host, k, strings.Join(emptyVars, ", "),
 				)
 			}
 			up.ResponseHeaders.Set[k] = out

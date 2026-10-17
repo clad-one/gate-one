@@ -243,6 +243,34 @@ func TestUpstreamEnvMissingVarFails(t *testing.T) {
 	}
 }
 
+// Variable d'environnement présente mais VIDE (typiquement absente
+// du .env serveur, injectée en "" par compose « ${VAR:-} ») : NON
+// fatal — la valeur est vidée (l'en-tête sera retiré, l'upstream
+// répondra 401) et un warning est journalisé. Incident 2026-10-17 :
+// un deploy sans la variable faisait partir un parasite « Basic »
+// tronqué au lieu d'un signal clair.
+func TestUpstreamEnvEmptyVarDropsHeader(t *testing.T) {
+	t.Setenv("UPSTREAM_TEST_EMPTY", "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{"routes": [
+		{"host": "a.local", "path": "/*", "backend": "https://ext.example",
+		 "upstream": {"headers": {"Authorization": "Basic ${UPSTREAM_TEST_EMPTY}"}}}
+	]}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("variable vide ne doit pas être fatale: %v", err)
+	}
+	if got := c.Routes[0].Upstream.Headers["Authorization"]; got != "" {
+		t.Errorf("valeur = %q, want vide (en-tête retiré par le proxy)", got)
+	}
+}
+
 // Faute de frappe dans un sous-champ d'upstream = rejet (grammaire
 // stricte, cf. TestLoadRejectsUnknownFields).
 func TestUpstreamRejectsUnknownFields(t *testing.T) {
