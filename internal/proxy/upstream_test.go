@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,6 +21,11 @@ import (
 // worker Cloudflare protégé par basic auth — expose ce qu'il a reçu
 // (Host, Authorization, en-têtes custom), sait rediriger (Location
 // absolue/relative via ?loc=) et sert du HTML avec un CSP.
+//
+// bigPageLen : taille exacte de /big (page > maxGuardBody), renseigné
+// par le constructeur pour les assertions.
+var bigPageLen int
+
 func upstreamTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
@@ -77,6 +83,16 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Type", "application/javascript")
 		_, _ = w.Write(buf.Bytes())
+	})
+
+	// Page dépassant maxGuardBody (1 Mio) : doit être servie
+	// INTÉGRALEMENT, sans injection ni troncature.
+	bigBody := "<html><head><title>big</title></head><body>" +
+		strings.Repeat("x", (3<<20)/2) + "</body></html>"
+	bigPageLen = len(bigBody)
+	mux.HandleFunc("/big", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(bigBody))
 	})
 
 	srv := httptest.NewServer(mux)
@@ -347,6 +363,40 @@ func TestUpstreamGuardStillInjected(t *testing.T) {
 	if b := body(t, resp); !strings.Contains(b, "__cladoneAuthGuard") {
 		t.Error("script de garde absent du HTML proxifié")
 	}
+}
+
+// Page plus grande que maxGuardBody (1 Mio) : servie INTÉGRALEMENT
+// et sans injection — JAMAIS tronquée (incident 2026-10-17 : livre
+// pré-paginé de 6 Mo coupé à 1 Mio en plein attribut → lecteur à 10
+// pages au lieu de 784, bloqué à la première image).
+func TestGuardSkipsOversizedPageWithoutTruncation(t *testing.T) {
+	gw, backend := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true}
+		}]
+	}`)
+
+	resp := doGet(t, gw, "public.test", "/big")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != bigPageLen {
+		t.Errorf("body = %d octets, want %d (page tronquée !)",
+			len(raw), bigPageLen)
+	}
+	if strings.Contains(string(raw[:1024]), "__cladoneAuthGuard") {
+		t.Error("garde injectée alors que la page dépasse la limite")
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != strconv.Itoa(bigPageLen) {
+		t.Errorf("Content-Length = %q, want %d", cl, bigPageLen)
+	}
+	_ = backend
 }
 
 // L'auth gateway (auth: {}) reste orthogonal à l'upstream : sans

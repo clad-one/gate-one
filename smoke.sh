@@ -108,6 +108,11 @@ class H(BaseHTTPRequestHandler):
                         b'<body>gzip-ok</body></html>')
             self._send(200, 'text/html; charset=utf-8', buf.getvalue(),
                        extra={'Content-Encoding': 'gzip'})
+        elif u.path == '/big':
+            b = (b'<html><head><title>big</title></head><body>'
+                 + b'x' * (3 * 1024 * 1024 // 2)
+                 + b'</body></html>')
+            self._send(200, 'text/html; charset=utf-8', b)
         elif u.path == '/page':
             b = b'<html><head><title>upstream smoke</title></head><body>x</body></html>'
             self._send(200, 'text/html; charset=utf-8', b, extra={
@@ -282,5 +287,16 @@ grep_body '__cladoneAuthGuard' \
     -H "Accept-Encoding: gzip, deflate, br, zstd" \
     "http://127.0.0.1:${PORT_GW}/gz" \
     || fail "garde non injectée sur le HTML gzip"
+
+# 6) page > 1 Mio : servie INTÉGRALEMENT, sans injection — jamais
+#    tronquée (incident 2026-10-17 : livre de 6 Mo coupé à 1 Mio).
+big_size=$(curl -s -o /tmp/gw-smoke-big.$$.html -w '%{size_download}' \
+    -H "Host: upstream.smoke.local" "http://127.0.0.1:${PORT_GW}/big")
+grep -q '__cladoneAuthGuard' /tmp/gw-smoke-big.$$.html \
+    && rm -f /tmp/gw-smoke-big.$$.html \
+    && fail "garde injectée dans une page > maxGuardBody"
+rm -f /tmp/gw-smoke-big.$$.html
+[ "$big_size" -gt 1572864 ] \
+    || fail "page > 1 Mio tronquée ($big_size octets reçus)"
 
 echo "SMOKE OK"

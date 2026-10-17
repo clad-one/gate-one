@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -849,8 +850,52 @@ func guardLoginURL(route *core.Route) string {
 // injectGuardScript inserts the guard <script> right after the opening
 // <head> tag (or at the very start when no <head> is found) and fixes
 // Content-Length. The response body must already be uncompressed.
+// Pages LARGER than maxGuardBody are NEVER truncated: injection is
+// skipped and the original body is served whole (incident 2026-10-17:
+// a 6 MB pre-paginated book page was cut to 1 MiB mid-attribute —
+// the reader built a 10-page book instead of 784).
 func injectGuardScript(resp *http.Response, script string) error {
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGuardBody))
+
+	// Fast path: known length above the limit → no buffering at all.
+	if resp.ContentLength > maxGuardBody {
+		log.Printf(
+			"GUARD injection skipped: body %d > %d — servie sans injection",
+			resp.ContentLength,
+			maxGuardBody,
+		)
+		return nil
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGuardBody+1))
+	if err != nil {
+		resp.Body.Close()
+		return err
+	}
+
+	// Overflow confirmed by the bounded read: drain the remainder of
+	// the ORIGINAL body and serve the full response untouched.
+	if len(body) > maxGuardBody {
+		rest, err := io.ReadAll(resp.Body)
+		if err != nil {
+			resp.Body.Close()
+			return err
+		}
+		resp.Body.Close()
+		body = append(body, rest...)
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		resp.Header.Set(
+			"Content-Length",
+			strconv.FormatInt(int64(len(body)), 10),
+		)
+		log.Printf(
+			"GUARD injection skipped: body %d > %d — servie sans injection",
+			len(body),
+			maxGuardBody,
+		)
+		return nil
+	}
+
 	closeErr := resp.Body.Close()
 	if err != nil {
 		return err
