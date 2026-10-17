@@ -72,6 +72,20 @@ type UIGateRule struct {
 	Hidden string `json:"hidden,omitempty"`
 }
 
+// UserBadgePolicy : onglet utilisateur injecté par le script de garde
+// une fois authentifié — replié au bord supérieur (position
+// left|right), déplié au survol/focus : les claims choisis + un
+// bouton de déconnexion (end_session OIDC). Absent = pas de badge.
+type UserBadgePolicy struct {
+	// Position : bord supérieur gauche ou droit (défaut "right").
+	Position string `json:"position,omitempty"`
+	// Claims affichés dans l'onglet déplié (les claims absents sont
+	// omis — ex. preferred_username, email).
+	Claims []string `json:"claims,omitempty"`
+	// LogoutLabel : libellé du bouton (défaut "Déconnexion").
+	LogoutLabel string `json:"logoutLabel,omitempty"`
+}
+
 type AuthPolicy struct {
 	When *Match `json:"when,omitempty"`
 
@@ -325,6 +339,9 @@ type Route struct {
 	// le script de garde injecté. Précédence : le markup data-gtw-*
 	// d'un élément gagne sur les règles uiGate.
 	UIGate []*UIGateRule `json:"uiGate,omitempty"`
+
+	// UserBadge : onglet utilisateur injecté (claims + déconnexion).
+	UserBadge *UserBadgePolicy `json:"userBadge,omitempty"`
 
 	AuthGuard *AuthGuardPolicy `json:"authGuard,omitempty"`
 }

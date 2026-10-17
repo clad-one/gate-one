@@ -34,6 +34,11 @@
       "frontend": true,
       "backend": "http://versifier:9292",
       "autoHead": true,
+      "userBadge": {
+        "position": "right",
+        "claims": ["preferred_username", "email", "email_verified"],
+        "logoutLabel": "Déconnexion"
+      },
       "uiGate": [
         {
           "selector": ".liaison-options",

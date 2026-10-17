@@ -102,6 +102,12 @@ const guardScript = `<script>
   // élément portant un attribut data-gtw-* ignore ces règles
   // (précédence : le markup gagne).
   var UIGATE = %[3]s;
+  // Logout : même hôte que la page de login (auth-bridge) — efface
+  // les cookies ET termine la session SSO (end_session OIDC).
+  var LOGOUT_URL = LOGIN_ORIGIN + "/logout";
+  // Badge utilisateur (config userBadge de la route) : onglet au bord
+  // supérieur, déplié au survol, claims + déconnexion.
+  var USERBADGE = %[4]s;
   var LOGIN_ORIGIN = "";
   try { LOGIN_ORIGIN = new URL(LOGIN).origin; } catch (e) {}
 
@@ -291,6 +297,7 @@ const guardScript = `<script>
     authed = v;
     if (v) {
       document.documentElement.classList.add("cladone-authed");
+      try { buildBadge(); } catch (e) { /* le badge ne casse rien */ }
     }
     var waiters = stateWaiters.splice(0, stateWaiters.length);
     waiters.forEach(function (r) { r(v); });
@@ -308,7 +315,9 @@ const guardScript = `<script>
       "html:not(.cladone-evaluated) [data-gtw-scopes]," +
       "html:not(.cladone-evaluated) [data-gtw-claims]" +
       "{display:none !important}" +
-      "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}";
+      "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}" +
+      ".cladone-userbadge:hover,.cladone-userbadge:focus-within" +
+      "{max-height:24em !important}";
     // voile anti-FOUC des règles uiGate : une règle CSS PAR
     // sélecteur (un sélecteur invalide ne doit tuer que son propre
     // masquage, pas celui des autres)
@@ -377,6 +386,63 @@ const guardScript = `<script>
     // l'évaluation est faite : lever le voile anti-FOUC (les
     // masquages inline des non-conformes restent en place)
     document.documentElement.classList.add("cladone-evaluated");
+  }
+
+  // Badge utilisateur (config userBadge) : onglet replié au bord
+  // supérieur (position left|right), déplié au survol/focus (CSS,
+  // max-height transitionné). Contenu : les claims choisis + le
+  // bouton de déconnexion (navigation end_session). Absent en
+  // anonyme et sans policy. Construit en DOM pur (jamais innerHTML).
+  var badgeEl = null;
+
+  function buildBadge() {
+    if (!USERBADGE || !authed || !document.body) return;
+    var pos = USERBADGE.position === "left" ? "left" : "right";
+    if (!badgeEl) {
+      badgeEl = document.createElement("div");
+      badgeEl.className = "cladone-userbadge";
+      badgeEl.style.cssText =
+        "position:fixed;top:0;" + pos + ":0;z-index:2147483646;" +
+        "background:#20242e;color:#fff;padding:6px 12px;" +
+        "font:13px/1.4 system-ui,sans-serif;" +
+        "border-radius:0 0 8px 8px;max-width:280px;" +
+        "box-shadow:0 4px 18px rgba(0,0,0,.3);" +
+        "max-height:2.3em;overflow:hidden;" +
+        "transition:max-height .25s ease;cursor:default";
+      var tab = document.createElement("div");
+      tab.className = "cladone-userbadge-tab";
+      badgeEl.appendChild(tab);
+      var body = document.createElement("div");
+      body.className = "cladone-userbadge-body";
+      body.style.cssText = "padding:6px 0 2px 0";
+      badgeEl.appendChild(body);
+      document.body.appendChild(badgeEl);
+    }
+    var tab = badgeEl.firstChild;
+    tab.textContent = "👤 " + String(sessionClaims.preferred_username || "compte");
+    var body = badgeEl.lastChild;
+    body.textContent = "";
+    var claims = USERBADGE.claims || [];
+    for (var i = 0; i < claims.length; i++) {
+      var v = sessionClaims[claims[i]];
+      if (v === undefined) continue; // claim absent : ligne omise
+      var row = document.createElement("div");
+      row.style.cssText =
+        "white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+      row.textContent = claims[i] + " : " + String(v);
+      body.appendChild(row);
+    }
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = USERBADGE.logoutLabel || "Déconnexion";
+    btn.style.cssText =
+      "margin-top:6px;border:0;border-radius:6px;padding:5px 10px;" +
+      "cursor:pointer;font:inherit;color:#fff;background:#a04040";
+    btn.onclick = function () {
+      location.href = LOGOUT_URL + "?returnTo=" +
+        encodeURIComponent(location.href);
+    };
+    body.appendChild(btn);
   }
 
   // Gating par règles uiGate (config) : mêmes mécanismes que les
@@ -480,10 +546,12 @@ const guardScript = `<script>
   }
 
   function probeSession() {
+    // data-gtw-logout et userBadge exigent AUSSI la sonde : le logout
+    // ne s'applique qu'authentifié, et le badge a besoin des claims.
     if (!document.querySelector(
-      "[data-gtw-auth],[data-gtw-auth-hidden]," +
+      "[data-gtw-auth],[data-gtw-auth-hidden],[data-gtw-logout]," +
       "[data-gtw-roles],[data-gtw-scopes],[data-gtw-claims]"
-    ) && !UIGATE.length) {
+    ) && !UIGATE.length && !USERBADGE) {
       return; // no gating declared: no probe, fully transparent
     }
     fetchSession();
@@ -520,9 +588,21 @@ const guardScript = `<script>
   //     "after"  : no click interception (pure affordance hiding,
   //                composable with gtw-auth="before" for padlocks).
   document.addEventListener("click", function (ev) {
-    if (authed) return;
     var t = ev.target;
     if (!t || !t.closest) return;
+
+    // Déconnexion (data-gtw-logout) : look entièrement à l'app, le
+    // garde ne câble que le clic. Seulement AUTHENTIFIÉ — ignoré silencieusement
+    // en anonyme (rien à déconnecter). La NAVIGATION est inhérente :
+    // end_session OIDC est un redirect ; retour sur cette page,
+    // désormais anonyme (gating ré-appliqué).
+    if (authed && t.closest("[data-gtw-logout]")) {
+      location.href = LOGOUT_URL + "?returnTo=" +
+        encodeURIComponent(location.href);
+      return;
+    }
+
+    if (!authed) return;
     var before = t.closest('[data-gtw-auth="before"]');
     if (before) {
       ev.preventDefault();

@@ -99,6 +99,7 @@ func New(cfg *core.Config) (*Gateway, error) {
 				guardLoginURL(route),
 				AuthStatePath,
 				uiGateJSON(route),
+				userBadgeJSON(route),
 			)
 			rp.ModifyResponse = func(resp *http.Response) error {
 				if resp.StatusCode != http.StatusOK ||
@@ -344,6 +345,19 @@ func (g *Gateway) pwaHandlerForHost(host string) *pwa.Handler {
 
 // guardRouteForHost returns the first guard-enabled frontend route
 // matching the host. The auth-state probe endpoint exists only there.
+// userBadgeJSON sérialise la policy userBadge de la route pour le
+// script de garde (JSON, ou "null" si absente — pas de badge).
+func userBadgeJSON(route *core.Route) string {
+	if route == nil || route.UserBadge == nil {
+		return "null"
+	}
+	b, err := json.Marshal(route.UserBadge)
+	if err != nil {
+		return "null"
+	}
+	return string(b)
+}
+
 // uiGateJSON sérialise les règles uiGate de la route pour le script
 // de garde (tableau JSON ; "[]" si aucune). Passé en ARGUMENT de
 // Sprintf : un "%" dans le JSON est sûr (les arguments ne sont pas
