@@ -100,6 +100,18 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte(bigBody))
 	})
 
+	// Page avec déclaration d'encodage précoce : le meta charset doit
+	// rester dans la fenêtre de détection du navigateur (1024 premiers
+	// octets) APRÈS injection — le garde s'insère après lui, pas
+	// avant (sinon le navigateur décode en windows-1252 :
+	// "DÃ©connexion").
+	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html><head>" +
+			"<meta charset=\"utf-8\"><title>m</title></head>" +
+			"<body>meta-ok</body></html>"))
+	})
+
 	// Page dépassant maxGuardBody (32 Mio) : servie INTÉGRALEMENT,
 	// sans injection ni troncature (filet fail-open).
 	hugeBody := "<html><head><title>huge</title></head><body>" +
@@ -460,6 +472,73 @@ func TestGuardSkipsHugePageWithoutTruncation(t *testing.T) {
 	}
 	if cl := resp.Header.Get("Content-Length"); cl != strconv.Itoa(hugePageLen) {
 		t.Errorf("Content-Length = %q, want %d", cl, hugePageLen)
+	}
+}
+
+// Le meta charset du site reste dans la fenêtre de détection (1024
+// premiers octets) APRÈS injection : le garde s'insère APRÈS lui —
+// le navigateur décode le document avec le bon encodage.
+func TestGuardInjectsAfterCharsetMeta(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true}
+		}]
+	}`)
+
+	resp := doGet(t, gw, "public.test", "/meta")
+	b := body(t, resp)
+
+	metaPos := strings.Index(b, "charset=")
+	guardPos := strings.Index(b, "__cladoneAuthGuard")
+	if metaPos < 0 || metaPos >= 1024 {
+		t.Errorf("meta charset à %d, doit rester < 1024", metaPos)
+	}
+	if guardPos < 0 {
+		t.Fatal("garde absente")
+	}
+	if guardPos < metaPos {
+		t.Errorf("garde (%d) injectée AVANT le meta charset (%d)",
+			guardPos, metaPos)
+	}
+	if !strings.Contains(b, "meta-ok") {
+		t.Error("corps du site altéré")
+	}
+}
+
+// La payload JSON du garde est 100 % ASCII (non-ASCII échappé
+// \uXXXX, paires de substitution au-delà du BMP) : un label accentué
+// de la config ne devient jamais un mojibake, quel que soit
+// l'encodage déclaré par le site tiers.
+func TestGuardPayloadIsPureASCII(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"userBadge": {
+			  "claims": ["preferred_username", "prénom"],
+			  "logoutLabel": "Déconnexion ☺"
+			}
+		}]
+	}`)
+
+	resp := doGet(t, gw, "public.test", "/page")
+	b := body(t, resp)
+
+	i := strings.Index(b, "var USERBADGE = ")
+	if i < 0 {
+		t.Fatal("payload USERBADGE absente")
+	}
+	j := strings.Index(b[i:], ";")
+	payload := b[i : i+j]
+	for k, r := range payload {
+		if r > 0x7F {
+			t.Errorf("payload non-ASCII à %d: %q", k, payload[k:])
+		}
+	}
+	if !strings.Contains(payload, `D\u00e9connexion`) {
+		t.Errorf("é non échappé: %.120s", payload)
 	}
 }
 

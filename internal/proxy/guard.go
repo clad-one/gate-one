@@ -192,7 +192,7 @@ const guardScript = `<script>
     var no = document.createElement("button");
     no.type = "button";
     no.title = "Fermer";
-    no.textContent = "×";
+    no.textContent = "\u00d7";
     no.style.cssText =
       "border:0;background:transparent;color:#aab;cursor:pointer;" +
       "font:20px/1 system-ui,sans-serif;padding:0 2px";
@@ -449,7 +449,7 @@ const guardScript = `<script>
     }
     // première ligne (visible même replié) : l'icône + l'identité
     var tab = badgeEl.firstChild;
-    tab.textContent = "👤 " + String(sessionClaims.preferred_username || "compte");
+    tab.textContent = "\uD83D\uDC64 " + String(sessionClaims.preferred_username || "compte");
     var body = badgeEl.lastChild;
     body.textContent = "";
     var claims = USERBADGE.claims || [];
@@ -465,7 +465,7 @@ const guardScript = `<script>
     }
     var btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = USERBADGE.logoutLabel || "Déconnexion";
+    btn.textContent = USERBADGE.logoutLabel || "D\u00e9connexion";
     btn.style.cssText =
       "margin-top:6px;border:0;border-radius:6px;padding:5px 10px;" +
       "cursor:pointer;font:inherit;color:#fff;background:#a04040";
@@ -539,7 +539,7 @@ const guardScript = `<script>
         // sélecteur (#id vs .class…) — signalée pour débogage,
         // sans effet de bord (fail-open assumé)
         console.warn(
-          "uiGate: règle sans élément — selector:", rule.selector
+          "uiGate: regle sans element (selector):", rule.selector
         );
         continue;
       }
@@ -819,6 +819,18 @@ const guardScript = `<script>
 
 var headOpen = regexp.MustCompile(`(?i)<head[^>]*>`)
 
+// charsetMeta : déclaration d'encodage du site servie dans le <head>.
+// Le navigateur ne scanne que les 1024 PREMIERS octets pour la
+// détecter — le script de garde (~28 Ko) inséré AVANT elle la
+// poussait hors fenêtre : le navigateur retombait sur windows-1252
+// et affichait "DÃ©connexion" (incident 2026-10-17). L'injection se
+// fait donc APRÈS ce meta quand il est dans la fenêtre.
+var charsetMeta = regexp.MustCompile(`(?i)<meta[^>]*charset[^>]*>`)
+
+// encodingSniffWindow : la fenêtre de détection d'encodage des
+// navigateurs (méta charset cherchée dans les 1024 premiers octets).
+const encodingSniffWindow = 1024
+
 // maxGuardBody bounds the HTML body read during injection. 32 MiB:
 // les pages pré-paginées proxifiées depuis des origines externes sont
 // grosses (livre jacquelot : ~6 Mo) et leur instrumentation est LE
@@ -909,9 +921,21 @@ func injectGuardScript(resp *http.Response, script string) error {
 
 	var out []byte
 	if idx := headOpen.FindIndex(body); idx != nil {
-		out = append(out, body[:idx[1]]...)
+		// Point d'insertion : après <head>, mais APRÈS le meta
+		// charset quand il est dans la fenêtre de détection (le
+		// garder dans les 1024 premiers octets du document servi —
+		// sinon le navigateur décode le document en windows-1252).
+		injectAt := idx[1]
+		sniff := body
+		if len(sniff) > encodingSniffWindow {
+			sniff = sniff[:encodingSniffWindow]
+		}
+		if m := charsetMeta.FindIndex(sniff); m != nil && m[1] > injectAt {
+			injectAt = m[1]
+		}
+		out = append(out, body[:injectAt]...)
 		out = append(out, []byte(script)...)
-		out = append(out, body[idx[1]:]...)
+		out = append(out, body[injectAt:]...)
 	} else {
 		out = append([]byte(script), body...)
 	}

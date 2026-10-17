@@ -83,7 +83,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path == '/':
-            b = b'<html><head><title>smoke</title></head><body>ok</body></html>'
+            b = b'<html><head><meta charset="utf-8"><title>smoke</title></head><body>ok</body></html>'
             self._send(200, 'text/html; charset=utf-8', b)
         elif u.path == '/echo':
             b = json.dumps({
@@ -200,6 +200,14 @@ step "injection HTML"
 grep_body '<link rel="manifest" href="/__gateway_pwa/manifest.json">' \
     -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/" \
     || fail "manifest link not injected in HTML"
+
+# le meta charset du site doit rester dans la fenêtre de détection
+# navigateur (1024 premiers octets) après injection du garde — sinon
+# le document est décodé windows-1252 ("DÃ©connexion")
+meta_pos=$(curl -sf -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/" \
+    | grep -bo 'charset=' | head -1 | cut -d: -f1)
+[ -n "$meta_pos" ] && [ "$meta_pos" -lt 1024 ] \
+    || fail "meta charset hors fenêtre de détection (position: ${meta_pos:-absent})"
 
 grep_body '"name": "SmokeApp"' \
     -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/manifest.json" \

@@ -464,11 +464,7 @@ func userBadgeJSON(route *core.Route) string {
 	if route == nil || route.UserBadge == nil {
 		return "null"
 	}
-	b, err := json.Marshal(route.UserBadge)
-	if err != nil {
-		return "null"
-	}
-	return string(b)
+	return asciiJSON(route.UserBadge, "null")
 }
 
 // uiGateJSON sérialise les règles uiGate de la route pour le script
@@ -479,11 +475,37 @@ func uiGateJSON(route *core.Route) string {
 	if route == nil || len(route.UIGate) == 0 {
 		return "[]"
 	}
-	b, err := json.Marshal(route.UIGate)
+	return asciiJSON(route.UIGate, "[]")
+}
+
+// asciiJSON marshalise v et échappe TOUT caractère non-ASCII en
+// \uXXXX (paires de substitution au-delà du BMP) : le script de garde
+// reste décodable quel que soit l'encodage déclaré — ou omis — par le
+// site tiers ; un label accentué de la config ne devient jamais un
+// mojibake ("DÃ©connexion"). fallback si Marshal échoue (impossible
+// sur ces structs).
+func asciiJSON(v any, fallback string) string {
+	b, err := json.Marshal(v)
 	if err != nil {
-		return "[]"
+		return fallback
 	}
-	return string(b)
+
+	var sb strings.Builder
+	for _, r := range string(b) {
+		switch {
+		case r < 0x80:
+			sb.WriteRune(r)
+		case r <= 0xFFFF:
+			fmt.Fprintf(&sb, `\u%04x`, r)
+		default:
+			r -= 0x10000
+			fmt.Fprintf(&sb, `\u%04x\u%04x`,
+				0xD800+(r>>10),
+				0xDC00+(r&0x3FF),
+			)
+		}
+	}
+	return sb.String()
 }
 
 func (g *Gateway) guardRouteForHost(host string) (*compiledRoute, bool) {
