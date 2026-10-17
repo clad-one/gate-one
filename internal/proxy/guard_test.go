@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -302,11 +303,15 @@ func testGatewayWithAuthBridge(
 }
 
 func TestAuthStateEndpointAuthenticated(t *testing.T) {
-	// mock auth-bridge: accepts any token
+	// mock auth-bridge: accepts any token, exposes roles/scopes/claims
 	bridge := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-User-Id", "u1")
 			w.Header().Set("X-Username", "alice")
+			w.Header().Set("X-Roles", "offline_access")
+			w.Header().Set("X-Scopes", "openid,profile")
+			w.Header().Set("X-Claims", base64.StdEncoding.EncodeToString(
+				[]byte(`{"email":"a@b.c","email_verified":false}`)))
 			w.WriteHeader(http.StatusOK)
 		},
 	))
@@ -325,11 +330,167 @@ func TestAuthStateEndpointAuthenticated(t *testing.T) {
 	resp := doGet(t, gw, host, "/__gateway/auth")
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	if b := body(t, resp); b != "" {
-		t.Errorf("204 must have no body, got %q", b)
+
+	var payload struct {
+		Roles  []string       `json:"roles"`
+		Scopes []string       `json:"scopes"`
+		Claims map[string]any `json:"claims"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("JSON invalide: %v", err)
+	}
+	if !contains(payload.Roles, "offline_access") {
+		t.Errorf("roles = %v, want offline_access", payload.Roles)
+	}
+	if !contains(payload.Scopes, "profile") {
+		t.Errorf("scopes = %v, want profile", payload.Scopes)
+	}
+	if payload.Claims["email"] != "a@b.c" || payload.Claims["email_verified"] != false {
+		t.Errorf("claims = %v", payload.Claims)
+	}
+}
+
+func contains(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestWhenIdentityConditions vérifie le modèle deux-étapes : les
+// conditions d'identité (roles/scopes/claims) sont évaluées APRÈS
+// authentification — anonyme → 401, authentifié insuffisant → 403,
+// authentifié conforme → proxifié (200).
+func TestWhenIdentityConditions(t *testing.T) {
+	bridge := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer ok" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("X-User-Id", "u1")
+			w.Header().Set("X-Username", "alice")
+			w.Header().Set("X-Roles", "offline_access")
+			w.Header().Set("X-Scopes", "openid,profile")
+			w.Header().Set("X-Claims", base64.StdEncoding.EncodeToString(
+				[]byte(`{"email":"a@b.c","email_verified":false}`)))
+			w.WriteHeader(http.StatusOK)
+		},
+	))
+	t.Cleanup(bridge.Close)
+
+	gw, hosts := testGatewayWithAuthBridge(t, `{
+		"routes": [{
+			"host": "api.test",
+			"path": "/api/y",
+			"backend": "BACKEND",
+			"auth": {
+				"when": {
+					"method": "GET",
+					"roles": ["offline_access"],
+					"scopes": ["profile"],
+					"claims": { "email": "*" }
+				}
+			}
+		}]
+	}`, bridge.URL)
+	host := hosts["api.test"]
+
+	do := func(auth string) *http.Response {
+		req := httptest.NewRequest(http.MethodGet, "http://"+host+"/api/y", nil)
+		req.Host = host
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		return rec.Result()
+	}
+
+	// anonyme → 401
+	if resp := do(""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("anonyme: status = %d, want 401", resp.StatusCode)
+	} else {
+		resp.Body.Close()
+	}
+
+	// authentifié conforme → 200 (proxifié)
+	if resp := do("Bearer ok"); resp.StatusCode != http.StatusOK {
+		t.Errorf("conforme: status = %d, want 200", resp.StatusCode)
+	} else {
+		resp.Body.Close()
+	}
+
+	// authentifié mais rôles insuffisants → 403 (pas 401 : pas de
+	// boucle de login possible)
+	bridgeNoRoles := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-User-Id", "u2")
+			w.Header().Set("X-Username", "bob")
+			w.WriteHeader(http.StatusOK)
+		},
+	))
+	t.Cleanup(bridgeNoRoles.Close)
+	gw.authBridgeBaseURL = bridgeNoRoles.URL
+	if resp := do("Bearer ok"); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("insuffisant: status = %d, want 403", resp.StatusCode)
+	} else {
+		resp.Body.Close()
+	}
+}
+
+// TestWhenClaimsPresenceAndValue vérifie la sémantique du matcher
+// claims : "*" = présence, sinon comparaison stringifiée (booléen
+// JSON → "true"/"false", nombre → format Go).
+func TestWhenClaimsPresenceAndValue(t *testing.T) {
+	bridge := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-User-Id", "u1")
+			w.Header().Set("X-Username", "alice")
+			w.Header().Set("X-Claims", base64.StdEncoding.EncodeToString(
+				[]byte(`{"email":"a@b.c","email_verified":false,"n":42}`)))
+			w.WriteHeader(http.StatusOK)
+		},
+	))
+	t.Cleanup(bridge.Close)
+
+	probe := func(claimsJSON string) int {
+		gw, _ := testGatewayWithAuthBridge(t, `{
+			"routes": [{
+				"host": "api.test",
+				"path": "/api/y",
+				"backend": "BACKEND",
+				"auth": { "when": { "claims": `+claimsJSON+` } }
+			}]
+		}`, bridge.URL)
+
+		req := httptest.NewRequest(http.MethodGet, "http://api.test/api/y", nil)
+		req.Host = "api.test"
+		req.Header.Set("Authorization", "Bearer x")
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		return rec.Result().StatusCode
+	}
+
+	if got := probe(`{"email":"*"}`); got != http.StatusOK {
+		t.Errorf(`{"email":"*"}: status = %d, want 200 (présence)`, got)
+	}
+	if got := probe(`{"email_verified":"false"}`); got != http.StatusOK {
+		t.Errorf(`{"email_verified":"false"}: status = %d, want 200 (booléen stringifié)`, got)
+	}
+	if got := probe(`{"email_verified":"true"}`); got != http.StatusForbidden {
+		t.Errorf(`{"email_verified":"true"}: status = %d, want 403 (claim faux = authentifié mais insuffisant)`, got)
+	}
+	if got := probe(`{"n":"42"}`); got != http.StatusOK {
+		t.Errorf(`{"n":"42"}: status = %d, want 200 (nombre stringifié)`, got)
+	}
+	if got := probe(`{"absent":"*"}`); got != http.StatusForbidden {
+		t.Errorf(`{"absent":"*"}: status = %d, want 403 (claim absent = insuffisant)`, got)
 	}
 }
 

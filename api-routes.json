@@ -86,6 +86,11 @@
           "method":"POST",
           "body":{
             "coupes":true
+          },
+          "roles":["offline_access"],
+          "scopes":["profile"],
+          "claims":{
+            "email":"*"
           }
         }
       },
@@ -96,6 +101,19 @@
       "rateLimit": {
         "requests": 10,
         "period": "second"
+      }
+    },
+    {
+      "host": "vers.cladone.com",
+      "path": "/api/demo/email-verified",
+      "backend":"http://versifier:9292",
+      "auth":{
+        "when":{
+          "method":"GET",
+          "claims":{
+            "email_verified":"true"
+          }
+        }
       }
     }
   ]

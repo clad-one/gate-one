@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 )
@@ -21,6 +22,34 @@ type RequestContext struct {
 	Username string
 	Email    string
 	Roles    []string
+	Scopes   []string
+	Claims   map[string]any
+}
+
+// HasRole / HasScope / HasClaim : helpers de matching des conditions
+// d'identité (évaluées APRÈS authentification — cf. matchesIdentity).
+
+func (ctx *RequestContext) HasScope(scope string) bool {
+	for _, s := range ctx.Scopes {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// HasClaim vérifie la présence d'un claim ("*" = n'importe quelle
+// valeur) ou l'égalité de sa valeur stringifiée (booléen JSON →
+// "true"/"false", nombres → format Go).
+func (ctx *RequestContext) HasClaim(key, want string) bool {
+	v, ok := ctx.Claims[key]
+	if !ok {
+		return false
+	}
+	if want == "*" {
+		return true
+	}
+	return fmt.Sprintf("%v", v) == want
 }
 
 func BuildContext(r *http.Request) (*RequestContext, error) {

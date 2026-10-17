@@ -12,24 +12,26 @@ import (
 
 // LoginPageURL is the public auth-bridge login page. Shared by the
 // server-side redirect for page routes (proxy.go) and the injected
-// 401/403 guard script (this file).
+// 401 guard script (this file).
 const LoginPageURL = "https://login.cladone.com/login"
 
-// AuthStatePath is the gateway-served session probe: 204 when the
-// caller holds a valid session (Bearer header or cookies), 401
-// otherwise. Never proxied. Consumed by the injected guard script
-// for the declarative [data-gtw-auth] / [data-gtw-auth-hidden]
-// gating. MUST match the path hardcoded in guardScript below.
+// AuthStatePath is the gateway-served session probe: 200 + JSON
+// {roles, scopes, claims} when the caller holds a valid session
+// (Bearer header or cookies), 401 otherwise. Never proxied. Consumed
+// by the injected guard script for the declarative [data-gtw-auth] /
+// [data-gtw-auth-hidden] / [data-gtw-roles] / [data-gtw-scopes] /
+// [data-gtw-claims] gating. MUST match the path hardcoded in
+// guardScript below.
 const AuthStatePath = "/__gateway/auth"
 
 // guardScript is injected into HTML responses of frontend routes. It
-// wraps window.fetch so that a 401/403 answer (session expired, the
-// gateway answers JSON 401 on API routes) triggers a login flow that
-// does NOT reload the application:
+// wraps window.fetch so that a 401 answer (session expired or
+// identity conditions not met, the gateway answers JSON 401 on API
+// routes) triggers a login flow that does NOT reload the application:
 //
 //   - every fetch is cloned before being sent (a Request body can
 //     only be read once), keeping a replayable copy ;
-//   - on 401/403 the failed request is queued and a DISMISSABLE
+//   - on 401 the failed request is queued and a DISMISSABLE
 //     banner ("Se connecter" / ×) is shown: mid-flow 401s never open
 //     a tab automatically (a background 401 must not steal focus).
 //     The tab opens only on an explicit click: a
@@ -258,6 +260,7 @@ const guardScript = `<script>
     loginTab = null;
     hideBanner();
     settleState(true);
+    fetchSession(); // rôles/scopes/claims post-login (re-sonde)
     flushQueue();
   });
 
@@ -270,6 +273,9 @@ const guardScript = `<script>
   var authed = false;
   var probeDone = false;
   var stateWaiters = [];
+  var sessionRoles = [];
+  var sessionScopes = [];
+  var sessionClaims = {};
 
   function settleState(v) {
     // Une session acquise (login réussi, message popup-done) ne doit
@@ -292,26 +298,115 @@ const guardScript = `<script>
       "{display:none !important}" +
       "html.cladone-authed [data-gtw-auth-hidden='after']" +
       "{display:none !important}" +
+      // éléments à condition d'identité (rôles/scopes/claims) :
+      // masqués par défaut (anti-FOUC), révélés après évaluation JS
+      "html:not(.cladone-evaluated) [data-gtw-roles]," +
+      "html:not(.cladone-evaluated) [data-gtw-scopes]," +
+      "html:not(.cladone-evaluated) [data-gtw-claims]" +
+      "{display:none !important}" +
       "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}";
     (document.head || document.documentElement).appendChild(css);
   } catch (e) { /* never break the page over gating */ }
+
+  // Gating par rôles/scopes/claims : un élément n'est visible que si
+  // TOUTES ses conditions d'identité passent (OU au sein d'un
+  // attribut, ET entre attributs). Anonyme = aucun rôle/scope/claim
+  // → masqué (l'authentification est implicite). Confort UI
+  // uniquement : l'interdiction réelle reste côté endpoint
+  // (auth.when.roles/scopes/claims) ou backend.
+  function applyRoleGating() {
+    var nodes = document.querySelectorAll(
+      "[data-gtw-roles],[data-gtw-scopes],[data-gtw-claims]"
+    );
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var ok = true;
+      var rl = n.getAttribute("data-gtw-roles");
+      if (ok && rl) {
+        ok = rl.split(/\s+/).filter(Boolean).some(function (r) {
+          return sessionRoles.indexOf(r) !== -1;
+        });
+      }
+      if (ok) {
+        var sc = n.getAttribute("data-gtw-scopes");
+        if (sc) {
+          ok = sc.split(/\s+/).filter(Boolean).some(function (s) {
+            return sessionScopes.indexOf(s) !== -1;
+          });
+        }
+      }
+      if (ok) {
+        var cl = n.getAttribute("data-gtw-claims");
+        if (cl) {
+          try {
+            var spec = JSON.parse(cl);
+            for (var k in spec) {
+              var want = spec[k];
+              var have = sessionClaims[k];
+              if (want === "*") {
+                if (have === undefined) { ok = false; break; }
+              } else if (String(have) !== want) {
+                ok = false; break;
+              }
+            }
+          } catch (e) { ok = false; }
+        }
+      }
+      if (!ok) {
+        n.style.display = "none";
+        n.setAttribute("data-gtw-gated-off", "1");
+      } else if (n.getAttribute("data-gtw-gated-off")) {
+        n.removeAttribute("data-gtw-gated-off");
+        n.style.display = "";
+      }
+    }
+    // l'évaluation est faite : lever le voile anti-FOUC (les
+    // masquages inline des non-conformes restent en place)
+    document.documentElement.classList.add("cladone-evaluated");
+  }
+
+  function fetchSession() {
+    orig(AUTH_STATE, { cache: "no-store" }).then(function (res) {
+      if (res.status !== 200) {
+        sessionRoles = [];
+        sessionScopes = [];
+        sessionClaims = {};
+        applyRoleGating();
+        settleState(false);
+        return;
+      }
+      res.json().then(function (s) {
+        sessionRoles = s.roles || [];
+        sessionScopes = s.scopes || [];
+        sessionClaims = s.claims || {};
+        applyRoleGating();
+        settleState(true);
+      }).catch(function () {
+        applyRoleGating();
+        settleState(false);
+      });
+    }).catch(function () {
+      // réseau/SW en erreur : fail-closed — pas de révélation des
+      // éléments à condition d'identité
+      settleState(false);
+    });
+  }
+
+  function probeSession() {
+    if (!document.querySelector(
+      "[data-gtw-auth],[data-gtw-auth-hidden]," +
+      "[data-gtw-roles],[data-gtw-scopes],[data-gtw-claims]"
+    )) {
+      return; // no gating declared: no probe, fully transparent
+    }
+    fetchSession();
+  }
 
   // Session probe (Bearer header or cookie session), gateway-served,
   // never cached by the PWA service worker ("auth" exclude pattern).
   // AUTH_STATE is injected from AuthStatePath (guard.go). Runs at
   // DOMContentLoaded so pages without any gated element make no
   // request at all.
-  function probeSession() {
-    if (!document.querySelector("[data-gtw-auth],[data-gtw-auth-hidden]")) {
-      return; // no gating declared: no probe, fully transparent
-    }
-    orig(AUTH_STATE, { cache: "no-store" }).then(function (res) {
-      settleState(res.status === 204);
-    }).catch(function () {
-      settleState(false); // offline / SW error: stay anonymous
-    });
-  }
-
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", probeSession);
   } else {
@@ -403,6 +498,22 @@ const guardScript = `<script>
         if (probeDone) { resolve(authed); return; }
         stateWaiters.push(resolve);
       });
+    },
+    // Session détaillée (opt-in) : {roles, scopes, claims} une fois
+    // la sonde passée (ou null si anonyme). Pour les applications qui
+    // veulent filtrer en JS sans relire un token.
+    session: function () {
+      return new Promise(function (resolve) {
+        var snap = function (ok) {
+          resolve(ok ? {
+            roles: sessionRoles.slice(),
+            scopes: sessionScopes.slice(),
+            claims: sessionClaims
+          } : null);
+        };
+        if (probeDone) { snap(authed); return; }
+        stateWaiters.push(snap);
+      });
     }
   };
 
@@ -414,9 +525,11 @@ const guardScript = `<script>
 
     return orig.apply(this, arguments).then(function (res) {
 
-      if (!res ||
-          (res.status !== 401 && res.status !== 403) ||
-          res.url.startsWith(LOGIN)) {
+      // 401 SEULEMENT : c'est le signal « authentifie-toi ». Un 403
+      // (authentifié mais droits insuffisants — when.roles/scopes/
+      // claims) traverse vers l'application : offrir un login sur un
+      // refus de droits produirait une boucle.
+      if (!res || res.status !== 401 || res.url.startsWith(LOGIN)) {
         return res;
       }
 

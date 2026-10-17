@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -107,6 +109,22 @@ func (g *Gateway) checkAuth(
 	ctx.Username = resp.Header.Get("X-Username")
 	ctx.Email = resp.Header.Get("X-Email")
 	ctx.Roles = splitRoles(resp.Header.Get("X-Roles"))
+	ctx.Scopes = splitRoles(resp.Header.Get("X-Scopes"))
+
+	// Claims du token (base64-JSON du payload complet) : consommés
+	// par les conditions when.claims et la sonde /__gateway/auth.
+	if xc := resp.Header.Get("X-Claims"); xc != "" {
+		if raw, derr := base64.StdEncoding.DecodeString(xc); derr == nil {
+			var claims map[string]any
+			if jerr := json.Unmarshal(raw, &claims); jerr == nil {
+				ctx.Claims = claims
+			} else {
+				log.Printf("AUTH BRIDGE: X-Claims illisible: %v", jerr)
+			}
+		} else {
+			log.Printf("AUTH BRIDGE: X-Claims non-base64: %v", derr)
+		}
+	}
 	return ctx, nil
 }
 

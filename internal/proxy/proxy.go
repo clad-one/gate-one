@@ -356,22 +356,32 @@ func (g *Gateway) guardRouteForHost(host string) (*compiledRoute, bool) {
 	return nil, false
 }
 
-// serveAuthState answers the session probe: 204 when the request
-// carries a valid session (Bearer header or cookies), 401 otherwise.
-// checkAuth propagates into w any session cookie it silently
+// serveAuthState answers the session probe: 200 + JSON
+// {roles, scopes, claims} when the request carries a valid session,
+// 401 otherwise. The guard script consumes the JSON for the
+// declarative data-gtw-roles / data-gtw-scopes / data-gtw-claims
+// gating. checkAuth propagates into w any session cookie it silently
 // refreshed, so a 401 probe can still extend the session.
 func (g *Gateway) serveAuthState(
 	w http.ResponseWriter,
 	r *http.Request,
 	ctx *RequestContext,
 ) {
-	if _, err := g.checkAuth(w, r, ctx); err != nil {
+	sctx, err := g.checkAuth(w, r, ctx)
+	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"authentication_required"}`))
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"roles":  sctx.Roles,
+		"scopes": sctx.Scopes,
+		"claims": sctx.Claims,
+	})
 }
 
 // mcpRouteForHost retourne la route MCP activée d'un host.
@@ -638,6 +648,22 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"error":"authentication_required"}`))
 			return
 		}
+
+		//
+		// Conditions d'identité (rôles/scopes/claims/user) :
+		// authentifié mais insuffisant → 403. Le script de garde
+		// n'intercepte QUE le 401 — un refus de droits ne doit pas
+		// déclencher une invitation au login (boucle).
+		//
+		if route.Auth != nil &&
+			hasIdentityConditions(route.Auth.When) &&
+			!matchesIdentity(route.Auth.When, ctx) {
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"forbidden","error_description":"identity conditions not met"}`))
+			return
+		}
 	}
 
 	//
@@ -675,6 +701,23 @@ func matches(m *core.Match, ctx *RequestContext) bool {
 		return true
 	}
 
+	// matches = conditions techniques (évaluables pré-authentification)
+	// + conditions d'identité (rôles/scopes/claims/user, évaluées
+	// après). Utilisé par rateLimit/quota.
+	if !matchesBasic(m, ctx) {
+		return false
+	}
+	return matchesIdentity(m, ctx)
+}
+
+// matchesBasic : conditions évaluables SANS token (avant
+// authentification).
+func matchesBasic(m *core.Match, ctx *RequestContext) bool {
+
+	if m == nil {
+		return true
+	}
+
 	if m.Method != "" && m.Method != ctx.Method {
 		return false
 	}
@@ -697,8 +740,31 @@ func matches(m *core.Match, ctx *RequestContext) bool {
 		}
 	}
 
+	return true
+}
+
+// matchesIdentity : conditions nécessitant le token vérifié
+// (rôles/scopes/claims/user) — évaluées APRÈS authentification.
+func matchesIdentity(m *core.Match, ctx *RequestContext) bool {
+
+	if m == nil {
+		return true
+	}
+
 	for _, role := range m.Roles {
 		if !ctx.HasRole(role) {
+			return false
+		}
+	}
+
+	for _, scope := range m.Scopes {
+		if !ctx.HasScope(scope) {
+			return false
+		}
+	}
+
+	for k, v := range m.Claims {
+		if !ctx.HasClaim(k, v) {
 			return false
 		}
 	}
@@ -708,6 +774,13 @@ func matches(m *core.Match, ctx *RequestContext) bool {
 	}
 
 	return true
+}
+
+// hasIdentityConditions : le when porte-t-il des conditions
+// d'identité (évaluation post-authentification requise) ?
+func hasIdentityConditions(m *core.Match) bool {
+	return m != nil &&
+		(len(m.Roles) > 0 || len(m.Scopes) > 0 || len(m.Claims) > 0 || m.User != "")
 }
 
 func (g *Gateway) needsAuthentication(route *core.Route, ctx *RequestContext) bool {
@@ -721,7 +794,11 @@ func (g *Gateway) needsAuthentication(route *core.Route, ctx *RequestContext) bo
 		return true
 	}
 
-	return matches(route.Auth.When, ctx)
+	// Conditions TECHNIQUES seulement (method/query/header/body) :
+	// les conditions d'identité (roles/scopes/claims/user) ne sont
+	// évaluables qu'après authentification (le token n'existe pas
+	// encore) — cf. matchesIdentity, appliquée post-auth en 403.
+	return matchesBasic(route.Auth.When, ctx)
 }
 
 func (g *Gateway) findMCP(

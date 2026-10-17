@@ -17,7 +17,16 @@ type Match struct {
 
 	Body map[string]any `json:"body,omitempty"`
 
+	// Conditions d'identité : évaluées APRÈS authentification
+	// (le token n'existe pas avant) — un échec produit un 403.
 	Roles []string `json:"roles,omitempty"`
+
+	Scopes []string `json:"scopes,omitempty"`
+
+	// Claims du token : valeur "*" = simple présence, sinon
+	// comparaison de la valeur stringifiée (booléen JSON →
+	// "true"/"false", nombres → format Go).
+	Claims map[string]string `json:"claims,omitempty"`
 
 	User string `json:"user,omitempty"`
 }
