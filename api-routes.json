@@ -36,7 +36,7 @@
       "autoHead": true,
       "uiGate": [
         {
-          "selector": "#legend",
+          "selector": "#liaison-options",
           "roles": ["offline_access"]
         }
       ],
