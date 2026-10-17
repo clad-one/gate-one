@@ -819,9 +819,12 @@ const guardScript = `<script>
 
 var headOpen = regexp.MustCompile(`(?i)<head[^>]*>`)
 
-// maxGuardBody bounds the HTML body read during injection (1 MiB is
-// far above the current frontend pages; larger pages skip injection).
-const maxGuardBody = 1 << 20
+// maxGuardBody bounds the HTML body read during injection. 32 MiB:
+// les pages pré-paginées proxifiées depuis des origines externes sont
+// grosses (livre jacquelot : ~6 Mo) et leur instrumentation est LE
+// cas d'usage de la gateway — au-delà de la limite, l'injection est
+// sautée (fail-open) mais la page reste servie intégralement.
+const maxGuardBody = 32 << 20
 
 // guardEnabledFor resolves the route's authGuard policy: active by
 // default on frontend routes, opt-out via {"enabled": false}, no-op on

@@ -288,15 +288,16 @@ grep_body '__cladoneAuthGuard' \
     "http://127.0.0.1:${PORT_GW}/gz" \
     || fail "garde non injectée sur le HTML gzip"
 
-# 6) page > 1 Mio : servie INTÉGRALEMENT, sans injection — jamais
-#    tronquée (incident 2026-10-17 : livre de 6 Mo coupé à 1 Mio).
-big_size=$(curl -s -o /tmp/gw-smoke-big.$$.html -w '%{size_download}' \
+# 6) page > 1 Mio (ancienne limite) : injectée ET servie
+#    intégralement — jamais tronquée (incident 2026-10-17 : livre de
+#    6 Mo coupé à 1 Mio).
+big_file=/tmp/gw-smoke-big.$$.html
+big_size=$(curl -s -o "$big_file" -w '%{size_download}' \
     -H "Host: upstream.smoke.local" "http://127.0.0.1:${PORT_GW}/big")
-grep -q '__cladoneAuthGuard' /tmp/gw-smoke-big.$$.html \
-    && rm -f /tmp/gw-smoke-big.$$.html \
-    && fail "garde injectée dans une page > maxGuardBody"
-rm -f /tmp/gw-smoke-big.$$.html
+grep -q '__cladoneAuthGuard' "$big_file" \
+    || { rm -f "$big_file"; fail "garde non injectée sur une page de 1,5 Mio"; }
 [ "$big_size" -gt 1572864 ] \
-    || fail "page > 1 Mio tronquée ($big_size octets reçus)"
+    || { rm -f "$big_file"; fail "page > 1 Mio tronquée ($big_size octets reçus)"; }
+rm -f "$big_file"
 
 echo "SMOKE OK"
