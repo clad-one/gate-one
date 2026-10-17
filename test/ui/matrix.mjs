@@ -122,9 +122,10 @@ const SESSION = {
   const x = await mkWindow(guardBadge, html, SESSION);
   if (!x.doc.querySelector(".cladone-userbadge")) fail("badge attendu (authentifié + userBadge configuré)");
   const badge = x.doc.querySelector(".cladone-userbadge");
-  badge.querySelector(".cladone-userbadge-tab").textContent === "👤"
-    ? ok("badge : poignée 👤 discrète (le nom n'apparaît qu'au dépliage)")
-    : fail("badge: la poignée doit être l'icône seule");
+  const tab = badge.querySelector(".cladone-userbadge-tab");
+  tab.textContent.startsWith("👤") && tab.textContent.includes("alice")
+    ? ok("badge : première ligne = 👤 + username")
+    : fail("badge: la poignée doit afficher 👤 + le nom du user");
   if (!badge.classList.contains("cladone-userbadge-reveal"))
     fail("badge: manifestation brève attendue au login (classe reveal)");
   await tick(2200);
@@ -132,9 +133,9 @@ const SESSION = {
     ? fail("badge: non escamoté après 2 s")
     : ok("badge : escamoté après la manifestation de 2 s");
   const body = badge.querySelector(".cladone-userbadge-body").textContent;
-  body.includes("alice") && !body.match(/alice.*alice/)
-    ? ok("badge : identité en tête, sans doublon")
-    : fail("badge: identité absente ou en double");
+  !body.includes("alice") && body.includes("email_verified : false")
+    ? ok("badge : corps = claims (sans doublon du nom)")
+    : fail("badge: le corps doit porter les claims sans répéter le nom");
 
   x.click(x.doc.getElementById("logout_btn"));
   await tick();
