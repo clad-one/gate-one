@@ -45,9 +45,10 @@ const AuthStatePath = "/__gateway/auth"
 //     tab. Queued requests are replayed and the ORIGINAL fetch
 //     promises resolve with the replayed responses: the application
 //     code never sees the authentication happen ;
-//   - if the tab is closed without completing (user, blocker), the
-//     banner reappears — still dismissable: abandoning must never
-//     lock the user out of the page ;
+//   - if the tab is closed without completing (user, blocker):
+//     explicit login() promises resolve false silently (« not now ») ;
+//     the banner reappears only when real requests are frozen — it is
+//     their exit surface (Se connecter or ×) ;
 //   - the banner is closable without any login action: ×, click
 //     anywhere outside it, or Escape. Closing it closes the linked
 //     login tab (if open) at the same time, resolves pending
@@ -217,9 +218,13 @@ const guardScript = `<script>
     watchTab();
   }
 
-  // If the tab is closed without a success message (user, blocker),
-  // show the banner again: requests stay pending, the page is kept
-  // alive (same contract as the historical never-resolving promise).
+  // Onglet refermé sans succès (utilisateur, bloqueur) — Option C :
+  //   - les promesses login() explicites sont résolues false en
+  //     silence : l'utilisateur vient de dire « pas maintenant », pas
+  //     la peine de re-insister ;
+  //   - seules les requêtes réellement gelées conservent la bannière
+  //     — leur unique surface de sortie (Se connecter ou ×) ; sans
+  //     elle l'application resterait figée sans explication.
   function watchTab() {
     if (watching) return;
     watching = true;
@@ -228,6 +233,12 @@ const guardScript = `<script>
       clearInterval(iv);
       watching = false;
       loginTab = null;
+      var kept = [];
+      queue.forEach(function (entry) {
+        if (entry.barrier) { entry.resolve(false); return; }
+        kept.push(entry);
+      });
+      queue = kept;
       if (queue.length > 0) showBanner();
     }, 400);
   }
