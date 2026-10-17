@@ -57,19 +57,26 @@ const AuthStatePath = "/__gateway/auth"
 //     cannot be cloned (streaming bodies) or window.open is
 //     unavailable.
 //
-// Declarative gating (opt-in, zero app code): the data-cladone-auth
-// value decides the behavior while anonymous:
-//   - bare: element VISIBLE and clickable, a click ALSO opens the
-//     login tab (the native action proceeds — a ticked checkbox
-//     fires its request, the 401 is queued and replayed after
-//     login) ;
-//   - "login": visible while anonymous, click opens the login tab
-//     (native action prevented), hidden once authed — a pure
-//     affordance like a padlock ;
-//   - "hide": hidden while anonymous, shown once authed — silent
-//     cosmetic gate, never a trigger; clicks that would activate it
-//     (label padding, synthetic activation) are neutralized and show
-//     the banner instead.
+// Declarative gating (opt-in, zero app code) — two orthogonal
+// dimensions:
+//
+//   data-gtw-auth — when auth happens:
+//     "after"  : native click preserved, auth enforced at the request
+//       level (401 → queued → replayed after login) ; the login tab
+//       opens on click as an invitation ;
+//     "before" : the click is neutralized (no native request) and the
+//       login tab opens directly — authenticate first, act after ;
+//     absent   : fully transparent — first 401 → dismissable banner
+//       (never an auto-opened tab).
+//
+//   data-gtw-auth-hidden — visibility:
+//     "before" : hidden while anonymous, shown once authed (silent
+//       gate — never a trigger; activating clicks are neutralized and
+//       show the banner) ;
+//     "after"  : visible while anonymous, hidden once authed (pure
+//       affordance, composable with gtw-auth="before" for padlocks) ;
+//     absent   : always visible.
+//
 // Pages using no attribute make no probe request and stay fully
 // transparent (auth handled mid-flow by the wrapper, with the
 // banner as login affordance).
@@ -274,12 +281,11 @@ const guardScript = `<script>
   try {
     var css = document.createElement("style");
     css.textContent =
-      "html:not(.cladone-authed) [data-cladone-auth='hide']" +
+      "html:not(.cladone-authed) [data-gtw-auth-hidden='before']" +
       "{display:none !important}" +
-      "html.cladone-authed [data-cladone-auth='login']" +
+      "html.cladone-authed [data-gtw-auth-hidden='after']" +
       "{display:none !important}" +
-      "html:not(.cladone-authed) [data-cladone-auth]" +
-      ":not([data-cladone-auth='hide']){cursor:pointer}";
+      "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}";
     (document.head || document.documentElement).appendChild(css);
   } catch (e) { /* never break the page over gating */ }
 
@@ -289,7 +295,7 @@ const guardScript = `<script>
   // DOMContentLoaded so pages without any gated element make no
   // request at all.
   function probeSession() {
-    if (!document.querySelector("[data-cladone-auth]")) {
+    if (!document.querySelector("[data-gtw-auth],[data-gtw-auth-hidden]")) {
       return; // no gating declared: no probe, fully transparent
     }
     orig(AUTH_STATE, { cache: "no-store" }).then(function (res) {
@@ -305,43 +311,52 @@ const guardScript = `<script>
     probeSession();
   }
 
-  // Click handling while anonymous (capture phase). The attribute
-  // value decides:
-  //   - bare or "login": the element is a login TRIGGER — the login
-  //     tab opens on click. For a bare control the native action
-  //     PROCEEDS (a ticked checkbox fires its request, the 401 is
-  //     queued and replayed after login) ; a "login" affordance gets
-  //     preventDefault (its native action is meaningless) and hides
-  //     once authed ;
-  //   - "hide": the element is hidden while anonymous — clicks
-  //     reaching it (synthetic label activation) are neutralized:
-  //     never a silent pre-tick, the banner offers "Se connecter".
-  // A click inside a <label> holding a "hide" control gets the same
-  // neutralization.
+  // Click handling while anonymous (capture phase). Two attributes,
+  // two orthogonal dimensions:
+  //
+  //   data-gtw-auth — WHEN auth happens:
+  //     "after"  : native click preserved (no preventDefault) — the
+  //                auth is enforced at the request level (401 queued,
+  //                replayed after login) ; the tab opens on click as
+  //                an invitation ;
+  //     "before" : the click is neutralized (no native request) and
+  //                the login tab opens directly — authenticate
+  //                first, act after.
+  //
+  //   data-gtw-auth-hidden — visibility:
+  //     "before" : hidden while anonymous — activating clicks
+  //                (direct, synthetic label activation) are
+  //                neutralized: never a silent pre-tick, the banner
+  //                offers "Se connecter" ;
+  //     "after"  : no click interception (pure affordance hiding,
+  //                composable with gtw-auth="before" for padlocks).
   document.addEventListener("click", function (ev) {
     if (authed) return;
     var t = ev.target;
     if (!t || !t.closest) return;
-    var el = t.closest("[data-cladone-auth]");
-    if (el) {
-      if (el.getAttribute("data-cladone-auth") === "hide") {
-        ev.preventDefault();
-        ev.stopPropagation();
-        showBanner(ev);
-        return;
-      }
-      if (el.getAttribute("data-cladone-auth") === "login") {
-        ev.preventDefault();
-        ev.stopPropagation();
-      }
-      // bare : l'action native procede (cocher la case…), la
-      // requete 401 qui en resulte sera mise en file puis rejouee
-      // apres le login
+    var before = t.closest('[data-gtw-auth="before"]');
+    if (before) {
+      ev.preventDefault();
+      ev.stopPropagation();
       window.__cladoneAuth.login();
       return;
     }
+    var after = t.closest('[data-gtw-auth="after"]');
+    if (after) {
+      // l'action native procede (cocher la case…) ; la requete 401
+      // qui en resulte est mise en file puis rejouee apres login
+      window.__cladoneAuth.login();
+      return;
+    }
+    var hiddenPre = t.closest('[data-gtw-auth-hidden="before"]');
+    if (hiddenPre) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showBanner(ev);
+      return;
+    }
     var lbl = t.closest("label");
-    if (lbl && lbl.querySelector("[data-cladone-auth='hide']")) {
+    if (lbl && lbl.querySelector('[data-gtw-auth-hidden="before"]')) {
       ev.preventDefault();
       ev.stopPropagation();
       showBanner(ev);
