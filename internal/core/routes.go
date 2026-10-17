@@ -108,6 +108,58 @@ type AuthGuardPolicy struct {
 	LoginURL string `json:"loginUrl,omitempty"` // default: shared constant
 }
 
+// UpstreamResponseHeaders : ajustement des en-têtes de RÉPONSE du
+// backend avant envoi au navigateur — typiquement retirer un
+// Content-Security-Policy d'origine qui bloquerait le script de garde
+// injecté, ou poser un en-tête de déploiement.
+type UpstreamResponseHeaders struct {
+	// Set : en-têtes ajoutés/écrasés sur la réponse ; valeurs avec
+	// interpolation ${VAR} (environnement du conteneur) ; valeur ""
+	// = en-tête supprimé (jamais transmis vide).
+	Set map[string]string `json:"set,omitempty"`
+	// Remove : noms d'en-têtes supprimés de la réponse.
+	Remove []string `json:"remove,omitempty"`
+}
+
+// UpstreamPolicy : comment la gateway joint le backend quand il
+// n'est pas un service du réseau interne — typiquement un site
+// hébergé derrière Cloudflare (Pages, Access…). Absente =
+// comportement historique inchangé (Host public préservé, en-têtes
+// du client transmis tels quels).
+type UpstreamPolicy struct {
+	// Host : true = l'en-tête Host envoyé au backend est celui de
+	// l'origine backend (requis pour un site externe qui route par
+	// Host, ex. Cloudflare : sinon la requête arrive avec le host
+	// public et l'origine ne la reconnaît pas). Absent/false = Host
+	// public transmis tel quel (backends internes).
+	Host *bool `json:"host,omitempty"`
+	// HostOverride : valeur explicite de l'en-tête Host envoyée au
+	// backend, quand elle doit différer à la fois du host public et
+	// de l'origine backend (rare). Précédence sur Host.
+	HostOverride string `json:"hostOverride,omitempty"`
+	// Headers : en-têtes de requête statiques posés vers le backend
+	// (Set : écrasent la valeur éventuellement envoyée par le
+	// client). Usage : franchir un basic auth d'origine
+	// ("Authorization": "Basic ${MONSITE_BASIC_AUTH}") ou les service
+	// tokens Cloudflare Access ("CF-Access-Client-Id" /
+	// "CF-Access-Client-Secret"). Valeurs avec interpolation ${VAR}
+	// depuis l'environnement du conteneur (variable absente = erreur
+	// fatale au load — jamais d'identifiant vide silencieux) ;
+	// valeur "" = en-tête supprimé de la requête. Les valeurs ne
+	// sont jamais journalisées.
+	Headers map[string]string `json:"headers,omitempty"`
+	// RewriteRedirects : true = les Location ABSOLUES visant
+	// l'origine du backend sont réécrites vers le host public
+	// (sinon le navigateur quitterait le proxy dès la première
+	// redirection absolue du site cible). Les Location relatives et
+	// celles visant d'autres origines (ex. domaine d'équipe Cloudflare
+	// Access) passent intactes. Défaut : false.
+	RewriteRedirects *bool `json:"rewriteRedirects,omitempty"`
+	// ResponseHeaders : ajustement des en-têtes de réponse (cf.
+	// UpstreamResponseHeaders).
+	ResponseHeaders *UpstreamResponseHeaders `json:"responseHeaders,omitempty"`
+}
+
 type MCPOperation struct {
 	Name        string `json:"name"`
 	OperationID string `json:"operationId"`
@@ -324,6 +376,12 @@ type Route struct {
 	Frontend bool   `json:"frontend,omitempty"`
 	Backend  string `json:"backend"`
 
+	// Upstream : jointure vers un backend hors réseau interne (site
+	// externe proxifié — ex. Cloudflare) : Host, en-têtes statiques
+	// (basic auth, service tokens), réécriture des redirections et
+	// des en-têtes de réponse. Absente = comportement historique.
+	Upstream *UpstreamPolicy `json:"upstream,omitempty"`
+
 	AutoHead bool `json:"autoHead,omitempty"`
 
 	Auth      *AuthPolicy      `json:"auth,omitempty"`
@@ -397,11 +455,94 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// Secrets upstream (${VAR} dans les en-têtes) résolus AVANT la
+	// validation : variable absente = refus de démarrer.
+	if err := cfg.expandUpstreamEnv(); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 
 	return &cfg, nil
+}
+
+// envVarPattern : forme d'interpolation supportée dans les valeurs
+// d'en-têtes upstream — ${NOM} uniquement (jamais $NU, pour ne pas
+// dénaturer une valeur qui contiendrait un $ littéral).
+var envVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// expandEnvVars remplace chaque ${VAR} par la variable d'environnement
+// correspondante. Variable absente = erreur nommée (le gateway refuse
+// de démarrer plutôt que d'envoyer un identifiant vide au backend).
+func expandEnvVars(s string) (string, error) {
+
+	var missing []string
+
+	out := envVarPattern.ReplaceAllStringFunc(s, func(m string) string {
+		name := m[2 : len(m)-1]
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		missing = append(missing, name)
+		return m
+	})
+
+	if len(missing) > 0 {
+		return "", fmt.Errorf(
+			"variable(s) d'environnement absente(s): %s",
+			strings.Join(missing, ", "),
+		)
+	}
+
+	return out, nil
+}
+
+// expandUpstreamEnv résout l'interpolation ${VAR} des en-têtes
+// upstream. Pass ciblé aux seuls blocs upstream (la config est
+// committée dans git : les secrets y entrent par l'environnement du
+// conteneur, jamais en clair) — un passe-générale risquerait de
+// corrompre des patterns regex PWA contenant un '$'.
+func (c *Config) expandUpstreamEnv() error {
+
+	for i := range c.Routes {
+
+		up := c.Routes[i].Upstream
+		if up == nil {
+			continue
+		}
+
+		host := c.Routes[i].Host
+
+		for k, v := range up.Headers {
+			out, err := expandEnvVars(v)
+			if err != nil {
+				return fmt.Errorf(
+					"route %s: upstream.headers[%q]: %v",
+					host, k, err,
+				)
+			}
+			up.Headers[k] = out
+		}
+
+		if up.ResponseHeaders == nil {
+			continue
+		}
+
+		for k, v := range up.ResponseHeaders.Set {
+			out, err := expandEnvVars(v)
+			if err != nil {
+				return fmt.Errorf(
+					"route %s: upstream.responseHeaders.set[%q]: %v",
+					host, k, err,
+				)
+			}
+			up.ResponseHeaders.Set[k] = out
+		}
+	}
+
+	return nil
 }
 
 // validate rejects configs that cannot work at runtime — fail fast at

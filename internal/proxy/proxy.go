@@ -73,9 +73,18 @@ func New(cfg *core.Config) (*Gateway, error) {
 
 		original := rp.Director
 
+		upstream := route.Upstream
+
 		rp.Director = func(req *http.Request) {
 			original(req)
-			//req.Host = u.Host
+			// Policy upstream (site externe proxifié) : Host réécrit
+			// vers l'origine backend + en-têtes statiques (basic
+			// auth, service tokens). Sans policy : comportement
+			// historique — le Host public du navigateur est préservé
+			// (backends du réseau interne).
+			if upstream != nil {
+				applyUpstreamDirector(upstream, u, req)
+			}
 		}
 
 		cr := &compiledRoute{
@@ -119,6 +128,34 @@ func New(cfg *core.Config) (*Gateway, error) {
 				}
 				return nil
 			}
+		}
+
+		//
+		// Upstream response adjustments: absolute redirect Location
+		// rewrite + response headers set/remove. Chained BEFORE the
+		// guard/PWA injections (which only ever touch 200 HTML
+		// bodies), so every existing injector keeps running on top.
+		//
+		if route.Upstream != nil {
+			previous := rp.ModifyResponse
+
+			adjustUpstreamResponse := upstreamResponseModifier(route, u)
+
+			rp.ModifyResponse = func(resp *http.Response) error {
+				if previous != nil {
+					if err := previous(resp); err != nil {
+						return err
+					}
+				}
+				return adjustUpstreamResponse(resp)
+			}
+
+			log.Printf(
+				"UPSTREAM enabled host=%s path=%s backend=%s",
+				route.Host,
+				route.Path,
+				route.Backend,
+			)
 		}
 
 		if route.MCP != nil &&

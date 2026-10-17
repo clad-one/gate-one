@@ -127,6 +127,20 @@
           }
         }
       }
+    },
+    {
+      "host": "correspondances.jacquelot.cladone.com",
+      "path": "/*",
+      "frontend": true,
+      "autoHead": true,
+      "backend": "https://jacquelot.benoit-rolland.workers.dev",
+      "upstream": {
+        "host": true,
+        "headers": {
+          "Authorization": "Basic ${JACQUELOT_BASIC_AUTH}"
+        },
+        "rewriteRedirects": true
+      }
     }
   ]
 }
