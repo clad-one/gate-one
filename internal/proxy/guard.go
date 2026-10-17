@@ -102,14 +102,16 @@ const guardScript = `<script>
   // élément portant un attribut data-gtw-* ignore ces règles
   // (précédence : le markup gagne).
   var UIGATE = %[3]s;
-  // Logout : même hôte que la page de login (auth-bridge) — efface
-  // les cookies ET termine la session SSO (end_session OIDC).
-  var LOGOUT_URL = LOGIN_ORIGIN + "/logout";
   // Badge utilisateur (config userBadge de la route) : onglet au bord
   // supérieur, déplié au survol, claims + déconnexion.
   var USERBADGE = %[4]s;
   var LOGIN_ORIGIN = "";
   try { LOGIN_ORIGIN = new URL(LOGIN).origin; } catch (e) {}
+  // Logout : même hôte que la page de login (auth-bridge) — efface
+  // les cookies ET termine la session SSO (end_session OIDC).
+  // NB : calculé APRÈS l'initialisation de LOGIN_ORIGIN (le bug
+  // "undefined/logout" venait d'un ordre de déclaration inversé).
+  var LOGOUT_URL = LOGIN_ORIGIN + "/logout";
 
   // auth-bridge end page: notifies this page via postMessage then
   // closes the tab.
@@ -316,8 +318,13 @@ const guardScript = `<script>
       "html:not(.cladone-evaluated) [data-gtw-claims]" +
       "{display:none !important}" +
       "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}" +
+      // badge utilisateur : INVISIBLE jusqu'au survol (opacity 0, la
+      // zone du badge reste le déclencheur), déplié au survol ou au
+      // focus clavier
+      ".cladone-userbadge{opacity:0;" +
+      "transition:opacity .2s ease,max-height .25s ease}" +
       ".cladone-userbadge:hover,.cladone-userbadge:focus-within" +
-      "{max-height:24em !important}";
+      "{opacity:1;max-height:24em !important}";
     // voile anti-FOUC des règles uiGate : une règle CSS PAR
     // sélecteur (un sélecteur invalide ne doit tuer que son propre
     // masquage, pas celui des autres)
@@ -401,14 +408,15 @@ const guardScript = `<script>
     if (!badgeEl) {
       badgeEl = document.createElement("div");
       badgeEl.className = "cladone-userbadge";
+      // écart de 12 px avec le bord (haut et côté), angles arrondis
       badgeEl.style.cssText =
-        "position:fixed;top:0;" + pos + ":0;z-index:2147483646;" +
+        "position:fixed;top:12px;" + pos + ":12px;z-index:2147483646;" +
         "background:#20242e;color:#fff;padding:6px 12px;" +
         "font:13px/1.4 system-ui,sans-serif;" +
-        "border-radius:0 0 8px 8px;max-width:280px;" +
+        "border-radius:8px;max-width:280px;" +
         "box-shadow:0 4px 18px rgba(0,0,0,.3);" +
         "max-height:2.3em;overflow:hidden;" +
-        "transition:max-height .25s ease;cursor:default";
+        "transition:opacity .2s ease,max-height .25s ease;cursor:default";
       var tab = document.createElement("div");
       tab.className = "cladone-userbadge-tab";
       badgeEl.appendChild(tab);
