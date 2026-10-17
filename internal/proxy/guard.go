@@ -421,6 +421,16 @@ const guardScript = `<script>
       } catch (e) {
         continue; // sélecteur invalide : règle ignorée
       }
+      if (nodes.length === 0) {
+        // la règle est bien servie par la gateway mais ne matche
+        // AUCUN élément de cette page : probable coquille dans le
+        // sélecteur (#id vs .class…) — signalée pour débogage,
+        // sans effet de bord (fail-open assumé)
+        console.warn(
+          "uiGate: règle sans élément — selector:", rule.selector
+        );
+        continue;
+      }
       for (var j = 0; j < nodes.length; j++) {
         var n = nodes[j];
         if (n.hasAttribute("data-gtw-auth") ||
