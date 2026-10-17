@@ -63,3 +63,58 @@ func TestMCPScopeDeserialization(t *testing.T) {
 		t.Errorf("absent mcp.scope should default to empty, got %q", got)
 	}
 }
+
+// La grammaire est STRICTE : tout champ inconnu (faute de frappe dans
+// un nom de policy, champ prévu mais non implémenté) doit casser le
+// load — jamais de policy ignorée en silence (régression du type
+// autoHead/"headFallback"). NB : le décodage Go est insensible à la
+// casse sur les tags ("autohead" matche "autoHead") — la stricte ne
+// rejette que les noms réellement inconnus.
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"routes": [
+			{"host": "a.local", "path": "/*", "backend": "http://x",
+			 "headFallback": true}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Error("headFallback (nom inconnu) doit être rejeté, load accepté")
+	}
+}
+
+func TestLoadAllowsSchemaKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"$schema": "./api-routes.schema.json",
+		"routes": [
+			{"host": "a.local", "path": "/*", "backend": "http://x"}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("$schema doit être accepté: %v", err)
+	}
+	if len(c.Routes) != 1 {
+		t.Errorf("routes = %d, want 1", len(c.Routes))
+	}
+}
+
+// La config RÉELLE de production doit passer la grammaire stricte.
+func TestLoadRealConfigStrict(t *testing.T) {
+	c, err := Load("../../api-routes.json")
+	if err != nil {
+		t.Fatalf("api-routes.json réel invalide: %v", err)
+	}
+	if len(c.Routes) == 0 {
+		t.Error("aucune route chargée")
+	}
+}

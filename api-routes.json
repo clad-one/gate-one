@@ -1,4 +1,5 @@
 {
+  "$schema": "./api-routes.schema.json",
   "routes": [    
     {
       "host": "gram.cladone.com",

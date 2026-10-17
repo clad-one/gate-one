@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -297,6 +298,10 @@ type Route struct {
 }
 
 type Config struct {
+	// $schema : référence optionnelle vers api-routes.schema.json
+	// (autocomplétion/validation éditeur) — ignorée au runtime.
+	Schema string `json:"$schema,omitempty"`
+
 	Routes []Route `json:"routes"`
 }
 
@@ -309,7 +314,13 @@ func Load(path string) (*Config, error) {
 
 	var cfg Config
 
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	// Stricte : tout champ inconnu (typiquement une faute de frappe
+	// dans un nom de policy) est rejeté au load plutôt que
+	// silencieusement ignoré.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&cfg); err != nil {
 
 		if se, ok := err.(*json.SyntaxError); ok {
 
