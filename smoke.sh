@@ -99,6 +99,15 @@ class H(BaseHTTPRequestHandler):
                 'Location', parse_qs(u.query).get('loc', ['/'])[0])
             self.send_header('Content-Length', '0')
             self.end_headers()
+        elif u.path == '/gz':
+            import io
+            import gzip as gz
+            buf = io.BytesIO()
+            with gz.GzipFile(fileobj=buf, mode='wb') as f:
+                f.write(b'<html><head><title>gz</title></head>'
+                        b'<body>gzip-ok</body></html>')
+            self._send(200, 'text/html; charset=utf-8', buf.getvalue(),
+                       extra={'Content-Encoding': 'gzip'})
         elif u.path == '/page':
             b = b'<html><head><title>upstream smoke</title></head><body>x</body></html>'
             self._send(200, 'text/html; charset=utf-8', b, extra={
@@ -171,21 +180,32 @@ fail() {
 
 step() { echo "… $1" >&2; }
 
+# grep_body : match dans un corps ENTIÈREMENT lu d'abord. Jamais de
+# `curl | grep -q` en tête de pipe : grep -q sort au premier match →
+# SIGPIPE aléatoire sur curl → pipefail → check floppant selon le
+# scheduling (corps ~28 Ko avec la garde : course fréquente).
+grep_body() {
+  local pattern=$1; shift
+  local body
+  body=$(curl -sf "$@") || return 1
+  grep -q "$pattern" <<<"$body"
+}
+
 step "injection HTML"
-curl -sf -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/" \
-    | grep -q '<link rel="manifest" href="/__gateway_pwa/manifest.json">' \
+grep_body '<link rel="manifest" href="/__gateway_pwa/manifest.json">' \
+    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/" \
     || fail "manifest link not injected in HTML"
 
-curl -sf -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/manifest.json" \
-    | grep -q '"name": "SmokeApp"' \
+grep_body '"name": "SmokeApp"' \
+    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/manifest.json" \
     || fail "manifest not served / wrong name"
 
-curl -sf -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/sw.js" \
-    | grep -q "modulePathPrefix: '/__gateway_pwa/workbox/'" \
+grep_body "modulePathPrefix: '/__gateway_pwa/workbox/'" \
+    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/sw.js" \
     || fail "sw.js not self-hosted"
 
-curl -sf -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/workbox/workbox-sw.js" \
-    | grep -q "workbox" \
+grep_body "workbox" \
+    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/workbox/workbox-sw.js" \
     || fail "embedded workbox runtime not served"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: smoke.local" \
@@ -204,15 +224,14 @@ grep -q "smoke-scope" "$scopes_tmp" \
 # 2) sans Authorization, la gateway répond 401 avec un challenge Bearer
 #    portant le scope configuré
 challenge=$(curl -s -D - -o /dev/null -H "Host: mcp.smoke.local" \
-    "http://127.0.0.1:${PORT_GW}/mcp" \
-    | grep -i '^www-authenticate:' | tr -d '\r')
-echo "$challenge" | grep -q 'scope="smoke-scope"' \
+    "http://127.0.0.1:${PORT_GW}/mcp")
+grep -i '^www-authenticate:' <<<"$challenge" | grep -q 'scope="smoke-scope"' \
     || fail "401 challenge missing configured scope: $challenge"
 
 # 3) la metadata annonce le scope configuré
 metadata=$(curl -sf -H "Host: mcp.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/.well-known/oauth-protected-resource")
-echo "$metadata" | grep -q '"scopes_supported":\["smoke-scope"\]' \
+grep -q '"scopes_supported":\["smoke-scope"\]' <<<"$metadata" \
     || fail "metadata scopes_supported wrong: $metadata"
 
 # --- Policy upstream (site externe proxifié) ---
@@ -222,31 +241,46 @@ step "upstream : Host réécrit, header statique, redirects, responseHeaders"
 #    la gateway (interpolation ${SMOKE_UPSTREAM_TOKEN}) + X-Strip-Me retiré
 echo_result=$(curl -sf -H "Host: upstream.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/echo")
-echo "$echo_result" | grep -q "\"host\": \"127.0.0.1:${PORT_BE}\"" \
+grep -q "\"host\": \"127.0.0.1:${PORT_BE}\"" <<<"$echo_result" \
     || fail "Host upstream non réécrit: $echo_result"
-echo "$echo_result" | grep -q '"authorization": "Basic YmFzaWMtdG9rZW4="' \
+grep -q '"authorization": "Basic YmFzaWMtdG9rZW4="' <<<"$echo_result" \
     || fail "Authorization statique non injectée: $echo_result"
-echo "$echo_result" | grep -q '"strip_present": false' \
+grep -q '"strip_present": false' <<<"$echo_result" \
     || fail "X-Strip-Me (valeur vide) non retiré: $echo_result"
 
 # 2) Location absolue de l'origine backend ramenée au host public
-loc=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
-    "http://127.0.0.1:${PORT_GW}/redirect?loc=http%3A%2F%2F127.0.0.1%3A${PORT_BE}%2Fcible%2F%3Fa%3D1" \
-    | grep -i '^location:' | tr -d '\r' | awk '{print $2}')
+resp_redirect=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
+    "http://127.0.0.1:${PORT_GW}/redirect?loc=http%3A%2F%2F127.0.0.1%3A${PORT_BE}%2Fcible%2F%3Fa%3D1")
+loc=$(grep -i '^location:' <<<"$resp_redirect" | tr -d '\r' | awk '{print $2}')
 [ "$loc" = "https://upstream.smoke.local/cible/?a=1" ] \
     || fail "Location non réécrite: '$loc'"
 
 # 3) CSP du backend retiré + en-tête de réponse posé
-resp_headers=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
+resp_page=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/page")
-echo "$resp_headers" | grep -qi '^content-security-policy:' \
+grep -qi '^content-security-policy:' <<<"$resp_page" \
     && fail "CSP d'origine non retiré"
-echo "$resp_headers" | grep -qi '^x-gateway-smoke: upstream' \
+grep -qi '^x-gateway-smoke: upstream' <<<"$resp_page" \
     || fail "X-Gateway-Smoke non posé"
 
 # 4) le script de garde reste injecté sur le HTML proxifié
-curl -sf -H "Host: upstream.smoke.local" "http://127.0.0.1:${PORT_GW}/page" \
-    | grep -q '__cladoneAuthGuard' \
+grep_body '__cladoneAuthGuard' \
+    -H "Host: upstream.smoke.local" "http://127.0.0.1:${PORT_GW}/page" \
     || fail "garde non injectée sur le site upstream"
+
+# 5) HTML servi gzip par l'origine, client qui offre gzip+br (comme
+#    un navigateur) : la réponse doit arriver EN CLAIR avec la garde —
+#    jamais un corps compressé manipulé (incident 2026-10-17 :
+#    Cloudflare répondait brotli → page illisible malgré le 200).
+grep_body 'gzip-ok' \
+    -H "Host: upstream.smoke.local" \
+    -H "Accept-Encoding: gzip, deflate, br, zstd" \
+    "http://127.0.0.1:${PORT_GW}/gz" \
+    || fail "HTML gzip non décompressé (page illisible)"
+grep_body '__cladoneAuthGuard' \
+    -H "Host: upstream.smoke.local" \
+    -H "Accept-Encoding: gzip, deflate, br, zstd" \
+    "http://127.0.0.1:${PORT_GW}/gz" \
+    || fail "garde non injectée sur le HTML gzip"
 
 echo "SMOKE OK"

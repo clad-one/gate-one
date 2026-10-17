@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -26,10 +28,11 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"host":          r.Host,
-			"authorization": r.Header.Get("Authorization"),
-			"custom":        r.Header.Get("X-Custom"),
-			"strip_present": len(r.Header.Values("X-Strip-Me")) > 0,
+			"host":            r.Host,
+			"authorization":   r.Header.Get("Authorization"),
+			"custom":          r.Header.Get("X-Custom"),
+			"strip_present":   len(r.Header.Values("X-Strip-Me")) > 0,
+			"accept-encoding": r.Header.Get("Accept-Encoding"),
 		})
 	})
 
@@ -41,6 +44,39 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte("<html><head></head><body>x</body></html>"))
+	})
+
+	// HTML servi gzip (Content-Encoding: gzip) — simule une origine
+	// qui compresse (Cloudflare le fait systématiquement).
+	mux.HandleFunc("/gz", func(w http.ResponseWriter, r *http.Request) {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		_, _ = zw.Write([]byte(
+			"<html><head><title>gz</title></head><body>gzip-ok</body></html>"))
+		zw.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(buf.Bytes())
+	})
+
+	// « brotli » (octets quelconques) : JAMAIS décodable en stdlib —
+	// la réponse doit traverser intacte, sans injection.
+	mux.HandleFunc("/br", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "br")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte{0x1b, 0x02, 0x00, 0x00, 0x00})
+	})
+
+	// Asset JS servi gzip : non-HTML, jamais touché par la
+	// décompression (passthrough compressé jusqu'au navigateur).
+	mux.HandleFunc("/app.gz.js", func(w http.ResponseWriter, r *http.Request) {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		_, _ = zw.Write([]byte("console.log('gz');"))
+		zw.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Type", "application/javascript")
+		_, _ = w.Write(buf.Bytes())
 	})
 
 	srv := httptest.NewServer(mux)
@@ -334,5 +370,134 @@ func TestUpstreamAuthStillEnforced(t *testing.T) {
 	}
 	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, LoginPageURL) {
 		t.Errorf("Location = %q, want préfixe %q", loc, LoginPageURL)
+	}
+}
+
+// --- Compression (incident 2026-10-17 : Cloudflare répondait brotli
+// au navigateur, l'injecteur manipulait le corps compressé → page
+// illisible malgré un 200). ---
+
+// Route injectable + origine qui répond gzip : le navigateur reçoit
+// du HTML EN CLAIR (décompressé), garde injectée, Content-Encoding
+// retiré — quoi qu'offre le navigateur.
+func TestInjectableRouteServesPlainHTMLFromGzip(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true}
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/gz", map[string]string{
+		"Accept-Encoding": "gzip, deflate, br, zstd",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Encoding"); got != "" {
+		t.Errorf("Content-Encoding survit: %q (page illisible)", got)
+	}
+	b := body(t, resp)
+	if !strings.Contains(b, "gzip-ok") {
+		t.Errorf("HTML non décompressé: %.80q", b)
+	}
+	if !strings.Contains(b, "__cladoneAuthGuard") {
+		t.Error("garde non injectée sur le HTML gzip décompressé")
+	}
+}
+
+// Route injectable : l'Accept-Encoding sortant est FORCÉ à gzip
+// (décodable en stdlib — brotli/zstd ne le sont pas), quel que soit
+// l'offre du navigateur.
+func TestInjectableRouteForcesAcceptEncodingGzip(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true}
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/echo", map[string]string{
+		"Accept-Encoding": "br, zstd",
+	})
+	if got := echoOf(t, resp)["accept-encoding"]; got != "gzip" {
+		t.Errorf("Accept-Encoding upstream = %v, want gzip", got)
+	}
+}
+
+// Route NON injectable (API sans garde/PWA) : l'Accept-Encoding du
+// client traverse tel quel (passthrough optimal inchangé).
+func TestNonInjectedRouteKeepsClientAcceptEncoding(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*",
+			"backend": "BACKEND"
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/echo", map[string]string{
+		"Accept-Encoding": "br, zstd",
+	})
+	if got := echoOf(t, resp)["accept-encoding"]; got != "br, zstd" {
+		t.Errorf("Accept-Encoding upstream = %v, want br, zstd (intact)", got)
+	}
+}
+
+// Contenu indécodable (brotli qui aurait franchi le forçage) : la
+// réponse passe INTACTE — jamais d'octets compressés manipulés, pas
+// de garde injectée dedans.
+func TestIndecodableEncodingPassthrough(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true}
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/br", nil)
+	if got := resp.Header.Get("Content-Encoding"); got != "br" {
+		t.Errorf("Content-Encoding = %q, want br (intact)", got)
+	}
+	b := body(t, resp)
+	if !strings.Contains(b, "__cladoneAuthGuard") {
+		t.Logf("corps brotli servi tel quel (garde absente, attendu)")
+	}
+}
+
+// Asset non-HTML servi gzip : jamais décompressé — passthrough
+// compressé jusqu'au navigateur (Content-Encoding préservé).
+func TestGzippedAssetPassthrough(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true}
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/app.gz.js", map[string]string{
+		"Accept-Encoding": "gzip, br",
+	})
+	if got := resp.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Errorf("Content-Encoding = %q, want gzip (asset intact)", got)
+	}
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("corps asset n'est plus du gzip valide: %v", err)
+	}
+	dec, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dec), "console.log('gz');") {
+		t.Errorf("contenu asset corrompu: %.60q", dec)
 	}
 }

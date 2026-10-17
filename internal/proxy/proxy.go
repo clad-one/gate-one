@@ -89,8 +89,22 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 		upstream := route.Upstream
 
+		// Les injections corps (garde 401/403, PWA) exigent du HTML
+		// EN CLAIR : le stdlib Go ne décode ni brotli ni zstd — si le
+		// navigateur les offre et que l'origine répond avec, un corps
+		// compressé manipulé + Content-Encoding supprimé = page
+		// illisible. On force donc gzip en amont (décodable) ; la
+		// décompression a lieu dans ModifyResponse, avant la chaîne
+		// d'injection. Sans injection : Accept-Encoding du client
+		// traverse tel quel (passthrough optimal).
+		injectsBody := guardEnabledFor(route) ||
+			(route.PWA != nil && route.PWA.Enabled)
+
 		rp.Director = func(req *http.Request) {
 			original(req)
+			if injectsBody {
+				req.Header.Set("Accept-Encoding", "gzip")
+			}
 			// Policy upstream (site externe proxifié) : Host réécrit
 			// vers l'origine backend + en-têtes statiques (basic
 			// auth, service tokens). Sans policy : comportement
@@ -214,6 +228,48 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		}
 
 		routes = append(routes, cr)
+
+		// Wrapper décompression, installé en DERNIER = exécuté en
+		// PREMIER dans la chaîne (garde → upstream → pwa ensuite) :
+		// le HTML gzip de l'origine est servi en clair aux injecteurs.
+		// Un encodage indécodable (brotli/zstd qui auraient franchi
+		// le forçage amont) n'est JAMAIS manipulé : passthrough.
+		if injectsBody {
+			previous := rp.ModifyResponse
+
+			rp.ModifyResponse = func(resp *http.Response) error {
+				if resp.StatusCode != http.StatusOK ||
+					!strings.Contains(
+						resp.Header.Get("Content-Type"),
+						"text/html",
+					) {
+					return previous(resp)
+				}
+
+				switch enc := resp.Header.Get("Content-Encoding"); enc {
+				case "", "identity":
+					// déjà en clair
+				case "gzip":
+					if err := decodeGzipBody(resp); err != nil {
+						log.Printf(
+							"GUNZIP failed host=%s: %v",
+							route.Host,
+							err,
+						)
+						return err
+					}
+				default:
+					log.Printf(
+						"INJECTION skipped host=%s: Content-Encoding %q indécodable — réponse servie telle quelle",
+						route.Host,
+						enc,
+					)
+					return nil
+				}
+
+				return previous(resp)
+			}
+		}
 
 	}
 
