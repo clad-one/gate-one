@@ -23,12 +23,21 @@ try {
   process.exit(1);
 }
 
-// 2. la garde servie est celle du source (anti périmé)
-const sourceGuard = renderGuard();
+// 2. la garde servie est celle du source (anti périmé) : on ré-rend
+// le source avec les MÊMES arguments que la page (config réelle)
+// puis on compare — un écart = code périmé déployé.
+const arg = (re) => (servedGuard.match(re) || [])[1];
+const servedArgs = {
+  loginUrl: arg(/var LOGIN = "(.*)";/),
+  authState: arg(/var AUTH_STATE = "(.*)";/),
+  uiGate: arg(/var UIGATE = (.*);/) || "[]",
+  userBadge: arg(/var USERBADGE = (.*);/) || "null",
+};
+const sourceGuard = renderGuard(servedArgs);
 if (servedGuard === sourceGuard) {
-  ok("garde servie = garde du source (pas de périmé)");
+  ok("garde servie = garde du source (mêmes arguments — pas de périmé)");
 } else {
-  fail("garde servie DIFFÉRENTE du source — deploy en retard ? (reloader la page / re-déployer)");
+  fail("garde servie DIFFÉRENTE du source (mêmes arguments) — deploy en retard ou divergent");
 }
 
 // 3. comportement : anonyme → clic before → login appelé
