@@ -18,8 +18,8 @@ const LoginPageURL = "https://login.cladone.com/login"
 // AuthStatePath is the gateway-served session probe: 204 when the
 // caller holds a valid session (Bearer header or cookies), 401
 // otherwise. Never proxied. Consumed by the injected guard script
-// for the declarative [data-cladone-auth] gating. MUST match the
-// path hardcoded in guardScript below.
+// for the declarative [data-gtw-auth] / [data-gtw-auth-hidden]
+// gating. MUST match the path hardcoded in guardScript below.
 const AuthStatePath = "/__gateway/auth"
 
 // guardScript is injected into HTML responses of frontend routes. It
@@ -33,8 +33,7 @@ const AuthStatePath = "/__gateway/auth"
 //     banner ("Se connecter" / ×) is shown: mid-flow 401s never open
 //     a tab automatically (a background 401 must not steal focus).
 //     The tab opens only on an explicit click: a
-//     data-cladone-auth="login" element (locked padlock) or the
-//     banner button. Dismissing resolves the pending requests with
+//     data-gtw-auth="before" element or the banner button. Dismissing resolves the pending requests with
 //     their original 401 response (the app continues anonymously,
 //     retryable later) and login() promises resolve false ;
 //   - when the tab opens from the banner button, the click is a
@@ -251,15 +250,12 @@ const guardScript = `<script>
     flushQueue();
   });
 
-  // == Declarative gating: [data-cladone-auth] ========================
-  //   bare attribute (any value but "login"): hidden while anonymous,
-  //     shown once the session is active ;
-  //   data-cladone-auth="login": shown while anonymous, click opens
-  //     the login tab ; hidden once authed.
-  // Zero app code: applications DECLARE gated elements, the gateway
-  // toggles them. Applications using no attribute are fully
-  // transparent: authentication happens mid-flow through the fetch
-  // wrapper above, nothing is hidden.
+  // == Declarative gating: [data-gtw-auth] + [data-gtw-auth-hidden] ==
+  //   Two orthogonal dimensions (see the click handler below for the
+  //   behavior matrix). Zero app code: applications DECLARE, the
+  //   gateway toggles. Applications using no attribute are fully
+  //   transparent: authentication happens mid-flow through the fetch
+  //   wrapper above, nothing is hidden.
   var authed = false;
   var probeDone = false;
   var stateWaiters = [];
