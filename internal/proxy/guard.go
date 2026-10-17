@@ -423,13 +423,47 @@ const guardScript = `<script>
     if (!badgeEl) {
       badgeEl = document.createElement("div");
       badgeEl.className = "cladone-userbadge";
+      // typographie adaptative : épouser le site hôte — médiane des
+      // tailles calculées des éléments de texte (repli : body, puis
+      // 13px), bornée 11-15px ; TOUTES les dimensions du badge sont
+      // en em et suivent. 13px en dur était trop grand sur un site à
+      // typographie fine (livre pré-paginé) et juste sur vers.
+      var fs = 13;
+      try {
+        var sizes = [];
+        var sample = document.querySelectorAll(
+          "p,li,td,th,blockquote,dd,figcaption"
+        );
+        for (var si = 0;
+             si < sample.length && sizes.length < 50;
+             si++) {
+          var sfs = parseFloat(
+            getComputedStyle(sample[si]).fontSize
+          );
+          if (isFinite(sfs) && sfs > 0) sizes.push(sfs);
+        }
+        var siteFs;
+        if (sizes.length) {
+          sizes.sort(function (a, b) { return a - b; });
+          siteFs = sizes[Math.floor(sizes.length / 2)];
+        } else {
+          siteFs = parseFloat(
+            getComputedStyle(document.body).fontSize
+          );
+        }
+        if (isFinite(siteFs) && siteFs > 0) {
+          fs = Math.min(Math.max(siteFs * 0.9, 11), 15);
+        }
+      } catch (e) { /* mesure impossible : défaut 13px */ }
+      fs = Math.round(fs * 10) / 10;
       // collé au bord du HAUT, écart latéral de 12 px, angles
       // arrondis en bas seulement (il touche le haut)
       badgeEl.style.cssText =
         "position:fixed;top:0;" + pos + ":12px;z-index:2147483646;" +
-        "background:#20242e;color:#fff;padding:6px 12px;" +
-        "font:13px/1.4 system-ui,sans-serif;" +
-        "border-radius:0 0 8px 8px;max-width:280px;" +
+        "background:#20242e;color:#fff;padding:.46em .92em;" +
+        "font:" + fs + "px/1.4 system-ui,sans-serif;" +
+        "text-align:left;" +
+        "border-radius:0 0 .62em .62em;max-width:21.5em;" +
         "box-shadow:0 4px 18px rgba(0,0,0,.3);" +
         "max-height:2.3em;overflow:hidden;" +
         "transition:opacity .2s ease,max-height .25s ease;cursor:default";
@@ -438,7 +472,7 @@ const guardScript = `<script>
       badgeEl.appendChild(tab);
       var body = document.createElement("div");
       body.className = "cladone-userbadge-body";
-      body.style.cssText = "padding:6px 0 2px 0";
+      body.style.cssText = "padding:.46em 0 .15em 0";
       badgeEl.appendChild(body);
       document.body.appendChild(badgeEl);
       // manifestation discrète post-login : déplié 2 s puis escamoté
@@ -467,7 +501,7 @@ const guardScript = `<script>
     btn.type = "button";
     btn.textContent = USERBADGE.logoutLabel || "D\u00e9connexion";
     btn.style.cssText =
-      "margin-top:6px;border:0;border-radius:6px;padding:5px 10px;" +
+      "margin-top:.46em;border:0;border-radius:.46em;padding:.38em .77em;" +
       "cursor:pointer;font:inherit;color:#fff;background:#a04040";
     btn.onclick = function () {
       location.href = LOGOUT_URL + "?returnTo=" +
