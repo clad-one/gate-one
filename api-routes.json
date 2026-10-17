@@ -134,6 +134,12 @@
       "frontend": true,
       "autoHead": true,
       "backend": "https://jacquelot.benoit-rolland.workers.dev",
+      "auth": {},
+      "userBadge": {
+        "position": "right",
+        "claims": ["preferred_username", "email", "email_verified"],
+        "logoutLabel": "Déconnexion"
+      },
       "upstream": {
         "host": true,
         "headers": {
