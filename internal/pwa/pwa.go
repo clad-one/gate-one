@@ -20,6 +20,15 @@ import (
 // Virtual prefix served by the gateway itself, before any route proxying.
 const PathPrefix = "/__gateway_pwa/"
 
+// SwURL : URL du service worker unifié (PWA et/ou réécriture client),
+// servi par la gateway en pré-authentification, pass-through no-cache,
+// scope demandé '/'. Partagé par l'injection PWA et le script de
+// garde.
+const SwURL = PathPrefix + "sw.js"
+
+// SwFile : composant du chemin du SW sous le préfixe virtuel.
+const SwFile = "sw.js"
+
 //go:embed workbox
 var workboxFS embed.FS
 
@@ -42,13 +51,38 @@ func apiCachePolicyJSON(c any) []byte {
 	return data
 }
 
-type Handler struct {
-	policy *core.PWAPolicy
+// RewriteSpec : données de réécriture client (upstream.rewriteBody de
+// la route), sérialisées dans le service worker généré. Origins sont
+// les hosts d'origine dont les URLs absolues sont interceptées ;
+// Target la base de remplacement par défaut ("https://host.public") ;
+// Except les exceptions de préfixe de chemin (triées : préfixe le plus
+// long d'abord), dont les entrées sans To restent à l'origine.
+type RewriteSpec struct {
+	Origins []string             `json:"origins"`
+	Target  string               `json:"target"`
+	Except  []core.RewriteExcept `json:"except,omitempty"`
 }
 
-func New(policy *core.PWAPolicy) *Handler {
-	return &Handler{policy: policy}
+type Handler struct {
+	policy *core.PWAPolicy
+	rw     *RewriteSpec
 }
+
+// New construit le handler client-runtime d'une route. policy=nil (ou
+// désactivée) avec rw non nil = SW purement pass-through de réécriture
+// (aucun cache) ; policy active = SW workbox complet, avec la
+// réécriture branchée au-dessus quand rw est fourni (paramètre
+// optionnel — les routes non rewritées ne le passent pas).
+func New(policy *core.PWAPolicy, rw ...*RewriteSpec) *Handler {
+	h := &Handler{policy: policy}
+	if len(rw) > 0 {
+		h.rw = rw[0]
+	}
+	return h
+}
+
+// rwEnabled : la route porte-t-elle la réécriture client ?
+func (h *Handler) rwEnabled() bool { return h.rw != nil }
 
 func (h *Handler) manifest() []byte {
 
@@ -104,6 +138,14 @@ func (h *Handler) manifest() []byte {
 // route declares an apiCache policy, API responses (POST/SSE included)
 // are cached keyed by request and replayed offline.
 func (h *Handler) swJS() string {
+
+	// SW pass-through de réécriture (rewriteBody sans PWA) : aucune
+	// mise en cache, aucune interception hors cibles ; seule la
+	// politique de réécriture de la route pilote les fetch.
+	if h.rwEnabled() && (h.policy == nil || !h.policy.Enabled) {
+		return h.plainRewriteSW()
+	}
+
 	// Passe 1 : générer le corps avec le placeholder CACHE_VERSION.
 	// Ce hash ne versionne que ASSETS_CACHE (pages/scripts/styles).
 	// Les caches API sont versionnés indépendamment, par endpoint :
@@ -188,6 +230,24 @@ self.addEventListener('fetch', () => {}); // no-op: forcer l'attachement du list
 	// déploiement (la gateway supporte tout serveur d'authentification).
 	body = strings.ReplaceAll(body, "@@NETWORK_ONLY@@", h.networkOnlyJS())
 
+	// Réécriture client (upstream.rewriteBody) : données + interception
+	// raw, insérées AVANT routes workbox. Celles-ci excluent les cibles
+	// de réécriture — sinon double respondWith (listener raw + router)
+	// et cache cross-origin erroné. Le JSON de config fait partie du
+	// hash du SW : reconfigurer rewriteBody renouvelle les caches.
+	if h.rwEnabled() {
+		body = strings.ReplaceAll(
+			body,
+			"if (workbox) {",
+			h.rewritePreludeJS()+"\nif (workbox) {",
+		)
+		body = strings.ReplaceAll(
+			body,
+			"({request}) => request.destination === 'document'",
+			"({url, request}) => !rwMatch(url) && request.destination === 'document'",
+		)
+	}
+
 	// Passe 2 : hash du corps (placeholder inclus), puis substitution.
 	version := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))[:8]
 	body = strings.ReplaceAll(body, "@@CACHE_VERSION@@", version)
@@ -195,6 +255,116 @@ self.addEventListener('fetch', () => {}); // no-op: forcer l'attachement du list
 	js := `// Généré par la gateway — workbox ` + workboxVersion + ` auto-hébergé
 // version caches: ` + version + "\n" + body
 	return js
+}
+
+// SwJS : le service worker généré, exposé aux tests externes (la
+// commande interne reste swJS).
+func (h *Handler) SwJS() string { return h.swJS() }
+
+// rwData marshale la politique de réécriture en objet JSON pour les
+// payloads clients (SW).
+func (h *Handler) rwData() string { return core.AsciiJSON(h.rw, "{}") }
+
+// rewritePreludeJS : bloc injecté dans le SW workbox quand la route
+// porte upstream.rewriteBody — données RW + fonction de matching +
+// listener fetch raw. Le listener est DECLARÉ AVANT les routes
+// workbox (ordre d'écriture du corps) et les matchers workbox excluent
+// les cibles RW : une URL cible n'est jamais touchée par les caches
+// (premier matching gagne sinon), et seul ce listener répond avec la
+// requête réécrite (pas de double respondWith).
+//
+// Matching = sémantique rewriteBody : hostname d'origine (sans port,
+// cf. url.hostname), préfixe de chemin le plus long d'abord ; entrée
+// avec "to" → host alternatif, entrée sans "to" → null (le fetch part
+// tel quel à l'origine : exception de lecture), sinon → Target. La
+// requête réécrite conserve méthode/entêtes/corps (new Request) ;
+// aucun cache ne la touche : interception = re-fetch vers la gateway.
+func (h *Handler) rewritePreludeJS() string {
+	return `
+// == Réécriture client (upstream.rewriteBody) ==
+const RW = ` + h.rwData() + `;
+
+function rwMatch(url) {
+  if (RW.origins.indexOf(url.hostname) === -1) return null;
+  for (var i = 0; i < RW.except.length; i++) {
+    if (RW.except[i].path &&
+        url.pathname.indexOf(RW.except[i].path) === 0) {
+      return RW.except[i].to || null; // exception : alternative ou reste à l'origine
+    }
+  }
+  return RW.target; // réécriture standard vers le host public
+}
+
+self.addEventListener('fetch', (event) => {
+  let url, base;
+  try {
+    url = new URL(event.request.url);
+    base = rwMatch(url);
+  } catch (e) { return; }
+  if (!base) return; // hors cibles : laisses aux routes existantes
+  try {
+    const target = new URL(base);
+    target.pathname = url.pathname;
+    target.search = url.search;
+    event.respondWith(fetch(new Request(target, event.request)));
+  } catch (e) {
+    // corps/mode non réinscriptibles : requête au réseau normal
+  }
+});
+`
+}
+
+// plainRewriteSW : service worker PUREMENT pass-through de réécriture
+// (route avec upstream.rewriteBody et sans PWA service worker) : pas
+// de workbox, AUCUN cache, aucun matching hors cibles RW — skipWaiting
+// + clients.claim pour prendre la main dès l'installation (même
+// mécanique de version que le SW PWA : le contenu changeant déclenche
+// l'update).
+func (h *Handler) plainRewriteSW() string {
+	return `// Généré par la gateway — service worker pass-through de réécriture.
+// Aucune mise en cache, aucune interception hors cibles RW ; les
+// appels (fetch/XHR/…) vers les hosts d'origine du site repartent
+// vers le host public (passage par la gateway : sessions et quotas
+// applicables). Les exceptions de préfixe (RW.except) restent à
+// l'origine ou pointent leur host alternatif.
+const RW = ` + h.rwData() + `
+
+function rwMatch(url) {
+  if (RW.origins.indexOf(url.hostname) === -1) return null;
+  for (var i = 0; i < RW.except.length; i++) {
+    if (RW.except[i].path &&
+        url.pathname.indexOf(RW.except[i].path) === 0) {
+      return RW.except[i].to || null; // exception : alternative ou reste à l'origine
+    }
+  }
+  return RW.target;
+}
+
+self.skipWaiting();
+
+self.addEventListener('activate', (event) => {
+  // claim immédiat : prenant le contrôle des pages ouvertes, la
+  // fenêtre d'appels partis à l'origine avant contrôle se referme.
+  event.waitUntil(self.clients.claim());
+});
+
+self.addEventListener('fetch', (event) => {
+  let url, base;
+  try {
+    url = new URL(event.request.url);
+    base = rwMatch(url);
+  } catch (e) { return; }
+  if (!base) return; // hors cibles (ou exceptions à l'origine)
+  try {
+    const target = new URL(base);
+    target.pathname = url.pathname;
+    target.search = url.search;
+    event.respondWith(fetch(new Request(target, event.request)));
+  } catch (e) {
+    // corps/mode non réinscriptibles : requête au réseau normal
+  }
+});
+`
 }
 
 // networkOnlyJS generates the "never cache" catch-all route declared
@@ -225,7 +395,12 @@ func (h *Handler) networkOnlyJS() string {
   // jamais rejouées — authentification, callbacks OAuth/OIDC avec codes
   // à usage unique, tout ce que la configuration du déploiement exclut.
   workbox.routing.registerRoute(
-    ({url}) => ` + tests.String() + `,
+    ({url}) => ` + tests.String() + (func() string {
+		if h.rwEnabled() {
+			return " && !rwMatch(url)"
+		}
+		return ""
+	}()) + `,
     new workbox.strategies.NetworkOnly()
   );` + "\n"
 }
@@ -416,7 +591,12 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
   });` + patternDecls + `
 
   workbox.routing.registerRoute(
-    ({url}) => url.pathname.startsWith('/')` + checks.String() + patternTests + `,
+    ({url}) => url.pathname.startsWith('/')` + checks.String() + patternTests + (func() string {
+		if h.rwEnabled() {
+			return " && !rwMatch(url)"
+		}
+		return ""
+	}()) + `,
     async ({event}) => {
       const req = event.request;
       if (req.method !== 'GET') {
@@ -524,7 +704,15 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
   });
 
   workbox.routing.registerRoute(
-    ({url}) => url.pathname === '` + c.Path + `',
+    ({url}) => ` + (func() string {
+		// une route d'endpoint déclarée ne cible jamais une cible de
+		// réécriture : hostname + path identiques au cross-origin sont
+		// possibles, et le premier matching gagnerait sinon
+		if h.rwEnabled() {
+			return "!rwMatch(url) && "
+		}
+		return ""
+	}()) + `url.pathname === '` + c.Path + `',
     async ({event}) => {
       console.log('[gateway-pwa] route apiCache interceptée:', event.request.method, event.request.url);
       const req = event.request;
@@ -721,12 +909,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch rest {
 	case "manifest.json":
+		// Route sans PWA (rewriteBody seul) : pas de manifeste — le
+		// SW reste disponible (sw.js) et le workbox runtime sert un
+		// 404 identique à avant.
+		if h.policy == nil {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/manifest+json")
 		w.Header().Set("Cache-Control", "no-cache")
 		_, _ = w.Write(h.manifest())
 		return
 
-	case "sw.js":
+	case SwFile:
 		// A service worker must never be cached stale; the browser
 		// re-checks it to detect updates.
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")

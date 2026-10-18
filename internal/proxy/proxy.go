@@ -152,16 +152,20 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 		upstream := route.Upstream
 
-		// Les injections corps (garde 401/403, PWA) exigent du HTML
-		// EN CLAIR : le stdlib Go ne décode ni brotli ni zstd — si le
-		// navigateur les offre et que l'origine répond avec, un corps
-		// compressé manipulé + Content-Encoding supprimé = page
-		// illisible. On force donc gzip en amont (décodable) ; la
-		// décompression a lieu dans ModifyResponse, avant la chaîne
-		// d'injection. Sans injection : Accept-Encoding du client
-		// traverse tel quel (passthrough optimal).
+		// Les injections corps (garde 401/403, PWA, réécriture des
+		// URLs d'origine) exigent du HTML EN CLAIR : le stdlib Go ne
+		// décode ni brotli ni zstd — si le navigateur les offre et
+		// que l'origine répond avec, un corps compressé manipulé +
+		// Content-Encoding supprimé = page illisible. On force donc
+		// gzip en amont (décodable) ; la décompression a lieu dans
+		// ModifyResponse, avant la chaîne d'injection. Sans
+		// injection : Accept-Encoding du client traverse tel quel
+		// (passthrough optimal).
+		rwPlan := rewritePlanFor(route, u)
+
 		injectsBody := guardEnabledFor(route) ||
-			(route.PWA != nil && route.PWA.Enabled)
+			(route.PWA != nil && route.PWA.Enabled) ||
+			rwPlan != nil
 
 		rp.Director = func(req *http.Request) {
 			original(req)
@@ -200,6 +204,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 				AuthStatePath,
 				uiGateJSON(route),
 				userBadgeJSON(route),
+				rewriteGuardJSON(route, u),
 			)
 			rp.ModifyResponse = func(resp *http.Response) error {
 				if resp.StatusCode != http.StatusOK ||
@@ -215,6 +220,48 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 				injectGuardScript(resp, script)
 				return nil
 			}
+		}
+
+		// Réécriture du corps rewriteBody : installée juste après la
+		// garde (wraps le guard, exécutée AVANT lui) ; l'ajustement
+		// upstream (installé après) l'enveloppe et s'exécute encore
+		// avant. Ordre d'exécution : gzip → PWA → upstream(headers)
+		// → rewriteBody → garde. Son script traverse le moteur
+		// SANS réécriture : la DTO n'y porte aucune forme
+		// "scheme://origin" (hosts nus seulement).
+		if rwPlan != nil {
+			previous := rp.ModifyResponse
+
+			rp.ModifyResponse = func(resp *http.Response) error {
+				if previous != nil {
+					if err := previous(resp); err != nil {
+						return err
+					}
+				}
+				if resp.StatusCode != http.StatusOK ||
+					!strings.Contains(
+						resp.Header.Get("Content-Type"),
+						"text/html",
+					) {
+					return nil
+				}
+				// Réécriture EN FLUX Idem guardStream : aucun
+				// buffering, Content-Length retiré (chunked, flush
+				// par écriture car ContentLength vaut -1).
+				resp.Header.Del("Content-Length")
+				resp.Header.Del("Content-Encoding")
+				resp.ContentLength = -1
+				resp.Body = newRewriteStream(resp.Body, rwPlan)
+				return nil
+			}
+
+			log.Printf(
+				"UPSTREAM rewriteBody enabled host=%s origins=%v target=%s except=%d",
+				route.Host,
+				rwPlan.origins,
+				rwPlan.pub,
+				len(rwPlan.except),
+			)
 		}
 
 		//
@@ -261,28 +308,41 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			)
 		}
 
-		if route.PWA != nil && route.PWA.Enabled {
+		if route.PWA != nil && route.PWA.Enabled ||
+			rwPlan != nil {
 
-			cr.pwa = pwa.New(route.PWA)
+			cr.pwa = pwa.New(
+				route.PWA,
+				func() *pwa.RewriteSpec {
+					if rwPlan == nil {
+						return nil
+					}
+					return rwPlan.clientSpec()
+				}(),
+			)
 
 			// Inject the manifest link + SW registration into
 			// successful HTML responses proxied for this route.
 			// Chain with any ModifyResponse already set (e.g. the
 			// 401/403 guard) so both run.
-			previous := rp.ModifyResponse
-			rp.ModifyResponse = func(resp *http.Response) error {
-				if previous != nil {
-					if err := previous(resp); err != nil {
-						return err
+			if route.PWA != nil && route.PWA.Enabled {
+				previous := rp.ModifyResponse
+				rp.ModifyResponse = func(resp *http.Response) error {
+					if previous != nil {
+						if err := previous(resp); err != nil {
+							return err
+						}
 					}
+					return pwa.InjectResponse(resp)
 				}
-				return pwa.InjectResponse(resp)
 			}
 
 			log.Printf(
-				"PWA enabled host=%s path=%s",
+				"CLIENT runtime enabled host=%s path=%s (pwa=%v rewriteBody=%v)",
 				route.Host,
 				route.Path,
+				route.PWA != nil && route.PWA.Enabled,
+				rwPlan != nil,
 			)
 		}
 
@@ -506,8 +566,8 @@ func (g *Gateway) isPubliclyForbidden(
 	return false
 }
 
-// pwaHandlerForHost returns the PWA handler of the first PWA-enabled
-// route matching the host, or nil when the host has none.
+// pwaHandlerForHost returns the client-runtime handler (PWA et/ou
+// réécriture client) of the first matching route, or nil.
 func (g *Gateway) pwaHandlerForHost(host string) *pwa.Handler {
 	for _, r := range g.routes {
 		if r.pwa == nil {
@@ -528,7 +588,7 @@ func userBadgeJSON(route *core.Route) string {
 	if route == nil || route.UserBadge == nil {
 		return "null"
 	}
-	return asciiJSON(route.UserBadge, "null")
+	return core.AsciiJSON(route.UserBadge, "null")
 }
 
 // uiGateJSON sérialise les règles uiGate de la route pour le script
@@ -539,37 +599,18 @@ func uiGateJSON(route *core.Route) string {
 	if route == nil || len(route.UIGate) == 0 {
 		return "[]"
 	}
-	return asciiJSON(route.UIGate, "[]")
+	return core.AsciiJSON(route.UIGate, "[]")
 }
 
-// asciiJSON marshalise v et échappe TOUT caractère non-ASCII en
-// \uXXXX (paires de substitution au-delà du BMP) : le script de garde
-// reste décodable quel que soit l'encodage déclaré — ou omis — par le
-// site tiers ; un label accentué de la config ne devient jamais un
-// mojibake ("DÃ©connexion"). fallback si Marshal échoue (impossible
-// sur ces structs).
-func asciiJSON(v any, fallback string) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return fallback
+// rewriteGuardJSON sérialise la politique rewriteBody pour le script
+// de garde (REWRITE=%s ; "null" si absente). Hosts d'origine en
+// forme NUE (sans scheme) : le payload subit sa propre réécriture.
+func rewriteGuardJSON(route *core.Route, backend *url.URL) string {
+	dto := rewriteGuardDTOFor(route, backend)
+	if dto == nil {
+		return "null"
 	}
-
-	var sb strings.Builder
-	for _, r := range string(b) {
-		switch {
-		case r < 0x80:
-			sb.WriteRune(r)
-		case r <= 0xFFFF:
-			fmt.Fprintf(&sb, `\u%04x`, r)
-		default:
-			r -= 0x10000
-			fmt.Fprintf(&sb, `\u%04x\u%04x`,
-				0xD800+(r>>10),
-				0xDC00+(r&0x3FF),
-			)
-		}
-	}
-	return sb.String()
+	return core.AsciiJSON(dto, "null")
 }
 
 func (g *Gateway) guardRouteForHost(host string) (*compiledRoute, bool) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -116,6 +117,74 @@ type AuthGuardPolicy struct {
 	LoginURL string `json:"loginUrl,omitempty"` // default: shared constant
 }
 
+// RewriteExcept : exception de rewriteBody. Deux formes déclarables :
+//
+//   - une chaîne : "path" — les URLs de l'origine DONT LE CHEMIN
+//     commence par ce préfixe restent pointées vers l'origine (aucune
+//     réécriture) ;
+//   - un objet {"path", "to"} : les mêmes URLs sont réécrites vers le
+//     host public alternatif `to` (schéma https) — le reste du chemin,
+//     query et fragment est préservé.
+//
+// Le préfixe le plus long gagne. Les entrées sont triées par longueur
+// décroissante à la compilation, côté gateway comme côté SW client.
+type RewriteExcept struct {
+	// Path : préfixe de chemin ("/..." — sans '?' ni '#').
+	Path string `json:"path"`
+	// To : base de remplacement "https://host.alternatif" ; vide =
+	// les URLs de ce préfixe restent à l'origine (forme chaîne).
+	To string `json:"to,omitempty"`
+}
+
+// UnmarshalJSON accepte la forme chaîne ("path") et la forme objet
+// {"path","to"} du tableau except.
+func (e *RewriteExcept) UnmarshalJSON(b []byte) error {
+
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		e.Path, e.To = s, ""
+		return nil
+	}
+
+	var raw struct {
+		Path string `json:"path"`
+		To   string `json:"to"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&raw); err != nil {
+		return err
+	}
+	*e = RewriteExcept{Path: raw.Path, To: raw.To}
+	return nil
+}
+
+// RewriteBodyPolicy : réécriture en flux des URLs absolues de
+// l'origine (upstream.rewriteBody). Pour un site externe proxifié, le
+// HTML d'origine cite ses propres URLs ("https://origine/...",
+// "//origine/...") : sans réécriture le navigateur quitterait le
+// proxy dès le premier lien/asset absolu. La gateway réécrit ces
+// occurrences vers le host PUBLIC de la route (même chemin), en flux,
+// sur les corps HTML 200 — à l'exception des préfixes déclarés dans
+// except : une exception chaîne laisse le lien à l'origine (lien de
+// lecture resté hors proxy, p.ex.), une exception {path,to} pointe
+// vers un autre host public (ex. variante de lecture hébergée avec
+// ses propres fonctionnalités).
+//
+// Le runtime JS/WASM (fetch/XHR, import(), img dynamique…) est couvert
+// par le service worker configuré de la route (même politique) +
+// réécriture au niveau des appels dans le script de garde. Le corps
+// des fichiers JS/CSS n'est pas réécrit (redondant avec le SW).
+type RewriteBodyPolicy struct {
+	Enabled bool `json:"enabled"`
+	// Except : exceptions de préfixe de chemin — forme chaîne (reste
+	// à l'origine) ou objet {path, to} (host public alternatif).
+	Except []RewriteExcept `json:"except,omitempty"`
+}
+
 // UpstreamResponseHeaders : ajustement des en-têtes de RÉPONSE du
 // backend avant envoi au navigateur — typiquement retirer un
 // Content-Security-Policy d'origine qui bloquerait le script de garde
@@ -166,6 +235,11 @@ type UpstreamPolicy struct {
 	// ResponseHeaders : ajustement des en-têtes de réponse (cf.
 	// UpstreamResponseHeaders).
 	ResponseHeaders *UpstreamResponseHeaders `json:"responseHeaders,omitempty"`
+	// RewriteBody : réécriture des URLs absolues de l'origine dans les
+	// corps HTML 200 (déclaratif, en flux, avec exceptions de préfixe ;
+	// le SW client configuré couvre les appels runtime). Défaut :
+	// aucune réécriture du corps.
+	RewriteBody *RewriteBodyPolicy `json:"rewriteBody,omitempty"`
 }
 
 type MCPOperation struct {
@@ -587,17 +661,129 @@ func (c *Config) expandUpstreamEnv() error {
 // load instead of silently caching what should have been excluded.
 func (c *Config) validate() error {
 	for i := range c.Routes {
-		p := c.Routes[i].PWA
-		if p == nil {
-			continue
+		host := c.Routes[i].Host
+
+		if p := c.Routes[i].PWA; p != nil {
+			for _, pat := range p.networkOnlyPatterns() {
+				if _, err := regexp.Compile(pat); err != nil {
+					return fmt.Errorf(
+						"route %s: expression invalide dans les exclusions PWA %q: %v",
+						host, pat, err)
+				}
+			}
 		}
-		for _, pat := range p.networkOnlyPatterns() {
-			if _, err := regexp.Compile(pat); err != nil {
-				return fmt.Errorf(
-					"route %s: expression invalide dans les exclusions PWA %q: %v",
-					c.Routes[i].Host, pat, err)
+
+		if rb := c.Routes[i].UpstreamRewriteBody(); rb != nil {
+			if err := validateRewriteBody(rb); err != nil {
+				return fmt.Errorf("route %s: %v", host, err)
 			}
 		}
 	}
 	return nil
+}
+
+// UpstreamRewriteBody : accesseur de la policy rewriteBody d'une route
+// (nil si absente ou désactivée).
+func (r *Route) UpstreamRewriteBody() *RewriteBodyPolicy {
+	if r.Upstream == nil || r.Upstream.RewriteBody == nil ||
+		!r.Upstream.RewriteBody.Enabled {
+		return nil
+	}
+	return r.Upstream.RewriteBody
+}
+
+// bornes d'une configuration except : la fenêtre de réécriture du
+// moteur en flux (et du SW client) est proportionnelle au préfixe
+// d'origine + au préfixe d'exception le plus long — elles restent
+// petites et les configurations déraisonnables sont refusées au load.
+const (
+	maxRewriteExcepts = 64
+	maxRewritePathLen = 256
+)
+
+func validateRewriteBody(rb *RewriteBodyPolicy) error {
+	if len(rb.Except) > maxRewriteExcepts {
+		return fmt.Errorf(
+			"rewriteBody.except: %d entrées (max %d)",
+			len(rb.Except), maxRewriteExcepts,
+		)
+	}
+	seen := make(map[string]bool, len(rb.Except))
+	for i := range rb.Except {
+		e := &rb.Except[i]
+		if e.Path == "" {
+			return fmt.Errorf(
+				"rewriteBody.except[%d]: path vide", i)
+		}
+		if !strings.HasPrefix(e.Path, "/") {
+			return fmt.Errorf(
+				"rewriteBody.except[%d]: path %q ne commence pas par '/'", i, e.Path)
+		}
+		if strings.ContainsAny(e.Path, "?#") {
+			return fmt.Errorf(
+				"rewriteBody.except[%d]: path %q contient '?' ou '#' (préfixe de chemin uniquement)", i, e.Path)
+		}
+		if len(e.Path) > maxRewritePathLen {
+			return fmt.Errorf(
+				"rewriteBody.except[%d]: path %d octets (max %d)",
+				i, len(e.Path), maxRewritePathLen)
+		}
+		e.Path = strings.TrimRight(e.Path, "/")
+		if e.Path == "" {
+			return fmt.Errorf(
+				"rewriteBody.except[%d]: path \"/\" (préfixe racine interdit : il excepterait tout)", i)
+		}
+		if seen[e.Path] {
+			return fmt.Errorf(
+				"rewriteBody.except[%d]: path %q déclaré deux fois", i, e.Path)
+		}
+		seen[e.Path] = true
+		if e.To == "" {
+			continue
+		}
+		// To : base de réécriture alternative "https://host" — les
+		// slashs finaux sont retirés (le chemin d'origine suit).
+		for strings.HasSuffix(e.To, "/") {
+			e.To = strings.TrimSuffix(e.To, "/")
+		}
+		u, err := url.Parse(e.To)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf(
+				"rewriteBody.except[%d]: to %q n'est pas une URL absolue (https://host)", i, e.To)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf(
+				"rewriteBody.except[%d]: to %q doit être en http(s)", i, e.To)
+		}
+	}
+	return nil
+}
+
+// AsciiJSON marshalise v et échappe TOUT caractère non-ASCII en
+// \uXXXX : les payloads injectés (script de garde, service worker)
+// restent décodables quel que soit l'encodage déclaré — ou omis — par
+// le site qui les reçoit. fallback si Marshal échoue (impossible sur
+// ces structs).
+func AsciiJSON(v any, fallback string) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fallback
+	}
+
+	var sb strings.Builder
+	for _, r := range string(b) {
+		switch {
+		case r < 0x80:
+			sb.WriteRune(r)
+		case r <= 0xFFFF:
+			fmt.Fprintf(&sb, `\u%04x`, r)
+		default:
+			r -= 0x10000
+			fmt.Fprintf(&sb, `\u%04x\u%04x`,
+				0xD800+(r>>10),
+				0xDC00+(r&0x3FF),
+			)
+		}
+	}
+	return sb.String()
 }

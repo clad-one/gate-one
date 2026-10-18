@@ -103,6 +103,10 @@ const guardScript = `<script>
   // Badge utilisateur (config userBadge de la route) : onglet au bord
   // supérieur, déplié au survol, claims + déconnexion.
   var USERBADGE = %[4]s;
+  // Réécriture client (upstream.rewriteBody de la route) : hosts
+  // d'origine + cible publique + exceptions de préfixe, ou null.
+  // Pilote ci-dessous le SW configuré et le patch des appels runtime.
+  var REWRITE = %[5]s;
   var LOGIN_ORIGIN = "";
   try { LOGIN_ORIGIN = new URL(LOGIN).origin; } catch (e) {}
   // Logout : même hôte que la page de login (auth-bridge) — efface
@@ -115,6 +119,196 @@ const guardScript = `<script>
   // closes the tab.
   var DONE_URL = LOGIN_ORIGIN + "/auth/popup-done?origin=" +
     encodeURIComponent(location.origin);
+
+  // == Réécriture runtime (upstream.rewriteBody) ==
+  // Les trois couches partagent la même politique (sérialisée dans
+  // REWRITE) : le SW client intercepte tout appel post-contrôle, ce
+  // patch réécrit AU MOMENT DE L'APPEL les appels JS (fetch/XHR/
+  // beacon) — y compris ceux REJOUÉS par la garde via "orig" — et le
+  // moteur serveur réécrit le HTML. Les URLs relatives (déjà sur le
+  // host public) et les autres origines (CDN tierces…) ne sont pas
+  // touchées.
+  function installRewrite() {
+    var ORIGINS = {};
+    for (var oi = 0; oi < REWRITE.origins.length; oi++) {
+      ORIGINS[REWRITE.origins[oi]] = true;
+    }
+    var EXCEPT = REWRITE.except || [];
+    var OUR_SW = REWRITE.sw || '/__gateway_pwa/sw.js';
+    var rwAbort = false; // SW tiers détecté : annule diagnostic/claim
+
+    function rewriteString(u) {
+      if (typeof u !== 'string') return u;
+      var m = /^(https?:\/\/|\/\/)([^\/?#]*)/.exec(u);
+      if (!m) return u;
+      var hp = m[2];
+      if (!hp) return u;
+      // le "host" déclaré est un hostname sans port : un :port de
+      // l'URL fait partie du préfixe réécrit et saute du résultat.
+      var sep = hp.indexOf(':');
+      var host = sep === -1 ? hp : hp.slice(0, sep);
+      if (!host || !ORIGINS.hasOwnProperty(host.toLowerCase())) return u;
+      var pathStart = m[0].length;
+      if (sep !== -1) {
+        var port = hp.slice(sep + 1);
+        if (!/^[0-9]+$/.test(port)) return u; // ':' non port
+        pathStart += port.length + 1;
+      }
+      var rest = u.slice(pathStart);
+      for (var i = 0; i < EXCEPT.length; i++) {
+        var e = EXCEPT[i];
+        if (e.path && rest.indexOf(e.path) === 0) {
+          if (e.to) return e.to + rest; // host public alternatif
+          return u;                     // exception : reste à l'origine
+        }
+      }
+      return REWRITE.target + rest;     // réécriture standard
+    }
+
+    // fetch : réécrit au moment de l'appel — pas de fenêtre de
+    // perdition, même sans SW. Request, chaîne et URL gérés.
+    var of = window.fetch;
+    if (of) {
+      window.fetch = function (input, init) {
+        try {
+          if (input instanceof Request) {
+            var r = rewriteString(input.url);
+            if (r !== input.url) {
+              // méthode/entêtes/corps/mode préservés
+              input = new Request(r, input);
+            }
+          } else if (typeof input === 'string' || input instanceof URL) {
+            var s = rewriteString(String(input));
+            if (s !== String(input)) input = s;
+          }
+        } catch (e) { /* non réinscriptible : appel normal */ }
+        return of.call(this, input, init);
+      };
+    }
+
+    // XHR : l'URL passée à open() est réécrite, tout le reste passe
+    // (mutation directe de arguments, sans changer la variabilité).
+    var oOpen = XMLHttpRequest.prototype.open;
+    if (oOpen) {
+      XMLHttpRequest.prototype.open = function () {
+        try {
+          if (typeof arguments[1] === 'string') {
+            var s = rewriteString(arguments[1]);
+            if (s !== arguments[1]) arguments[1] = s;
+          }
+        } catch (e) { /* routing normal */ }
+        return oOpen.apply(this, arguments);
+      };
+    }
+
+    // sendBeacon (telemetry/diagnostics du site) : idem.
+    var oBeacon = navigator.sendBeacon;
+    if (oBeacon) {
+      navigator.sendBeacon = function (url, data) {
+        try {
+          var s = rewriteString(String(url));
+          if (s !== String(url)) url = s;
+        } catch (e) { /* routing normal */ }
+        return oBeacon.call(navigator, url, data);
+      };
+    }
+
+    // EventSource et WebSocket restent non-wrappés (constructeurs
+    // peu praticables à l'extension propre : instanceof…), et sont
+    // couverts par le SW après le claim, par le rechargement de
+    // rattrapage plus bas pour les sorties précoces.
+
+    // == SW client unifié : enregistrement ==
+    if ('serviceWorker' in navigator && location.protocol === 'https:') {
+      try {
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          for (var i = 0; i < regs.length; i++) {
+            var act = regs[i].active || regs[i].waiting || regs[i].installing;
+            if (act && act.scriptURL.indexOf(OUR_SW) === -1) {
+              // SW tiers (celui que le site proxifié enregistre lui-
+              // même sous notre origin) : on n'écrase pas — le site
+              // connaît sa propre logique. Le patch fetch/XHR
+              // ci-dessus reste actif ; pas de heal ci-dessous.
+              rwAbort = true;
+              console.warn('[gateway] service worker tiers détecté (' +
+                act.scriptURL + ') : enregistrement annulé, interception post-charge indisponible');
+              return null;
+            }
+          }
+          return navigator.serviceWorker.register(OUR_SW, { scope: '/' });
+        }).then(function (reg) {
+          if (reg) {
+            console.info('[gateway] SW réécriture ' +
+              (reg.active ? 'actif' : 'installé, en attente de contrôle'));
+          }
+        }, function (err) {
+          console.warn('[gateway] enregistrement service worker impossible : ' + err);
+        });
+      } catch (e) { /* diagnostic seulement, jamais de casse page */ }
+    }
+
+    // == Diagnostic : fenêtre « parti vers l'origine » ==
+    // fetch/XHR/beacon sont réécrits ci-dessus, un chargement lancé
+    // AVANT le contrôle SW n'a pourtant pas été intercepté (et
+    // import() dynamique n'est pas interceptable du tout). Photo via
+    // PerformanceObserver(buffered:true) + controllerchange :
+    // ressource d'origine (hors exceptions) démarrée avant claim =>
+    // UN SEUL rechargement de rattrapage par session (marqueur
+    // sessionStorage — pas de boucle).
+    var tClaim = (navigator.serviceWorker &&
+      navigator.serviceWorker.controller) ? 0 : Infinity;
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        tClaim = performance.now();
+      });
+    }
+    var rwEscape = false;
+    function isRwExitPath(p) {
+      for (var i = 0; i < EXCEPT.length; i++) {
+        if (EXCEPT[i].path && p.indexOf(EXCEPT[i].path) === 0) return true;
+      }
+      return false;
+    }
+    function rwHeal() {
+      if (rwAbort || rwEscape) return;
+      rwEscape = true;
+      try {
+        if (sessionStorage.getItem('gw-rw-heal')) return; // déjà tenté
+        sessionStorage.setItem('gw-rw-heal', String(Date.now()));
+      } catch (e) {
+        return; // pas de stockage : pas de rattrapage (pas de boucle)
+      }
+      console.warn('[gateway] appel(s) partis vers l\'origine avant contrôle SW — rechargement de rattrapage (unique par session)');
+      location.reload();
+    }
+    try {
+      new PerformanceObserver(function (list) {
+        if (rwAbort || rwEscape) return;
+        var entries = list.getEntries();
+        for (var i = 0; i < entries.length; i++) {
+          var e = entries[i];
+          // initiators d'appels JS ; img/image écartés (chargements
+          // du préload scanner entre le HTML et ce script —
+          // cross-origin ordinaires sans CORS, jamais réécrits ici)
+          if (e.initiatorType !== 'script' &&
+              e.initiatorType !== 'xmlhttprequest' &&
+              e.initiatorType !== 'fetch') continue;
+          var u;
+          try { u = new URL(e.name); } catch (er) { continue; }
+          if (!ORIGINS[u.hostname]) continue;
+          if (isRwExitPath(u.pathname)) continue; // exception voulue
+          if (tClaim !== Infinity && e.startTime >= tClaim) continue;
+          rwHeal(); // ressource parti vers l'origine avant contrôle
+          if (rwEscape) return;
+        }
+      }).observe({ type: 'resource', buffered: true });
+    } catch (e) { /* pas de PerformanceObserver : pas de diagnostic */ }
+  }
+
+  // Couche réécriture : installée AVANT le wrapper de garde — "orig"
+  // ci-dessous capture le fetch patché, les requêtes REJOUÉES par la
+  // garde passent donc aussi par la réécriture.
+  if (REWRITE) installRewrite();
 
   var orig = window.fetch;
   if (!orig) return;

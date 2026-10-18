@@ -142,9 +142,47 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		zw.Close()
 	})
 
+	// Page de réécriture (rewriteBody) : HTML clair + version gzip.
+	// L'host d'origine cité dans la page = r.Host (l'host que la
+	// gateway impose au backend, host:port du serveur de test).
+	mux.HandleFunc("/rwpage", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(rwPageHTML(r.Host)))
+	})
+	mux.HandleFunc("/rwgz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Encoding", "gzip")
+		zw := gzip.NewWriter(w)
+		_, _ = zw.Write([]byte(rwPageHTML(r.Host)))
+		_ = zw.Close()
+	})
+
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// rwPageHTML : page de réécriture (rewriteBody) servie par /rwpage —
+// URLs ABSOLUES du site d'origine (reconstruites avec l'host reçu,
+// celui que la gateway impose via upstream.host : host:port de l'
+// origin de test), exceptions de lecture, cible alternative, num
+// contre-exemples (autres hosts, bordures).
+func rwPageHTML(originHost string) string {
+	return fmt.Sprintf(`<html><head><title>rw</title></head><body>
+<a href="https://%[1]s/edit/page?x=1">edit</a>
+<a href="https://%[1]s/lecture/bonpapa/">une exception chaîne</a>
+<a href="https://%[1]s/alt/chemin">host alternatif</a>
+<a href="https://%[1]s/l1/detail/ou">alternative longue</a>
+<a href="https://%[1]s/l1/autre">exception longue conservée</a>
+<a href="//%[1]s/img.png">schéma-relatif</a>
+<a href="https://%[1]s/port">port explicite</a>
+<a href="https://autre.example/x">autre origine</a>
+<a href="https://%[1]s.more/interieur">host plus long</a>
+<a href="wss://%[1]s/ws">websocket</a>
+<img srcset="https://%[1]s/a.jpg 2x, //%[1]s/b.jpg 1x">
+<style>body{background:url(https://%[1]s/fond.css)}</style>
+<p>texte brut : https://%[1]s/txt/fin — fin du texte</p>
+</body></html>`, originHost)
 }
 
 // upstreamGateway : gateway construite depuis un JSON de routes
@@ -456,12 +494,17 @@ func guardInjectedLen(t *testing.T) int {
 		}]
 	}`)
 	route := gw.routes[0].route
+	backend, err := url.Parse(route.Backend)
+	if err != nil {
+		t.Fatal(err)
+	}
 	script := fmt.Sprintf(
 		guardScript,
 		guardLoginURL(route),
 		AuthStatePath,
 		uiGateJSON(route),
 		userBadgeJSON(route),
+		rewriteGuardJSON(route, backend),
 	)
 	return len(script)
 }
