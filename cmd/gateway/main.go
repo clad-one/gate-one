@@ -169,6 +169,9 @@ func printRoutes(cfg *core.Config) {
 		}
 		if r.Upstream != nil {
 			p = append(p, "upstream")
+			if r.UpstreamRewriteBody() != nil {
+				p = append(p, "rewriteBody")
+			}
 		}
 		if r.OpenAPI != nil {
 			p = append(p, "openapi")

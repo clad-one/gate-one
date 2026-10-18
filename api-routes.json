@@ -145,7 +145,11 @@
         "headers": {
           "Authorization": "Basic ${JACQUELOT_BASIC_AUTH}"
         },
-        "rewriteRedirects": true
+        "rewriteRedirects": true,
+        "rewriteBody": {
+          "enabled": true,
+          "except": ["/CorrespondancesBonPapaEtBonneMaman/"]
+        }
       }
     }
   ]
