@@ -591,10 +591,18 @@ const guardScript = `<script>
   if (USERBADGE) {
     window.addEventListener("mousemove", function (ev) {
       if (!badgeEl) return;
-      var near = ev.clientY <= 40 ||
-        badgeEl.matches(":hover") ||
+      var near = badgeEl.matches(":hover") ||
         badgeEl.classList.contains("cladone-userbadge-open") ||
         badgeEl.classList.contains("cladone-userbadge-reveal");
+      if (!near && ev.clientY <= 40) {
+        // proximité de LA ZONE du badge (pas tout le bord haut) :
+        // bande verticale du haut + rayon horizontal autour de la
+        // poignée (le badge ne réagit qu'à l'approche de SON coin)
+        var r = badgeEl.getBoundingClientRect();
+        var margin = 150;
+        near = ev.clientX >= r.left - margin &&
+               ev.clientX <= r.right + margin;
+      }
       badgeEl.classList.toggle("cladone-userbadge-near", near);
     });
   }
