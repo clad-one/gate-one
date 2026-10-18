@@ -63,22 +63,22 @@ const AuthStatePath = "/__gateway/auth"
 // Declarative gating (opt-in, zero app code) — two orthogonal
 // dimensions:
 //
-//   data-gtw-auth — when auth happens:
-//     "after"  : native click preserved, auth enforced at the request
-//       level (401 → queued → replayed after login) ; the login tab
-//       opens on click as an invitation ;
-//     "before" : the click is neutralized (no native request) and the
-//       login tab opens directly — authenticate first, act after ;
-//     absent   : fully transparent — first 401 → dismissable banner
-//       (never an auto-opened tab).
+//	data-gtw-auth — when auth happens:
+//	  "after"  : native click preserved, auth enforced at the request
+//	    level (401 → queued → replayed after login) ; the login tab
+//	    opens on click as an invitation ;
+//	  "before" : the click is neutralized (no native request) and the
+//	    login tab opens directly — authenticate first, act after ;
+//	  absent   : fully transparent — first 401 → dismissable banner
+//	    (never an auto-opened tab).
 //
-//   data-gtw-auth-hidden — visibility:
-//     "before" : hidden while anonymous, shown once authed (silent
-//       gate — never a trigger; activating clicks are neutralized and
-//       show the banner) ;
-//     "after"  : visible while anonymous, hidden once authed (pure
-//       affordance, composable with gtw-auth="before" for padlocks) ;
-//     absent   : always visible.
+//	data-gtw-auth-hidden — visibility:
+//	  "before" : hidden while anonymous, shown once authed (silent
+//	    gate — never a trigger; activating clicks are neutralized and
+//	    show the banner) ;
+//	  "after"  : visible while anonymous, hidden once authed (pure
+//	    affordance, composable with gtw-auth="before" for padlocks) ;
+//	  absent   : always visible.
 //
 // Pages using no attribute make no probe request and stay fully
 // transparent (auth handled mid-flow by the wrapper, with the

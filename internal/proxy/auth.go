@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 var ErrRedirect = errors.New("auth redirect")
@@ -50,6 +53,81 @@ func splitRoles(s string) []string {
 	return out
 }
 
+// authCacheEntry : identité mise en cache côté gateway. Sans lui,
+// CHAQUE requête (y compris chaque image d'une page lourde : le livre
+// proxifié = 878 images) paie un aller-retour auth-bridge + un
+// jwtVerify. La clé = hash de l'en-tête d'authentification + cookies
+// (propre à une session navigateur) ; TTL court : une reconnexion ou
+// un silent refresh change les cookies → nouvelle clé → miss naturel.
+type authCacheEntry struct {
+	identity *RequestContext
+	expires  time.Time
+}
+
+var (
+	authCache     sync.Map
+	authCacheTTL  = 30 * time.Second
+	authCacheSize = 0
+)
+
+func authCacheKey(r *http.Request) string {
+	h := sha256.New()
+	h.Write([]byte(r.Header.Get("Authorization")))
+	for _, c := range r.Header["Cookie"] {
+		h.Write([]byte{0})
+		h.Write([]byte(c))
+	}
+	return string(h.Sum(nil))
+}
+
+func cachedAuth(key string) (*RequestContext, bool) {
+	v, ok := authCache.Load(key)
+	if !ok {
+		return nil, false
+	}
+	e := v.(*authCacheEntry)
+	if time.Now().After(e.expires) {
+		authCache.Delete(key)
+		authCacheSize--
+		return nil, false
+	}
+	return e.identity, true
+}
+
+func cacheAuth(key string, identity *RequestContext) {
+	if authCacheSize > 500 {
+		// borne douce : purge des expirées avant d'ajouter
+		now := time.Now()
+		authCache.Range(func(k, v any) bool {
+			if now.After(v.(*authCacheEntry).expires) {
+				authCache.Delete(k)
+				authCacheSize--
+			}
+			return true
+		})
+	}
+	if authCacheSize > 2000 {
+		return // jamais gonfler sans limite (proxy amont abusif)
+	}
+	cp := *identity
+	// la copie ne porte QUE l'identité : les champs de requête
+	// (method/path/…) de l'appelant ne doivent pas fuiter au suivant
+	cp.Method, cp.Path, cp.Query = "", "", nil
+	cp.Host, cp.Body, cp.Headers = "", nil, nil
+	authCache.Store(key, &authCacheEntry{identity: &cp, expires: time.Now().Add(authCacheTTL)})
+	authCacheSize++
+}
+
+// clearAuthCache : usage tests — le cache est global au process,
+// chaque test doit repartir d'un état neutre.
+func clearAuthCache() {
+	authCache.Range(func(k, v any) bool {
+		authCache.Delete(k)
+		return true
+	})
+	authCacheSize = 0
+}
+
 func (g *Gateway) checkAuth(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -62,6 +140,22 @@ func (g *Gateway) checkAuth(
 		r.RequestURI,
 		r.Header.Get("Authorization") != "",
 	)
+
+	// Cache d'identité : un aller-retour auth-bridge par session et
+	// par TTL au lieu d'un par requête. Le Set-Cookie d'un silent
+	// refresh n'est propagé que sur l'appel frais (le cache n'en a
+	// pas) — après rotation, les cookies changent → nouvelle clé.
+	if cached, ok := cachedAuth(authCacheKey(r)); ok {
+		log.Printf("AUTH CACHE hit user=%q", cached.Username)
+		ctx.UserID = cached.UserID
+		ctx.Username = cached.Username
+		ctx.Email = cached.Email
+		ctx.Roles = cached.Roles
+		ctx.Scopes = cached.Scopes
+		ctx.Claims = cached.Claims
+		return ctx, nil
+	}
+
 	req, err := http.NewRequest(
 		http.MethodGet,
 		g.authBridgeBaseURLFor()+"/auth",
@@ -125,6 +219,7 @@ func (g *Gateway) checkAuth(
 			log.Printf("AUTH BRIDGE: X-Claims non-base64: %v", derr)
 		}
 	}
+	cacheAuth(authCacheKey(r), ctx)
 	return ctx, nil
 }
 

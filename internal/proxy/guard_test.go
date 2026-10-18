@@ -24,6 +24,7 @@ func testGateway(
 	routesJSON string,
 ) (*Gateway, map[string]string) {
 	t.Helper()
+	clearAuthCache() // cache global : chaque test part neutre
 
 	htmlBody := `<!DOCTYPE html>
 <html>
@@ -427,7 +428,10 @@ func TestWhenIdentityConditions(t *testing.T) {
 	}
 
 	// authentifié mais rôles insuffisants → 403 (pas 401 : pas de
-	// boucle de login possible)
+	// boucle de login possible). Token DIFFÉRENT : le cache d'identité
+	// de la gateway clé sur les credentials du client — même token =
+	// même identité (le cache a raison), il faut une nouvelle
+	// « session » pour reconsulter le bridge.
 	bridgeNoRoles := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-User-Id", "u2")
@@ -437,7 +441,7 @@ func TestWhenIdentityConditions(t *testing.T) {
 	))
 	t.Cleanup(bridgeNoRoles.Close)
 	gw.authBridgeBaseURL = bridgeNoRoles.URL
-	if resp := do("Bearer ok"); resp.StatusCode != http.StatusForbidden {
+	if resp := do("Bearer ok2"); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("insuffisant: status = %d, want 403", resp.StatusCode)
 	} else {
 		resp.Body.Close()

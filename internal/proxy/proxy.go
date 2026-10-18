@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -71,11 +72,44 @@ func WithAuthBridgeURL(u string) Option {
 	}
 }
 
+// WithLogBody active le logging verbeux des requêtes (query + body) :
+// debug uniquement — les données peuvent être sensibles.
+func WithLogBody(v bool) Option {
+	return func(g *Gateway) {
+		logRequestBodies = v
+	}
+}
+
+// logRequestBodies : mode debug (-logBody) — logge aussi query/body
+// des requêtes (données potentiellement sensibles : opt-in).
+var logRequestBodies = false
+
 // authBridgeClientTimeout borne chaque appel à auth-bridge : sans
 // lui, un auth-bridge wedgé (busy-loop, incident 2026-10-17) gelait
 // TOUTES les routes authentifiées — chaque checkAuth attendait sans
 // fin. Variable package-level pour les tests.
 var authBridgeClientTimeout = 5 * time.Second
+
+// backendTransport : transport sortant dédié au lieu du défaut.
+//   - pool dimensionné : MaxIdleConnsPerHost = 2 en défaut → pour une
+//     page lourde servie depuis une même origine (le livre proxifié :
+//     878 images chez Cloudflare), chaque requête au-delà de deux
+//     payait un handshake TLS ; 100 idle par host = réutilisation
+//     massive (perf), MaxConnsPerHost non borné (le débit n'est pas
+//     plafonné),
+//   - bornes de sécurité : dial/TLS/ResponseHeader timeouts — un
+//     backend hangé libère la connexion au lieu de la geler à vie.
+var backendTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.DialContext = (&net.Dialer{
+		Timeout:   15 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	t.ResponseHeaderTimeout = 60 * time.Second
+	t.MaxIdleConns = 200
+	t.MaxIdleConnsPerHost = 100
+	return t
+}()
 
 func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
@@ -91,6 +125,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		}
 
 		rp := httputil.NewSingleHostReverseProxy(u)
+		rp.Transport = backendTransport
 
 		original := rp.Director
 
@@ -287,7 +322,8 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			// Timeout : les appels auth-bridge ne doivent jamais
 			// geler le traitement des requêtes (voir
 			// authBridgeClientTimeout).
-			Timeout: authBridgeClientTimeout,
+			Timeout:   authBridgeClientTimeout,
+			Transport: backendTransport,
 			CheckRedirect: func(
 				req *http.Request,
 				via []*http.Request,
@@ -746,25 +782,29 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf(
-		"Host=%q Path=%q Method=%q Query=%v Body=%v",
-		ctx.Host,
-		ctx.Path,
-		ctx.Method,
-		ctx.Query,
-		ctx.Body,
-	)
-
-	log.Printf(
-		"Host=%q Method=%q Path=%q",
-		ctx.Host,
-		ctx.Method,
-		ctx.Path,
-	)
-
 	cr, ok := g.findRoute(ctx)
 
-	log.Printf("matched=%v", ok)
+	// Une seule ligne par requête ; le body (données potentiellement
+	// sensibles) ne passe dans les logs qu'en mode debug (-logBody).
+	if logRequestBodies {
+		log.Printf(
+			"REQ host=%q method=%q path=%q query=%v body=%v matched=%v",
+			ctx.Host,
+			ctx.Method,
+			ctx.Path,
+			ctx.Query,
+			ctx.Body,
+			ok,
+		)
+	} else {
+		log.Printf(
+			"REQ host=%q method=%q path=%q matched=%v",
+			ctx.Host,
+			ctx.Method,
+			ctx.Path,
+			ok,
+		)
+	}
 
 	if !ok {
 		http.NotFound(w, r)

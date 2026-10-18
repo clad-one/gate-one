@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,6 +137,7 @@ func upstreamGateway(
 	routesJSON string,
 ) (*Gateway, *url.URL) {
 	t.Helper()
+	clearAuthCache() // cache global : chaque test part neutre
 
 	srv := upstreamTestServer(t)
 
@@ -540,6 +542,88 @@ func TestGuardPayloadIsPureASCII(t *testing.T) {
 	}
 	if !strings.Contains(payload, `D\u00e9connexion`) {
 		t.Errorf("é non échappé: %.120s", payload)
+	}
+}
+
+// Cache d'auth côté gateway : N requêtes avec les mêmes cookies =
+// UN SEUL aller-retour auth-bridge (les images d'une page lourde ne
+// doivent pas payer l'auth à chaque appel). Les échecs ne se cachent
+// pas (une reconnexion doit marcher immédiatement).
+func TestAuthCacheCollapsesBridgeCalls(t *testing.T) {
+	oldTTL := authCacheTTL
+	authCacheTTL = 5 * time.Second
+	t.Cleanup(func() { authCacheTTL = oldTTL; clearAuthCache() })
+	clearAuthCache()
+
+	var calls int32
+	bridge := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			w.Header().Set("X-User-Id", "u1")
+			w.Header().Set("X-Username", "alice")
+			w.WriteHeader(http.StatusOK)
+		},
+	))
+	t.Cleanup(bridge.Close)
+
+	srv := upstreamTestServer(t)
+	routesJSON := `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "SRV",
+			"auth": {}
+		}]
+	}`
+	routesJSON = strings.ReplaceAll(routesJSON, "SRV", srv.URL)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "routes.json")
+	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := core.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := New(cfg, WithAuthBridgeURL(bridge.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 5; i++ {
+		resp := doRequestWithHeaders(t, gw, "public.test", "/echo",
+			map[string]string{"Cookie": "access_token=tok"})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("appel %d: status = %d, want 200", i, resp.StatusCode)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("auth-bridge appelé %d fois, want 1 (cache inefficace)", got)
+	}
+
+	// un échec ne se cache pas : une NOUVELLE session (cookie
+	// différent — un refresh/relogin change les cookies, donc la
+	// clé) doit re-consulter le bridge qui refuse
+	atomic.StoreInt32(&calls, 0)
+	deny := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			w.WriteHeader(http.StatusUnauthorized)
+		},
+	))
+	t.Cleanup(deny.Close)
+	gw2, err := New(cfg, WithAuthBridgeURL(deny.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		resp := doRequestWithHeaders(t, gw2, "public.test", "/echo",
+			map[string]string{"Cookie": "access_token=tok2"})
+		if resp.StatusCode != http.StatusFound {
+			t.Fatalf("échec %d: status = %d, want 302", i, resp.StatusCode)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Errorf("échecs appelés %d fois, want 3 (un échec s'est caché)", got)
 	}
 }
 
