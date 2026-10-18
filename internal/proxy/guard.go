@@ -321,7 +321,11 @@ const guardScript = `<script>
       try { buildBadge(); } catch (e) { /* le badge ne casse rien */ }
     } else {
       document.documentElement.classList.remove("cladone-authed");
-      if (badgeEl) {
+      if (sessionDied && USERBADGE) {
+        // la même poignée devient l'invitation à se reconnecter
+        try { buildLoginBadge(); }
+        catch (e) { if (badgeEl) { badgeEl.remove(); badgeEl = null; } }
+      } else if (badgeEl) {
         badgeEl.parentNode.removeChild(badgeEl);
         badgeEl = null;
       }
@@ -441,64 +445,82 @@ const guardScript = `<script>
   // anonyme et sans policy. Construit en DOM pur (jamais innerHTML).
   var badgeEl = null;
 
+  function removeBadge() {
+    if (badgeEl) {
+      badgeEl.parentNode.removeChild(badgeEl);
+      badgeEl = null;
+    }
+  }
+
+  // Socle commun aux deux modes du badge (authentifié / invitation
+  // login) : typographie adaptative au site hôte + styles de base.
+  function makeBadgeEl() {
+    var pos = USERBADGE.position === "left" ? "left" : "right";
+    // typographie adaptative : épouser le site hôte — médiane des
+    // tailles calculées des éléments de texte (repli : body, puis
+    // 13px), bornée 11-15px ; TOUTES les dimensions du badge sont
+    // en em et suivent. 13px en dur était trop grand sur un site à
+    // typographie fine (livre pré-paginé) et juste sur vers.
+    var fs = 13;
+    try {
+      var sizes = [];
+      var sample = document.querySelectorAll(
+        "p,li,td,th,blockquote,dd,figcaption"
+      );
+      for (var si = 0;
+           si < sample.length && sizes.length < 50;
+           si++) {
+        var sfs = parseFloat(
+          getComputedStyle(sample[si]).fontSize
+        );
+        if (isFinite(sfs) && sfs > 0) sizes.push(sfs);
+      }
+      var siteFs;
+      if (sizes.length) {
+        sizes.sort(function (a, b) { return a - b; });
+        siteFs = sizes[Math.floor(sizes.length / 2)];
+      } else {
+        siteFs = parseFloat(
+          getComputedStyle(document.body).fontSize
+        );
+      }
+      if (isFinite(siteFs) && siteFs > 0) {
+        fs = Math.min(Math.max(siteFs * 0.9, 11), 15);
+      }
+    } catch (e) { /* mesure impossible : défaut 13px */ }
+    fs = Math.round(fs * 10) / 10;
+    badgeEl = document.createElement("div");
+    badgeEl.className = "cladone-userbadge";
+    // collé au bord du HAUT, écart latéral de 12 px, angles
+    // arrondis en bas seulement (il touche le haut)
+    badgeEl.style.cssText =
+      "position:fixed;top:0;" + pos + ":12px;z-index:2147483646;" +
+      "background:#20242e;color:#fff;padding:.46em .92em;" +
+      "font:" + fs + "px/1.4 system-ui,sans-serif;" +
+      "text-align:left;" +
+      "border-radius:0 0 .62em .62em;max-width:21.5em;" +
+      "box-shadow:0 4px 18px rgba(0,0,0,.3);" +
+      "max-height:2.3em;overflow:hidden;" +
+      "transition:opacity .2s ease,max-height .25s ease;cursor:default";
+    var tab = document.createElement("div");
+    tab.className = "cladone-userbadge-tab";
+    badgeEl.appendChild(tab);
+    var body = document.createElement("div");
+    body.className = "cladone-userbadge-body";
+    body.style.cssText = "padding:.46em 0 .15em 0";
+    badgeEl.appendChild(body);
+    document.body.appendChild(badgeEl);
+  }
+
   function buildBadge() {
     if (!USERBADGE || !authed || !document.body) return;
-    var pos = USERBADGE.position === "left" ? "left" : "right";
+    if (badgeEl &&
+        badgeEl.getAttribute("data-gtw-mode") === "login") {
+      removeBadge(); // le mode a changé : reconstruire authentifié
+    }
     if (!badgeEl) {
-      badgeEl = document.createElement("div");
-      badgeEl.className = "cladone-userbadge";
-      // typographie adaptative : épouser le site hôte — médiane des
-      // tailles calculées des éléments de texte (repli : body, puis
-      // 13px), bornée 11-15px ; TOUTES les dimensions du badge sont
-      // en em et suivent. 13px en dur était trop grand sur un site à
-      // typographie fine (livre pré-paginé) et juste sur vers.
-      var fs = 13;
-      try {
-        var sizes = [];
-        var sample = document.querySelectorAll(
-          "p,li,td,th,blockquote,dd,figcaption"
-        );
-        for (var si = 0;
-             si < sample.length && sizes.length < 50;
-             si++) {
-          var sfs = parseFloat(
-            getComputedStyle(sample[si]).fontSize
-          );
-          if (isFinite(sfs) && sfs > 0) sizes.push(sfs);
-        }
-        var siteFs;
-        if (sizes.length) {
-          sizes.sort(function (a, b) { return a - b; });
-          siteFs = sizes[Math.floor(sizes.length / 2)];
-        } else {
-          siteFs = parseFloat(
-            getComputedStyle(document.body).fontSize
-          );
-        }
-        if (isFinite(siteFs) && siteFs > 0) {
-          fs = Math.min(Math.max(siteFs * 0.9, 11), 15);
-        }
-      } catch (e) { /* mesure impossible : défaut 13px */ }
-      fs = Math.round(fs * 10) / 10;
-      // collé au bord du HAUT, écart latéral de 12 px, angles
-      // arrondis en bas seulement (il touche le haut)
-      badgeEl.style.cssText =
-        "position:fixed;top:0;" + pos + ":12px;z-index:2147483646;" +
-        "background:#20242e;color:#fff;padding:.46em .92em;" +
-        "font:" + fs + "px/1.4 system-ui,sans-serif;" +
-        "text-align:left;" +
-        "border-radius:0 0 .62em .62em;max-width:21.5em;" +
-        "box-shadow:0 4px 18px rgba(0,0,0,.3);" +
-        "max-height:2.3em;overflow:hidden;" +
-        "transition:opacity .2s ease,max-height .25s ease;cursor:default";
-      var tab = document.createElement("div");
-      tab.className = "cladone-userbadge-tab";
-      badgeEl.appendChild(tab);
-      var body = document.createElement("div");
-      body.className = "cladone-userbadge-body";
-      body.style.cssText = "padding:.46em 0 .15em 0";
-      badgeEl.appendChild(body);
-      document.body.appendChild(badgeEl);
+      makeBadgeEl();
+      badgeEl.setAttribute("data-gtw-mode", "authed");
       // manifestation discrète post-login : déplié 2 s puis escamoté
       badgeEl.classList.add("cladone-userbadge-reveal");
       setTimeout(function () {
@@ -532,6 +554,32 @@ const guardScript = `<script>
         encodeURIComponent(location.href);
     };
     body.appendChild(btn);
+  }
+
+  // Badge mode « invitation login » : après une mort de session, la
+  // même poignée reste en place — cliquer dessus rouvre le login
+  // (l'affordance persiste même après avoir refermé la bannière).
+  // Invisible tant que la souris n'approche pas du bord, comme en
+  // mode authentifié.
+  function buildLoginBadge() {
+    if (!USERBADGE || authed || !document.body) return;
+    removeBadge();
+    makeBadgeEl();
+    badgeEl.setAttribute("data-gtw-mode", "login");
+    badgeEl.style.cursor = "pointer";
+    badgeEl.title = "Se reconnecter";
+    badgeEl.firstChild.textContent =
+      "\uD83D\uDC64 " + "Se connecter";
+    badgeEl.onclick = function (ev) {
+      ev.stopPropagation();
+      ensureLogin();
+    };
+    // manifestation discrète : visible 2 s pour se faire remarquer,
+    // puis même discret que le badge authentifié
+    badgeEl.classList.add("cladone-userbadge-reveal");
+    setTimeout(function () {
+      if (badgeEl) badgeEl.classList.remove("cladone-userbadge-reveal");
+    }, 2000);
   }
 
   // Détection de l'approche du bord HAUT : le badge est invisible
