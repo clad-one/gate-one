@@ -13,6 +13,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,6 +30,10 @@ type compiledRoute struct {
 	// non-nil when the route declares a pwa policy: serves
 	// /__gateway_pwa/* and injects PWA tags into HTML responses
 	pwa *pwa.Handler
+
+	// limiteurs rateLimit/quota de la route (fenêtres fixes),
+	// construits paresseusement au premier besoin
+	limiters *routeLimiters
 }
 
 type Gateway struct {
@@ -110,6 +115,22 @@ var backendTransport = func() *http.Transport {
 	t.MaxIdleConnsPerHost = 100
 	return t
 }()
+
+// Reloadable : enveloppe de handler qui permet de remplacer la
+// configuration à chaud (SIGHUP) sans reconstruire l'image — le
+// routage bascule atomiquement, les requêtes en vol finissent sur
+// l'ancienne instance.
+type Reloadable struct {
+	current atomic.Pointer[Gateway]
+}
+
+func (h *Reloadable) Store(gw *Gateway) {
+	h.current.Store(gw)
+}
+
+func (h *Reloadable) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.current.Load().ServeHTTP(w, r)
+}
 
 func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
@@ -579,6 +600,8 @@ func (g *Gateway) serveAuthState(
 	r *http.Request,
 	ctx *RequestContext,
 ) {
+	// une sonde de session ne doit jamais être cacheable
+	w.Header().Set("Cache-Control", "no-store")
 	sctx, err := g.checkAuth(w, r, ctx)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -670,6 +693,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			g.serveMCPProtectedResourceMetadata(w, r)
 			return
 		}
+	}
+
+	// Endpoints d'exploitation (gateway-served, tout host)
+	switch ctx.Path {
+	case "/healthz":
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+		return
+	case "/__gateway/stats":
+		serveStats(w, r)
+		return
 	}
 
 	if g.isPubliclyForbidden(ctx) {
@@ -814,6 +848,14 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route := cr.route
 	p := cr.proxy
 
+	// Statistiques : le statut FINAL de la réponse est compté par
+	// route (302 auth, 401, 403, 429, 200 proxifié…).
+	sw := &statsWriter{ResponseWriter: w}
+	w = sw
+	defer func() {
+		statRecord(routeKey(route.Host, route.Path), sw.status)
+	}()
+
 	//
 	// HEAD fallback
 	//
@@ -883,12 +925,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//
-	// TODO rate limit
+	// Rate limit / quota (fenêtre fixe, clé = identité ou IP) :
+	// 429 + Retry-After quand la fenêtre est pleine.
 	//
-
-	//
-	// TODO quota
-	//
+	if enforceLimits(w, r, cr, ctx) {
+		return
+	}
 
 	//
 	// Forward headers
@@ -898,6 +940,20 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Set("X-Username", ctx.Username)
 	r.Header.Set("X-Email", ctx.Email)
 	r.Header.Set("X-Roles", strings.Join(ctx.Roles, ","))
+
+	// X-Forwarded-* : Traefik les fournit déjà en production ; les
+	// poser ici garantit un comportement identique en accès direct
+	// au gateway (tests, diagnostic) — sans écraser l'amont.
+	if r.Header.Get("X-Forwarded-Proto") == "" {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		r.Header.Set("X-Forwarded-Proto", scheme)
+	}
+	if r.Header.Get("X-Forwarded-Host") == "" {
+		r.Header.Set("X-Forwarded-Host", r.Host)
+	}
 
 	p.ServeHTTP(w, r)
 }

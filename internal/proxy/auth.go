@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -146,6 +147,7 @@ func (g *Gateway) checkAuth(
 	// refresh n'est propagé que sur l'appel frais (le cache n'en a
 	// pas) — après rotation, les cookies changent → nouvelle clé.
 	if cached, ok := cachedAuth(authCacheKey(r)); ok {
+		atomic.AddInt64(&statAuthCacheHi, 1)
 		log.Printf("AUTH CACHE hit user=%q", cached.Username)
 		ctx.UserID = cached.UserID
 		ctx.Username = cached.Username
@@ -180,6 +182,7 @@ func (g *Gateway) checkAuth(
 		return nil, err
 	}
 	defer resp.Body.Close()
+	atomic.AddInt64(&statAuthBridge, 1)
 
 	log.Printf(
 		"AUTH BRIDGE status=%d user=%q username=%q roles=%q",
@@ -255,6 +258,7 @@ func (g *Gateway) checkMCPAuth(
 		return nil, err
 	}
 	defer resp.Body.Close()
+	atomic.AddInt64(&statAuthBridge, 1)
 
 	log.Printf(
 		"MCP AUTH BRIDGE status=%d user=%q username=%q roles=%q",

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"cladone/gateway/internal/core"
@@ -68,9 +71,25 @@ func main() {
 		proxy.WithAuthBridgeURL(*authBridge),
 		proxy.WithLogBody(*logBody),
 	}
-	gw, err := proxy.New(cfg, opts...)
 
-	if err != nil {
+	// Config rechargeable à chaud (SIGHUP) : le fichier peut être un
+	// volume monté — ajouter une route = éditer + kill -s HUP, sans
+	// rebuild. Une config invalide est REFUSÉE : l'ancienne reste
+	// active (jamais d'interruption pour une typo).
+	handler := &proxy.Reloadable{}
+	load := func() error {
+		c, err := core.Load(*configPath)
+		if err != nil {
+			return err
+		}
+		g, err := proxy.New(c, opts...)
+		if err != nil {
+			return err
+		}
+		handler.Store(g)
+		return nil
+	}
+	if err := load(); err != nil {
 		log.Fatal(err)
 	}
 
@@ -79,14 +98,55 @@ func main() {
 	// longs : SSE, uploads) ; IdleTimeout recycle les connexions.
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           gw,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// Arrêt gracieux : SIGTERM (docker stop) termine les requêtes en
+	// vol au lieu de les couper ; la marge (8 s) reste sous la
+	// grâce par défaut de docker (10 s).
+	stopped := make(chan struct{})
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, os.Interrupt)
+	go func() {
+		s := <-sig
+		log.Printf("%s : arrêt gracieux (8 s max)…", s)
+		ctx, cancel := context.WithTimeout(
+			context.Background(), 8*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+		close(stopped)
+	}()
+
+	// Reload à chaud : SIGHUP re-charge la config (validée) et
+	// bascule le routage atomiquement.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+
+	go func() {
+		for range hup {
+			if err := load(); err != nil {
+				log.Printf(
+					"SIGHUP : rechargement REFUSÉ (%v) — l'ancienne config reste active",
+					err,
+				)
+				continue
+			}
+			log.Printf("SIGHUP : configuration rechargée")
+		}
+	}()
+
 	log.Printf("Gateway listening on %s", *addr)
 
-	log.Fatal(srv.ListenAndServe())
+	if err := srv.ListenAndServe(); err != nil &&
+		err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
+	<-stopped
+	log.Printf("Gateway arrêtée proprement")
 }
 
 // printRoutes : la config résolue, une ligne par route — la revue

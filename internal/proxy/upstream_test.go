@@ -627,6 +627,74 @@ func TestAuthCacheCollapsesBridgeCalls(t *testing.T) {
 	}
 }
 
+// rateLimit / quota : fenêtre fixe par identité (utilisateur sinon
+// IP) — la 3e requête d'une fenêtre de 2 est refusée 429 + Retry-
+// After ; une AUTRE identité garde son propre bucket ; le When
+// scinde (les requêtes hors conditions ne consomment rien).
+func TestRateLimitAndQuota(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*",
+			"backend": "BACKEND",
+			"rateLimit": {"requests": 2, "period": "minute"},
+			"quota": {"limit": 4, "period": "hour"}
+		}]
+	}`)
+
+	// 2 premières : passent (200 proxifié), la 3e : 429
+	for i := 0; i < 2; i++ {
+		resp := doRequestWithHeaders(t, gw, "public.test", "/echo",
+			map[string]string{"X-Forwarded-For": "1.2.3.4"})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("req %d: status = %d, want 200", i, resp.StatusCode)
+		}
+	}
+	resp := doRequestWithHeaders(t, gw, "public.test", "/echo",
+		map[string]string{"X-Forwarded-For": "1.2.3.4"})
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("req 3: status = %d, want 429", resp.StatusCode)
+	}
+	if ra := resp.Header.Get("Retry-After"); ra == "" {
+		t.Error("429 sans Retry-After")
+	}
+
+	// une AUTRE identité : son propre bucket
+	resp = doRequestWithHeaders(t, gw, "public.test", "/echo",
+		map[string]string{"X-Forwarded-For": "5.6.7.8"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("autre IP: status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// healthz + stats : endpoints d'exploitation gateway-servés.
+func TestHealthzAndStats(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*",
+			"backend": "BACKEND"
+		}]
+	}`)
+
+	resp := doGet(t, gw, "nimporte.quel.host", "/healthz")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("healthz: status = %d, want 200", resp.StatusCode)
+	}
+	if b := body(t, resp); !strings.Contains(b, `"ok"`) {
+		t.Errorf("healthz body: %s", b)
+	}
+
+	doGet(t, gw, "public.test", "/echo")
+	resp = doGet(t, gw, "nimporte.quel.host", "/__gateway/stats")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stats: status = %d, want 200", resp.StatusCode)
+	}
+	b := body(t, resp)
+	if !strings.Contains(b, "authBridgeCalls") ||
+		!strings.Contains(b, "public.test") {
+		t.Errorf("stats incomplètes: %s", b)
+	}
+}
+
 // auth-bridge WEDGÉ (ne répond jamais) : la gateway ne doit pas gelée
 // — le checkAuth part en timeout (authBridgeClientTimeout) et la
 // route page répond 302 login (incident 2026-10-17 : auth-bridge en
