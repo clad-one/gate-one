@@ -132,10 +132,12 @@ func TestGuardInjectedOnFrontendHTML(t *testing.T) {
 	if !strings.Contains(b, "<body>hello</body>") {
 		t.Errorf("page body altered: %q", b)
 	}
-	// Content-Length matches the new body
-	declared := resp.ContentLength
-	if declared != int64(len(b)) {
-		t.Errorf("Content-Length = %d, body = %d bytes", declared, len(b))
+	// L'injection est EN FLUX : Content-Length retiré (la taille
+	// change au fil de l'eau) — la réponse est servie chunked, le
+	// flush arrive write par write (le TTFB == celui de l'origine).
+	if resp.Header.Get("Content-Length") != "" || resp.ContentLength >= 0 {
+		t.Errorf("Content-Length %d/%q : une page injectée doit servir chunked",
+			resp.ContentLength, resp.Header.Get("Content-Length"))
 	}
 }
 

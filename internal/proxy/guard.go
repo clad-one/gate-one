@@ -1,12 +1,9 @@
 package proxy
 
 import (
-	"bytes"
 	"io"
-	"log"
 	"net/http"
 	"regexp"
-	"strconv"
 
 	"cladone/gateway/internal/core"
 )
@@ -965,12 +962,9 @@ var charsetMeta = regexp.MustCompile(`(?i)<meta[^>]*charset[^>]*>`)
 // navigateurs (méta charset cherchée dans les 1024 premiers octets).
 const encodingSniffWindow = 1024
 
-// maxGuardBody bounds the HTML body read during injection. 32 MiB:
-// les pages pré-paginées proxifiées depuis des origines externes sont
-// grosses (livre jacquelot : ~6 Mo) et leur instrumentation est LE
-// cas d'usage de la gateway — au-delà de la limite, l'injection est
-// sautée (fail-open) mais la page reste servie intégralement.
-const maxGuardBody = 32 << 20
+// maxGuardBody (32 Mio de budget de buffering) a DISPARU avec
+// l'injection en flux (2026-10-18) : le corps n'est plus lu, il
+// traverse. Voir guardStream.
 
 // guardEnabledFor resolves the route's authGuard policy: active by
 // default on frontend routes, opt-out via {"enabled": false}, no-op on
@@ -996,89 +990,144 @@ func guardLoginURL(route *core.Route) string {
 	return LoginPageURL
 }
 
-// injectGuardScript inserts the guard <script> right after the opening
-// <head> tag (or at the very start when no <head> is found) and fixes
-// Content-Length. The response body must already be uncompressed.
-// Pages LARGER than maxGuardBody are NEVER truncated: injection is
-// skipped and the original body is served whole (incident 2026-10-17:
-// a 6 MB pre-paginated book page was cut to 1 MiB mid-attribute —
-// the reader built a 10-page book instead of 784).
-func injectGuardScript(resp *http.Response, script string) error {
+// injectGuardScript installe l'injection de la garde en FLUX : le
+// corps n'est plus bufferisé (l'algorithme d'avant 2026-10-18 lisait
+// jusqu'à 32 Mio en mémoire) — l'octet qui arrive de l'origine ressort
+// vers le client, la mémoire reste O(1) et le navigateur entame son
+// rendu dès le premier chunk (TTFB == celui de l'origine, le livre
+// proxifié de 6 Mo se rend page par page pendant le téléchargement).
+//
+// Échanges de taille changeant (script inséré), Content-Length est
+// retiré : la réponse part en chunked, et ReverseProxy flusse après
+// chaque écriture dès que ContentLength vaut -1 (il lit la décision
+// sur resp.ContentLength). Pages PLUS GRANDES que toute limite :
+// servies intégralement ET injectées — la troncature de l'incident
+// 2026-10-17 est structurellement impossible (plus aucun ReadAll).
+func injectGuardScript(resp *http.Response, script string) {
 
-	// Fast path: known length above the limit → no buffering at all.
-	if resp.ContentLength > maxGuardBody {
-		log.Printf(
-			"GUARD injection skipped: body %d > %d — servie sans injection",
-			resp.ContentLength,
-			maxGuardBody,
-		)
-		return nil
-	}
+	// Le corps change de taille (script ~28 Ko inséré) : la réponse
+	// est servie chunked. En clair dans le pipeline : la décompression
+	// gzip est aussi en flux, Content-Encoding a déjà disparu (cette
+	// suppression reste un filet, jamais un déclencheur).
+	resp.Header.Del("Content-Length")
+	resp.Header.Del("Content-Encoding")
+	resp.ContentLength = -1
+	resp.Body = newGuardStream(resp.Body, script)
+}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGuardBody+1))
-	if err != nil {
-		resp.Body.Close()
-		return err
-	}
+// injectScanWindow : maximum d'octets retenus pour décider du point
+// d'insertion. Concrètement la décision tombe vers l'octet 1024 (fin
+// de la fenêtre de détection d'encodage) — <head> est dans les
+// premiers octets de tout vrai document ; au-delà de la fenêtre sans
+// <head> (fragment HTML d'app framework), fallback historique : le
+// script est inséré en tout début de document, puis le reste du corps
+// passe en flux.
+const injectScanWindow = 64 << 10
 
-	// Overflow confirmed by the bounded read: drain the remainder of
-	// the ORIGINAL body and serve the full response untouched.
-	if len(body) > maxGuardBody {
-		rest, err := io.ReadAll(resp.Body)
-		if err != nil {
-			resp.Body.Close()
-			return err
+// decideInjection : PARITÉ EXACTE avec l'algorithme bufferisé
+// historique (avant le streaming, 2026-10-18) :
+//   - <head> trouvé : insertion APRÈS lui, mais APRÈS le meta charset
+//     quand celui-ci est DANS LA FENÊTRE DE DÉTECTION (< 1024 octets
+//     du document original) — sinon le navigateur décode en
+//     windows-1252 et affiche "DÃ©connexion" (incident 2026-10-17) ;
+//   - pas de <head> dans la fenêtre : script en tout début (fallback
+//     historique des pages sans head).
+//
+// Retourne l'indice d'insertion dans buf, ou -1 pour « pas encore
+// décidé — lire davantage » ; eof=true force la décision finale
+// (fin de corps, erreur transport incluse).
+func decideInjection(buf []byte, eof bool) int {
+
+	if idx := headOpen.FindIndex(buf); idx != nil {
+		if len(buf) < encodingSniffWindow && !eof {
+			return -1 // la meta charset peut encore apparaître jusqu'à 1024
 		}
-		resp.Body.Close()
-		body = append(body, rest...)
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-		resp.ContentLength = int64(len(body))
-		resp.Header.Set(
-			"Content-Length",
-			strconv.FormatInt(int64(len(body)), 10),
-		)
-		log.Printf(
-			"GUARD injection skipped: body %d > %d — servie sans injection",
-			len(body),
-			maxGuardBody,
-		)
-		return nil
-	}
-
-	closeErr := resp.Body.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-
-	var out []byte
-	if idx := headOpen.FindIndex(body); idx != nil {
-		// Point d'insertion : après <head>, mais APRÈS le meta
-		// charset quand il est dans la fenêtre de détection (le
-		// garder dans les 1024 premiers octets du document servi —
-		// sinon le navigateur décode le document en windows-1252).
 		injectAt := idx[1]
-		sniff := body
+		sniff := buf
 		if len(sniff) > encodingSniffWindow {
 			sniff = sniff[:encodingSniffWindow]
 		}
 		if m := charsetMeta.FindIndex(sniff); m != nil && m[1] > injectAt {
 			injectAt = m[1]
 		}
-		out = append(out, body[:injectAt]...)
-		out = append(out, []byte(script)...)
-		out = append(out, body[injectAt:]...)
-	} else {
-		out = append([]byte(script), body...)
+		return injectAt
 	}
 
-	resp.Body = io.NopCloser(bytes.NewReader(out))
-	resp.ContentLength = int64(len(out))
-	resp.Header.Set("Content-Length", strconv.FormatInt(int64(len(out)), 10))
-	// The body was re-serialized by the transport if it was
-	// compressed; make sure no stale encoding header survives.
-	resp.Header.Del("Content-Encoding")
-	return nil
+	// pas de <head> : chercher jusqu'à la fenêtre, puis fallback (0).
+	if len(buf) < injectScanWindow && !eof {
+		return -1
+	}
+	return 0
+}
+
+// guardStream traverse le corps en flux et insère le script une fois,
+// au point choisi parmi les premiers octets. Tout ce qui suit
+// l'injection passe SANS copie de re-lecture : les 6 Mo du livre
+// proxifié ne résident jamais en mémoire gateway.
+type guardStream struct {
+	src    io.ReadCloser
+	script string
+
+	scratch  []byte // buffer de lecture recyclé
+	buf      []byte // octets retenus en attente de décision (≤ fenêtre)
+	pend     []byte // octets à émettre (préfixe + script + reste du buf)
+	pendOff  int
+	decided  bool
+	streamed bool  // pend épuisé : passthrough direct
+	err      error // erreur transport (servie après le pend, jamais avalée)
+}
+
+func newGuardStream(src io.ReadCloser, script string) *guardStream {
+	return &guardStream{
+		src:     src,
+		script:  script,
+		scratch: make([]byte, 4096),
+	}
+}
+
+func (g *guardStream) Read(p []byte) (int, error) {
+
+	for g.pendOff >= len(g.pend) {
+
+		if g.streamed {
+			if g.err != nil {
+				return 0, g.err // propagée, jamais silencieuse
+			}
+			return g.src.Read(p)
+		}
+
+		n, rerr := g.src.Read(g.scratch)
+		if n > 0 {
+			g.buf = append(g.buf, g.scratch[:n]...)
+		}
+		eof := rerr == io.EOF
+		if rerr != nil && !eof {
+			if g.err == nil {
+				g.err = rerr
+			}
+			// décision immédiate sur les octets déjà arrivés
+			// (l'erreur du dessous fera tiquer le copyResponse)
+			eof = true
+		}
+		injectAt := decideInjection(g.buf, eof)
+		if injectAt < 0 {
+			continue // tampon borné par injectScanWindow
+		}
+		out := make([]byte, 0, len(g.buf)+len(g.script))
+		out = append(out, g.buf[:injectAt]...)
+		out = append(out, g.script...)
+		out = append(out, g.buf[injectAt:]...)
+		g.pend = out
+		g.pendOff = 0
+		g.buf = nil
+		g.streamed = true
+	}
+
+	n := copy(p, g.pend[g.pendOff:])
+	g.pendOff += n
+	return n, nil
+}
+
+func (g *guardStream) Close() error {
+	return g.src.Close()
 }

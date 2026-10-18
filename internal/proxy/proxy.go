@@ -209,14 +209,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 					) {
 					return nil
 				}
-				if err := injectGuardScript(resp, script); err != nil {
-					// forward unmodified rather than break the page
-					log.Printf(
-						"GUARD injection failed host=%s: %v",
-						route.Host,
-						err,
-					)
-				}
+				// Injection EN FLUX : elle ne lit pas le corps ici
+				// (aucun buffering) — les erreurs transport
+				// surfent pendant la copie, le page reste servie.
+				injectGuardScript(resp, script)
 				return nil
 			}
 		}
