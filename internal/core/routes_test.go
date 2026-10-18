@@ -288,6 +288,36 @@ func TestUpstreamRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+// Le badge userBadge.loginBadge : le champ se désérialise (défaut
+// false — le badge n'apparaît en anonyme qu'après une mort de
+// session détectée).
+func TestUserBadgeLoginBadgeDeserialization(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"routes": [
+			{"host": "a.local", "path": "/*", "backend": "http://x",
+			 "userBadge": {"loginBadge": true, "claims": ["preferred_username"]}},
+			{"host": "b.local", "path": "/*", "backend": "http://x",
+			 "userBadge": {"claims": ["preferred_username"]}}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Routes[0].UserBadge.LoginBadge {
+		t.Error(`"loginBadge": true not deserialized`)
+	}
+	if c.Routes[1].UserBadge.LoginBadge {
+		t.Error("absent loginBadge should default to false")
+	}
+}
+
 // La config RÉELLE de production doit passer la grammaire stricte.
 // Les secrets y sont référencés par interpolation ${VAR} (résolus
 // depuis l'environnement du conteneur en production) : le test

@@ -321,8 +321,10 @@ const guardScript = `<script>
       try { buildBadge(); } catch (e) { /* le badge ne casse rien */ }
     } else {
       document.documentElement.classList.remove("cladone-authed");
-      if (sessionDied && USERBADGE) {
-        // la même poignée devient l'invitation à se reconnecter
+      if (USERBADGE &&
+          (sessionDied || USERBADGE.loginBadge)) {
+        // la poignée devient l'invitation à se connecter (mort de
+        // session détectée, ou option loginBadge : dès l'anonyme)
         try { buildLoginBadge(); }
         catch (e) { if (badgeEl) { badgeEl.remove(); badgeEl = null; } }
       } else if (badgeEl) {

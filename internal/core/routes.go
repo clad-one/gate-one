@@ -85,6 +85,13 @@ type UserBadgePolicy struct {
 	Claims []string `json:"claims,omitempty"`
 	// LogoutLabel : libellé du bouton (défaut "Déconnexion").
 	LogoutLabel string `json:"logoutLabel,omitempty"`
+	// LoginBadge : le badge apparaît AUSSI en anonyme, dès la
+	// première visite, en mode invitation (« 👤 Se connecter ») —
+	// cliqué, il ouvre l'onglet de connexion. Pour proposer la
+	// connexion sans toucher au markup du site. Défaut : false
+	// (badge seulement une fois authentifié ; en anonyme il
+	// n'apparaît qu'après une mort de session détectée).
+	LoginBadge bool `json:"loginBadge,omitempty"`
 }
 
 type AuthPolicy struct {
