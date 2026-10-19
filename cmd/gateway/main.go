@@ -172,6 +172,9 @@ func printRoutes(cfg *core.Config) {
 			if r.UpstreamRewriteBody() != nil {
 				p = append(p, "rewriteBody")
 			}
+			if r.Upstream.RewriteCookies != nil {
+				p = append(p, "rewriteCookies")
+			}
 		}
 		if r.OpenAPI != nil {
 			p = append(p, "openapi")

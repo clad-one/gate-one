@@ -240,6 +240,25 @@ type UpstreamPolicy struct {
 	// le SW client configuré couvre les appels runtime). Défaut :
 	// aucune réécriture du corps.
 	RewriteBody *RewriteBodyPolicy `json:"rewriteBody,omitempty"`
+	// RewriteCookies : traduction des Set-Cookie posés par l'origine
+	// (leur attribut Domain vise son propre namespace, que le
+	// navigateur rejetterait depuis le host public). Défaut : aucune
+	// réécriture des cookies.
+	RewriteCookies *RewriteCookiesPolicy `json:"rewriteCookies,omitempty"`
+}
+
+// RewriteCookiesPolicy : traduction des Set-Cookie de l'origine vers
+// le host public (cf. UpstreamPolicy.RewriteCookies).
+type RewriteCookiesPolicy struct {
+	// Domain : "rewrite" = Domain visant l'hôte d'origine (ou un de
+	// ses parents) réécrit vers Domain=<host public> — le périmètre de
+	// partage (hôte + sous-domaines) est transposé tel quel ;
+	// "strip" = attribut Domain retiré (cookie host-only sur le host
+	// public). Dans les deux modes, un Set-Cookie portant un nom
+	// réservé à la session gateway (access_token, refresh_token,
+	// id_token, session) est retiré avec un warning : posé sur le même
+	// host public, il écraserait les cookies d'auth.
+	Domain string `json:"domain"`
 }
 
 type MCPOperation struct {
@@ -676,6 +695,15 @@ func (c *Config) validate() error {
 		if rb := c.Routes[i].UpstreamRewriteBody(); rb != nil {
 			if err := validateRewriteBody(rb); err != nil {
 				return fmt.Errorf("route %s: %v", host, err)
+			}
+		}
+
+		if up := c.Routes[i].Upstream; up != nil && up.RewriteCookies != nil {
+			if up.RewriteCookies.Domain != "rewrite" &&
+				up.RewriteCookies.Domain != "strip" {
+				return fmt.Errorf(
+					"route %s: rewriteCookies.domain %q (attendu \"rewrite\" ou \"strip\")",
+					host, up.RewriteCookies.Domain)
 			}
 		}
 	}

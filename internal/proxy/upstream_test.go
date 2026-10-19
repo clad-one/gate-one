@@ -157,6 +157,14 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		_ = zw.Close()
 	})
 
+	mux.HandleFunc("/setcookie", func(w http.ResponseWriter, r *http.Request) {
+		// un Set-Cookie brut par paramètre ?set= (tests rewriteCookies)
+		for _, raw := range r.URL.Query()["set"] {
+			w.Header().Add("Set-Cookie", raw)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
