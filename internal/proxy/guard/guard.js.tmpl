@@ -17,6 +17,11 @@
   // d'origine + cible publique + exceptions de préfixe, ou null.
   // Pilote ci-dessous le SW configuré et le patch des appels runtime.
   var REWRITE = %[5]s;
+  // Patches déclaratifs du bundle de la route (inject.patch) : des
+  // attributs (typiquement des data-gtw-*) posés par sélecteur sur
+  // le HTML existant — pour les sites dont on ne peut pas éditer le
+  // markup. Appliqués à chaque cycle d'évaluation (cf. bas).
+  var PATCH = %[6]s;
   var LOGIN_ORIGIN = "";
   try { LOGIN_ORIGIN = new URL(LOGIN).origin; } catch (e) {}
   // Logout : même hôte que la page de login (auth-bridge) — efface
@@ -489,7 +494,29 @@
   // → masqué (l'authentification est implicite). Confort UI
   // uniquement : l'interdiction réelle reste côté endpoint
   // (auth.when.roles/scopes/claims) ou backend.
+  // Patches (inject.patch du bundle) : poser les attributs sur les
+  // éléments matchés — idempotent, appliqué à chaque évaluation (les
+  // éléments ajoutés dynamiquement sont couverts au cycle suivant).
+  // Un sélecteur invalide est ignoré (comme uiGate) : jamais
+  // d'exception visible.
+  function applyPatches() {
+    for (var i = 0; i < PATCH.length; i++) {
+      var rule = PATCH[i];
+      if (!rule || !rule.selector || !rule.attrs) continue;
+      var nodes;
+      try {
+        nodes = document.querySelectorAll(rule.selector);
+      } catch (e) { continue; }
+      for (var j = 0; j < nodes.length; j++) {
+        for (var k in rule.attrs) {
+          nodes[j].setAttribute(k, rule.attrs[k]);
+        }
+      }
+    }
+  }
+
   function applyRoleGating() {
+    applyPatches();
     var nodes = document.querySelectorAll(
       "[data-gtw-roles],[data-gtw-scopes],[data-gtw-claims]"
     );
@@ -822,7 +849,7 @@
     if (!document.querySelector(
       "[data-gtw-auth],[data-gtw-auth-hidden],[data-gtw-logout]," +
       "[data-gtw-roles],[data-gtw-scopes],[data-gtw-claims]"
-    ) && !UIGATE.length && !USERBADGE) {
+    ) && !UIGATE.length && !USERBADGE && !PATCH.length) {
       return; // no gating declared: no probe, fully transparent
     }
     fetchSession();

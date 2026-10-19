@@ -188,17 +188,20 @@ const injectScanWindow = 64 << 10
 //     quand celui-ci est DANS LA FENÊTRE DE DÉTECTION (< 1024 octets
 //     du document original) — sinon le navigateur décode en
 //     windows-1252 et affiche "DÃ©connexion" (incident 2026-10-17) ;
-//   - pas de <head> dans la fenêtre : script en tout début (fallback
-//     historique des pages sans head).
+//   - pas de <head> dans la fenêtre : ok=false — l'appelant décide du
+//     fallback : la GARDE insère en tout début (fallback historique
+//     des pages sans head, elle DOIT passer) ; un contenu custom est
+//     SAUTI (fail-open : jamais de snippet avant <!doctype).
 //
-// Retourne l'indice d'insertion dans buf, ou -1 pour « pas encore
-// décidé — lire davantage » ; eof=true force la décision finale
-// (fin de corps, erreur transport incluse).
-func decideInjection(buf []byte, eof bool) int {
+// Retourne (indice d'insertion dans buf, ok) ; ok=false pour « pas
+// d'insertion possible » (head absent à la fenêtre/EOF) ; indice -1 =
+// « pas encore décidé — lire davantage » ; eof=true force la décision
+// finale (fin de corps, erreur transport incluse).
+func decideInjection(buf []byte, eof bool) (int, bool) {
 
 	if idx := headOpen.FindIndex(buf); idx != nil {
 		if len(buf) < encodingSniffWindow && !eof {
-			return -1 // la meta charset peut encore apparaître jusqu'à 1024
+			return -1, true // la meta charset peut encore apparaître jusqu'à 1024
 		}
 		injectAt := idx[1]
 		sniff := buf
@@ -208,23 +211,29 @@ func decideInjection(buf []byte, eof bool) int {
 		if m := charsetMeta.FindIndex(sniff); m != nil && m[1] > injectAt {
 			injectAt = m[1]
 		}
-		return injectAt
+		return injectAt, true
 	}
 
-	// pas de <head> : chercher jusqu'à la fenêtre, puis fallback (0).
+	// pas de <head> : chercher jusqu'à la fenêtre, puis fail-open.
 	if len(buf) < injectScanWindow && !eof {
-		return -1
+		return -1, true
 	}
-	return 0
+	return 0, false
 }
 
 // guardStream traverse le corps en flux et insère le script une fois,
 // au point choisi parmi les premiers octets. Tout ce qui suit
 // l'injection passe SANS copie de re-lecture : les 6 Mo du livre
 // proxifié ne résident jamais en mémoire gateway.
+//
+// skipNF (contenu custom) : sans <head> dans la fenêtre, le contenu
+// est SAUTI (fail-open, jamais de snippet avant <!doctype) — la garde,
+// elle, conserve son fallback historique (insertion en tête : elle
+// DOIT passer).
 type guardStream struct {
 	src    io.ReadCloser
 	script string
+	skipNF bool
 
 	scratch  []byte // buffer de lecture recyclé
 	buf      []byte // octets retenus en attente de décision (≤ fenêtre)
@@ -267,10 +276,23 @@ func (g *guardStream) Read(p []byte) (int, error) {
 			// (l'erreur du dessous fera tiquer le copyResponse)
 			eof = true
 		}
-		injectAt := decideInjection(g.buf, eof)
+		injectAt, ok := decideInjection(g.buf, eof)
 		if injectAt < 0 {
 			continue // tampon borné par injectScanWindow
 		}
+		if !ok {
+			// pas de <head> (fragment d'app framework) : la garde
+			// préfixe (comportement historique), un custom saute.
+			if g.skipNF {
+				g.pend = append(g.pend[:0], g.buf...)
+				g.buf = nil
+				g.streamed = true
+				g.decided = true
+				continue
+			}
+			injectAt = 0
+		}
+		g.decided = true
 		out := make([]byte, 0, len(g.buf)+len(g.script))
 		out = append(out, g.buf[:injectAt]...)
 		out = append(out, g.script...)

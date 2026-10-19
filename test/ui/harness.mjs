@@ -1,6 +1,6 @@
 // Harnais comportemental du script de garde — SANS fichier extrait à
-// la main : le script est rendu depuis guard.go à chaque exécution
-// (impossible de tester du périmé).
+// la main : le script est rendu depuis guard/guard.js.tmpl à chaque
+// exécution (impossible de tester du périmé).
 //
 //   node run.mjs            → matrice complète (garde rendue, neutre)
 //   node run.mjs --served   → smoke comportemental contre la page
@@ -11,33 +11,35 @@ import { JSDOM } from "jsdom";
 import { fileURLToPath } from "url";
 import path from "path";
 
-const GUARD_GO = path.join(
+const GUARD_TMPL = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  "..", "..", "internal", "proxy", "guard.go"
+  "..", "..", "internal", "proxy", "guard", "guard.js.tmpl"
 );
 const SERVED_URL = process.env.GATEWAY_UI_URL || "https://vers.cladone.com/";
 
-// rendu du guardScript : les 4 verbes Sprintf (loginUrl, authState,
-// uiGate[], userBadge)
+// rendu du guardScript : les 6 verbes Sprintf (loginUrl, authState,
+// uiGate[], userBadge, rewrite DTO, patch[] du bundle)
 export function renderGuard(opts = {}) {
-  const src = readFileSync(GUARD_GO, "utf8");
-  const m = src.match(/const guardScript = `([\s\S]*?)`/);
-  if (!m) throw new Error("guardScript introuvable dans guard.go");
+  const tmpl = readFileSync(GUARD_TMPL, "utf8");
   const loginUrl = opts.loginUrl || "https://login.cladone.com/login";
   const authState = opts.authState || "/__gateway/auth";
   const uiGate = opts.uiGate || "[]";
   const userBadge = opts.userBadge || "null";
-  const rendered = m[1]
+  const rewrite = opts.rewrite || "null";
+  const patch = opts.patch || "[]";
+  const rendered = tmpl
     .replace("%[1]s", loginUrl)
     .replace("%[2]s", authState)
     .replace("%[3]s", uiGate)
-    .replace("%[4]s", userBadge);
-  if (rendered.includes("%")) {
+    .replace("%[4]s", userBadge)
+    .replace("%[5]s", rewrite)
+    .replace("%[6]s", patch);
+  if (rendered.includes("%[")) {
     throw new Error("verbe % résiduel dans le script rendu");
   }
   return rendered
     .replace(/^<script>/, "")
-    .replace(/<\/script>$/, "");
+    .replace(/\s*<\/script>\s*$/, "");
 }
 
 // extraction du script injecté dans une page SERVIE

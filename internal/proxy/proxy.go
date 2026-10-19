@@ -6,7 +6,6 @@ import (
 	"cladone/gateway/internal/pwa"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -165,7 +164,8 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 		injectsBody := guardEnabledFor(route) ||
 			(route.PWA != nil && route.PWA.Enabled) ||
-			rwPlan != nil
+			rwPlan != nil ||
+			route.InjectionBundle() != nil
 
 		rp.Director = func(req *http.Request) {
 			original(req)
@@ -187,109 +187,6 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			proxy:     rp,
 			prefix:    normalizePath(route.Path),
 			pageRoute: route.Frontend,
-		}
-
-		// 401/403 guard script injection on frontend HTML responses
-		if guardEnabledFor(route) {
-			log.Printf(
-				"GUARD enabled host=%s path=%s loginUrl=%s",
-				route.Host,
-				route.Path,
-				guardLoginURL(route),
-			)
-
-			script := fmt.Sprintf(
-				guardScript,
-				guardLoginURL(route),
-				AuthStatePath,
-				uiGateJSON(route),
-				userBadgeJSON(route),
-				rewriteGuardJSON(route, u),
-			)
-			rp.ModifyResponse = func(resp *http.Response) error {
-				if resp.StatusCode != http.StatusOK ||
-					!strings.Contains(
-						resp.Header.Get("Content-Type"),
-						"text/html",
-					) {
-					return nil
-				}
-				// Injection EN FLUX : elle ne lit pas le corps ici
-				// (aucun buffering) — les erreurs transport
-				// surfent pendant la copie, le page reste servie.
-				injectGuardScript(resp, script)
-				return nil
-			}
-		}
-
-		// Réécriture du corps rewriteBody : installée juste après la
-		// garde (wraps le guard, exécutée AVANT lui) ; l'ajustement
-		// upstream (installé après) l'enveloppe et s'exécute encore
-		// avant. Ordre d'exécution : gzip → PWA → upstream(headers)
-		// → rewriteBody → garde. Son script traverse le moteur
-		// SANS réécriture : la DTO n'y porte aucune forme
-		// "scheme://origin" (hosts nus seulement).
-		if rwPlan != nil {
-			previous := rp.ModifyResponse
-
-			rp.ModifyResponse = func(resp *http.Response) error {
-				if previous != nil {
-					if err := previous(resp); err != nil {
-						return err
-					}
-				}
-				if resp.StatusCode != http.StatusOK ||
-					!strings.Contains(
-						resp.Header.Get("Content-Type"),
-						"text/html",
-					) {
-					return nil
-				}
-				// Réécriture EN FLUX Idem guardStream : aucun
-				// buffering, Content-Length retiré (chunked, flush
-				// par écriture car ContentLength vaut -1).
-				resp.Header.Del("Content-Length")
-				resp.Header.Del("Content-Encoding")
-				resp.ContentLength = -1
-				resp.Body = newRewriteStream(resp.Body, rwPlan)
-				return nil
-			}
-
-			log.Printf(
-				"UPSTREAM rewriteBody enabled host=%s origins=%v target=%s except=%d",
-				route.Host,
-				rwPlan.origins,
-				rwPlan.pub,
-				len(rwPlan.except),
-			)
-		}
-
-		//
-		// Upstream response adjustments: absolute redirect Location
-		// rewrite + response headers set/remove. Chained BEFORE the
-		// guard/PWA injections (which only ever touch 200 HTML
-		// bodies), so every existing injector keeps running on top.
-		//
-		if route.Upstream != nil {
-			previous := rp.ModifyResponse
-
-			adjustUpstreamResponse := upstreamResponseModifier(route, u)
-
-			rp.ModifyResponse = func(resp *http.Response) error {
-				if previous != nil {
-					if err := previous(resp); err != nil {
-						return err
-					}
-				}
-				return adjustUpstreamResponse(resp)
-			}
-
-			log.Printf(
-				"UPSTREAM enabled host=%s path=%s backend=%s",
-				route.Host,
-				route.Path,
-				route.Backend,
-			)
 		}
 
 		if route.MCP != nil &&
@@ -321,22 +218,6 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 				}(),
 			)
 
-			// Inject the manifest link + SW registration into
-			// successful HTML responses proxied for this route.
-			// Chain with any ModifyResponse already set (e.g. the
-			// 401/403 guard) so both run.
-			if route.PWA != nil && route.PWA.Enabled {
-				previous := rp.ModifyResponse
-				rp.ModifyResponse = func(resp *http.Response) error {
-					if previous != nil {
-						if err := previous(resp); err != nil {
-							return err
-						}
-					}
-					return pwa.InjectResponse(resp)
-				}
-			}
-
 			log.Printf(
 				"CLIENT runtime enabled host=%s path=%s (pwa=%v rewriteBody=%v)",
 				route.Host,
@@ -346,49 +227,16 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			)
 		}
 
-		routes = append(routes, cr)
-
-		// Wrapper décompression, installé en DERNIER = exécuté en
-		// PREMIER dans la chaîne (garde → upstream → pwa ensuite) :
-		// le HTML gzip de l'origine est servi en clair aux injecteurs.
-		// Un encodage indécodable (brotli/zstd qui auraient franchi
-		// le forçage amont) n'est JAMAIS manipulé : passthrough.
-		if injectsBody {
-			previous := rp.ModifyResponse
-
-			rp.ModifyResponse = func(resp *http.Response) error {
-				if resp.StatusCode != http.StatusOK ||
-					!strings.Contains(
-						resp.Header.Get("Content-Type"),
-						"text/html",
-					) {
-					return previous(resp)
-				}
-
-				switch enc := resp.Header.Get("Content-Encoding"); enc {
-				case "", "identity":
-					// déjà en clair
-				case "gzip":
-					if err := decodeGzipBody(resp); err != nil {
-						log.Printf(
-							"GUNZIP failed host=%s: %v",
-							route.Host,
-							err,
-						)
-						return err
-					}
-				default:
-					log.Printf(
-						"INJECTION skipped host=%s: Content-Encoding %q indécodable — réponse servie telle quelle",
-						route.Host,
-						enc,
-					)
-					return nil
-				}
-
-				return previous(resp)
-			}
+		// Chaîne d'injection de la route : le registry (injector.go)
+		// porte chaque feature et leur ordre — gzip → garde →
+		// rewriteBody → upstream(headers) → pwa → custom. Le JS de
+		// garde vit dans guard/guard.js.tmpl (go:embed) ; les
+		// injections custom (bundle) sont des données, pas du code.
+		if injectors := buildInjectors(route, u, rwPlan, injectsBody); len(injectors) > 0 {
+			rp.ModifyResponse = chainInjectors(injectors)
 		}
+
+		routes = append(routes, cr)
 
 	}
 
@@ -600,6 +448,18 @@ func uiGateJSON(route *core.Route) string {
 		return "[]"
 	}
 	return core.AsciiJSON(route.UIGate, "[]")
+}
+
+// patchJSONFor sérialise les règles patch du bundle de la route pour
+// le script de garde (PATCH=%s ; "[]" sans bundle ni patch). Les
+// valeurs non-ASCII sont échappées (payload ascii-safe, cf. incident
+// mojibake).
+func patchJSONFor(route *core.Route) string {
+	b := route.InjectionBundle()
+	if b == nil || len(b.Patch) == 0 {
+		return "[]"
+	}
+	return core.AsciiJSON(b.Patch, "[]")
 }
 
 // rewriteGuardJSON sérialise la politique rewriteBody pour le script

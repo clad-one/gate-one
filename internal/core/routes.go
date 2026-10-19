@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -503,6 +505,64 @@ type Route struct {
 	UserBadge *UserBadgePolicy `json:"userBadge,omitempty"`
 
 	AuthGuard *AuthGuardPolicy `json:"authGuard,omitempty"`
+
+	// Inject : chemin du bundle d'injections custom de la route
+	// (JSON : injects = HTML/JS/CSS par cible nommée, patch = règles
+	// data-* appliquées par le garde), relatif au fichier de config —
+	// le tableau de routage ne grossit jamais du code des sites.
+	Inject string `json:"inject,omitempty"`
+
+	// injection : bundle résolu au load (contenus des file: lus,
+	// validation stricte) — jamais sérialisé.
+	injection *InjectBundle `json:"-"`
+}
+
+// InjectionBundle : le bundle d'injections résolu de la route ; nil
+// sans bloc "inject".
+func (r *Route) InjectionBundle() *InjectBundle { return r.injection }
+
+// InjectBundle : bundle d'injections custom d'une route, résolu au
+// load (fichiers lus, tout validé — un bundle fautif refuse le
+// démarrage/reload plutôt qu'être ignoré).
+type InjectBundle struct {
+	// Contents : les injections à insérer dans les pages (triées par
+	// Order croissant = ordre dans le document).
+	Contents []InjectContent `json:"injects,omitempty"`
+	// Patch : règles d'attribution data-* par sélecteur, appliquées
+	// côté client par le garde (extension de l'évaluation uiGate —
+	// même sonde, même cycle). Route frontend requise.
+	Patch []InjectPatch `json:"patch,omitempty"`
+}
+
+// InjectContent : une insertion — contenu assemblé au load (html/
+// style/script inline + contenu des file:), cible nommée dans le
+// document, filtrage par page (préfixe de chemin, même grammaire que
+// route.path).
+type InjectContent struct {
+	// Name : identifiant du bundle (unique, logs).
+	Name string `json:"name"`
+	// Target : "head" (défaut — après <head>/meta charset) ou
+	// "body-end" (avant </body>).
+	Target string `json:"target,omitempty"`
+	// Order : position dans le document au sein d'une même cible
+	// (30+ pour les customs ; la garde vaut 10, la pwa 20).
+	Order int `json:"order,omitempty"`
+	// WhenPath : préfixe de chemin des pages visées ("/*" = tout le
+	// site) ; vide = toutes.
+	WhenPath string `json:"when,omitempty"`
+	// Content : le snippet ASSEMBLÉ (html + style + script + file),
+	// prêt à insérer tel quel.
+	Content string `json:"-"`
+}
+
+// InjectPatch : une règle de patch — les attributs (typiquement des
+// data-gtw-*) sont posés sur les éléments matchés par le sélecteur.
+// S'applique à chaque cycle d'évaluation du garde (éléments dynamiques
+// couverts) ; un attribut markup préexistant est ÉCRASÉ (le patch
+// déclare la cible, le sélecteur la trouve).
+type InjectPatch struct {
+	Selector string            `json:"selector"`
+	Attrs    map[string]string `json:"attrs,omitempty"`
 }
 
 type Config struct {
@@ -562,6 +622,12 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 
+	// Bundles d'injection résolus (fichiers lus au load : un bundle
+	// fautif refuse le démarrage, jamais ignoré en silence).
+	if err := cfg.loadInjectBundles(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
@@ -573,6 +639,184 @@ func Load(path string) (*Config, error) {
 // d'en-têtes upstream — ${NOM} uniquement (jamais $NU, pour ne pas
 // dénaturer une valeur qui contiendrait un $ littéral).
 var envVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// cibles d'insertion nommées (le "head" = après <head>/meta charset —
+// la mécanique de la garde ; "body-end" = avant </body>).
+var validInjectTargets = map[string]bool{
+	"":         true, // défaut = head
+	"head":     true,
+	"body-end": true,
+}
+
+// bornes des injections custom : Order >= 30 (la garde vaut 10, la
+// pwa 20 — un custom ne peut pas se glisser devant l'infrastructure)
+// et contenu borné.
+const (
+	minInjectOrder    = 30
+	maxInjectOrder    = 10000
+	maxInjectContents = 64
+	maxInjectPatch    = 64
+	maxInjectSnippet  = 256 << 10 // 256 Kio par entrée (fichier inclus)
+)
+
+// rawInjectBundle : forme sérialisée du bundle (avant résolution des
+// file:).
+type rawInjectBundle struct {
+	Injects []struct {
+		Name   string `json:"name"`
+		Target string `json:"target,omitempty"`
+		Order  *int   `json:"order,omitempty"`
+		When   string `json:"when,omitempty"`
+		HTML   string `json:"html,omitempty"`
+		Style  string `json:"style,omitempty"`
+		Script string `json:"script,omitempty"`
+		File   string `json:"file,omitempty"`
+	} `json:"injects"`
+	Patch []InjectPatch `json:"patch"`
+}
+
+// loadInjectBundles résout le bloc "inject" de chaque route : lit le
+// bundle (JSON strict), assemble les contenus (inline + files) et
+// valide. dir = répertoire du fichier de config.
+func (c *Config) loadInjectBundles(dir string) error {
+
+	for i := range c.Routes {
+
+		ref := c.Routes[i].Inject
+		if ref == "" {
+			continue
+		}
+		host := c.Routes[i].Host
+
+		bundlePath := ref
+		if !filepath.IsAbs(bundlePath) {
+			bundlePath = filepath.Join(dir, ref)
+		}
+		data, err := os.ReadFile(bundlePath)
+		if err != nil {
+			return fmt.Errorf("route %s: inject %q: %v", host, ref, err)
+		}
+
+		var raw rawInjectBundle
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&raw); err != nil {
+			return fmt.Errorf("route %s: inject %q: %v", host, ref, err)
+		}
+
+		if len(raw.Injects) > maxInjectContents {
+			return fmt.Errorf("route %s: inject %q: %d entrées (max %d)",
+				host, ref, len(raw.Injects), maxInjectContents)
+		}
+		if len(raw.Patch) > maxInjectPatch {
+			return fmt.Errorf("route %s: inject %q: %d patch (max %d)",
+				host, ref, len(raw.Patch), maxInjectPatch)
+		}
+
+		bundle := &InjectBundle{Patch: raw.Patch}
+		bundleDir := filepath.Dir(bundlePath)
+		seen := make(map[string]bool, len(raw.Injects))
+
+		for j := range raw.Injects {
+			in := &raw.Injects[j]
+			if in.Name == "" {
+				return fmt.Errorf(
+					"route %s: inject %q: injects[%d].name vide", host, ref, j)
+			}
+			if seen[in.Name] {
+				return fmt.Errorf(
+					"route %s: inject %q: nom dupliqué %q", host, ref, in.Name)
+			}
+			seen[in.Name] = true
+
+			if !validInjectTargets[in.Target] {
+				return fmt.Errorf(
+					"route %s: inject %q: %s.target %q (attendu \"head\" ou \"body-end\")",
+					host, ref, in.Name, in.Target)
+			}
+
+			order := 30
+			if in.Order != nil {
+				order = *in.Order
+			}
+			if order < minInjectOrder || order > maxInjectOrder {
+				return fmt.Errorf(
+					"route %s: inject %q: %s.order %d (bornes %d-%d)",
+					host, ref, in.Name, order, minInjectOrder, maxInjectOrder)
+			}
+
+			// assemblage : le style et le script sont ENVELOPPÉS
+			// (l'html et le file: sont injectés tels quels)
+			var parts []string
+			if in.HTML != "" {
+				parts = append(parts, in.HTML)
+			}
+			if in.Style != "" {
+				parts = append(parts, "<style>"+in.Style+"</style>")
+			}
+			if in.Script != "" {
+				parts = append(parts, "<script>"+in.Script+"</script>")
+			}
+			content := strings.Join(parts, "\n")
+			if in.File != "" {
+				if strings.Contains(in.File, "..") || filepath.IsAbs(in.File) {
+					return fmt.Errorf(
+						"route %s: inject %q: %s.file %q (chemin relatif au bundle requis)",
+						host, ref, in.Name, in.File)
+				}
+				fileData, err := os.ReadFile(
+					filepath.Join(bundleDir, in.File))
+				if err != nil {
+					return fmt.Errorf(
+						"route %s: inject %q: %s.file: %v",
+						host, ref, in.Name, err)
+				}
+				parts = append(parts, string(fileData))
+				content = strings.Join(parts, "\n")
+			}
+			if strings.TrimSpace(content) == "" {
+				return fmt.Errorf(
+					"route %s: inject %q: %s sans contenu (html/style/script/file)",
+					host, ref, in.Name)
+			}
+			if len(content) > maxInjectSnippet {
+				return fmt.Errorf(
+					"route %s: inject %q: %s : %d octets (max %d)",
+					host, ref, in.Name, len(content), maxInjectSnippet)
+			}
+
+			bundle.Contents = append(bundle.Contents, InjectContent{
+				Name:     in.Name,
+				Target:   in.Target,
+				Order:    order,
+				WhenPath: in.When,
+				Content:  content,
+			})
+		}
+
+		// ordre du document = Order croissant (tri stable)
+		sort.SliceStable(bundle.Contents, func(a, b int) bool {
+			return bundle.Contents[a].Order < bundle.Contents[b].Order
+		})
+
+		for k := range raw.Patch {
+			p := &raw.Patch[k]
+			if p.Selector == "" {
+				return fmt.Errorf(
+					"route %s: inject %q: patch[%d].selector vide",
+					host, ref, k)
+			}
+			if len(p.Attrs) == 0 {
+				return fmt.Errorf(
+					"route %s: inject %q: patch[%d] (%s) sans attrs",
+					host, ref, k, p.Selector)
+			}
+		}
+
+		c.Routes[i].injection = bundle
+	}
+	return nil
+}
 
 // expandEnvVars remplace chaque ${VAR} par la variable d'environnement
 // correspondante. Variable absente = erreur nommée (le gateway refuse

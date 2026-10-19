@@ -492,7 +492,7 @@ func TestGuardInjectsMidsizePageCompletely(t *testing.T) {
 }
 
 // guardInjectedLen : taille exacte du script que la route injecte
-// (même Sprintf que proxy.New).
+// (même Sprintf que buildInjectors).
 func guardInjectedLen(t *testing.T) int {
 	t.Helper()
 	gw, _ := upstreamGateway(t, `{
@@ -513,6 +513,7 @@ func guardInjectedLen(t *testing.T) int {
 		uiGateJSON(route),
 		userBadgeJSON(route),
 		rewriteGuardJSON(route, backend),
+		patchJSONFor(route),
 	)
 	return len(script)
 }
