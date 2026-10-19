@@ -64,7 +64,21 @@ func upstreamResponseModifier(
 	return func(resp *http.Response) error {
 
 		if up.RewriteRedirects != nil && *up.RewriteRedirects {
-			rewriteUpstreamLocation(backend, publicHost, resp)
+			// the Location's replacement origin mirrors the CLIENT
+			// request (scheme + host:port) — in the demo the gateway
+			// runs on a non-standard port: an https-only or
+			// port-less Location would throw the browser out of the
+			// proxy. Absent context (direct test calls): the
+			// historical https + route host.
+			origin := "https://" + publicHost
+			if resp.Request != nil {
+				if scheme := requestSchemeOut(resp.Request); scheme != "" {
+					if host := requestHostOut(resp.Request); host != "" {
+						origin = scheme + "://" + host
+					}
+				}
+			}
+			rewriteUpstreamLocation(backend, origin, resp)
 		}
 
 		if rc := up.RewriteCookies; rc != nil {
@@ -90,13 +104,14 @@ func upstreamResponseModifier(
 
 // rewriteUpstreamLocation rewrites the response's Location header
 // in place when it targets the backend origin in absolute form
-// (scheme://backend.host/...): public https scheme, public host,
-// path/query/fragment preserved. Relative Locations and those
-// targeting another origin (e.g. a Cloudflare Access team domain)
-// pass untouched.
+// (scheme://backend.host/...): the CLIENT origin (scheme://host:port,
+// e.g. http://wikipedia.demo.localhost:3000 in the demo — https in
+// production), path/query/fragment preserved. Relative Locations and
+// those targeting another origin (e.g. a Cloudflare Access team
+// domain) pass untouched.
 func rewriteUpstreamLocation(
 	backend *url.URL,
-	publicHost string,
+	publicOrigin string,
 	resp *http.Response,
 ) {
 
@@ -118,8 +133,13 @@ func rewriteUpstreamLocation(
 		return
 	}
 
-	ru.Scheme = "https"
-	ru.Host = publicHost
+	origin, err := url.Parse(publicOrigin)
+	if err != nil {
+		return
+	}
+
+	ru.Scheme = origin.Scheme
+	ru.Host = origin.Host
 
 	resp.Header.Set("Location", ru.String())
 }

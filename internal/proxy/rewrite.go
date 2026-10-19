@@ -181,6 +181,11 @@ type rewriteStream struct {
 	// scheme: the rewritten URLs' scheme (request's real scheme);
 	// "" = https (default).
 	scheme string
+	// reqHost: the CLIENT request's host, with its port when
+	// non-standard (app1.demo.localhost:3000) — the rewritten URLs
+	// keep the browser on the origin it called. Empty = the route's
+	// own public host (https production default).
+	reqHost string
 
 	scratch  []byte
 	buf      []byte
@@ -201,10 +206,22 @@ func newRewriteStreamWithScheme(
 	cfg *rewritePlan,
 	scheme string,
 ) *rewriteStream {
+	return newRewriteStreamForRequest(src, cfg, scheme, "")
+}
+
+// newRewriteStreamForRequest: the scheme AND the client host (with
+// its port when non-standard) — the rewritten URLs mirror the origin
+// the browser called, so it never leaves the proxy (demo :3000).
+func newRewriteStreamForRequest(
+	src io.ReadCloser,
+	cfg *rewritePlan,
+	scheme, reqHost string,
+) *rewriteStream {
 	return &rewriteStream{
 		src:     src,
 		cfg:     cfg,
 		scheme:  scheme,
+		reqHost: reqHost,
 		scratch: make([]byte, 4096),
 	}
 }
@@ -493,12 +510,17 @@ func (s *rewriteStream) decision(m cand) (replacement string, keep bool) {
 			return "", true // exception: stay at the origin
 		}
 	}
-	// standard rewrite: the scheme follows the request (https in
-	// production, http in demo)
-	if s.scheme == "" || s.scheme == "https" {
-		return s.cfg.pub, false
+	// standard rewrite: the scheme AND the host follow the request —
+	// the client host (with its non-standard port in the demo) so
+	// the browser never leaves the proxy on a rewritten link.
+	host := s.reqHost
+	if host == "" {
+		host = s.cfg.pubHost
 	}
-	return s.scheme + "://" + s.cfg.pubHost, false
+	if s.scheme == "" || s.scheme == "https" {
+		return "https://" + host, false
+	}
+	return s.scheme + "://" + host, false
 }
 
 // applyCandidate emits buf[:formStart] then (unchanged original or

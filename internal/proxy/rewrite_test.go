@@ -38,6 +38,7 @@ func rewriteTestPlan() *rewritePlan {
 	return &rewritePlan{
 		origins:   []string{"origin.example"},
 		pub:       "https://public.test",
+		pubHost:   "public.test",
 		except:    except,
 		hold:      len("https://") + len("origin.example"),
 		maxExcept: maxExcept,
@@ -277,9 +278,35 @@ func rewriteStreamCase(t *testing.T, plan *rewritePlan, body []byte, chunk int) 
 	return string(got)
 }
 
+// Demo port: the rewritten URLs carry the CLIENT host:port and
+// scheme (http://wikipedia.demo.localhost:3000/…) — an https-only or
+// port-less target would throw the browser out of the proxy.
+func TestRewriteStreamRequestHostPort(t *testing.T) {
+	plan := rewriteTestPlan()
+	plan.pubHost = "wikipedia.demo.localhost" // route.Host
+	rs := newRewriteStreamForRequest(
+		io.NopCloser(bytes.NewReader(
+			[]byte(`<a href="https://origin.example/edit/page?x=1">edit</a>`+
+				`<a href="//origin.example/x">x</a>`+
+				`<a href="http://origin.example/y">y</a>`))),
+		plan, "http", "wikipedia.demo.localhost:3000",
+	)
+	got, err := io.ReadAll(rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<a href="http://wikipedia.demo.localhost:3000/edit/page?x=1">edit</a>` +
+		`<a href="http://wikipedia.demo.localhost:3000/x">x</a>` +
+		`<a href="http://wikipedia.demo.localhost:3000/y">y</a>`
+	if string(got) != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
 // The streaming engine must produce EXACTLY the oracle's output,
 // whatever the read chunking (1 byte = worst case: the sliding
 // window is exercised at every byte).
+
 func TestRewriteStreamMatchesReference(t *testing.T) {
 	plan := rewriteTestPlan()
 	for _, c := range rewriteTextCases() {

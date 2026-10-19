@@ -225,8 +225,9 @@ func (i *rewriteBodyInjector) modify(resp *http.Response) error {
 	resp.Header.Del("Content-Length")
 	resp.Header.Del("Content-Encoding")
 	resp.ContentLength = -1
-	resp.Body = newRewriteStreamWithScheme(
-		resp.Body, i.plan, requestSchemeOut(resp.Request))
+	resp.Body = newRewriteStreamForRequest(
+		resp.Body, i.plan, requestSchemeOut(resp.Request),
+		requestHostOut(resp.Request))
 	return nil
 }
 

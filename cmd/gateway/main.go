@@ -194,8 +194,12 @@ func printRoutes(cfg *core.Config) {
 		if r.AuthGuard != nil {
 			p = append(p, "authGuard")
 		}
-		fmt.Fprintf(out, "%-42s %-26s %-44s %s\n",
+		fmt.Fprintf(out, "%-42s %-26s %-44s %s",
 			r.Host, r.Path, r.Backend, strings.Join(p, ","))
+		if src := r.WildcardSource(); src != "" {
+			fmt.Fprintf(out, "  [wildcard %s]", src)
+		}
+		fmt.Fprintln(out)
 	}
 	fmt.Fprint(os.Stdout, out.String())
 }

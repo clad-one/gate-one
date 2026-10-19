@@ -167,14 +167,22 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			route.InjectionBundle() != nil
 
 		rp.Director = func(req *http.Request) {
+			// the CLIENT host (with its non-standard port) — frozen
+			// BEFORE the upstream policy rewrites it to the backend
+			// origin: body/Location injectors read it back in
+			// ModifyResponse and the rewritten URLs keep the browser
+			// on the origin it called (demo :3000 included).
+			clientHost := req.Host
 			original(req)
 			// freezes the CLIENT scheme (X-Forwarded-Proto from the
 			// ingress, still intact here — ReverseProxy overwrites
 			// it afterwards with the gateway→backend hop's scheme)
 			// into the context: body injectors read it back in
 			// ModifyResponse (resp.Request).
-			*req = *req.WithContext(context.WithValue(
-				req.Context(), clientSchemeKey, clientScheme(req)))
+			ctx := context.WithValue(
+				req.Context(), clientSchemeKey, clientScheme(req))
+			ctx = context.WithValue(ctx, clientHostKey, clientHost)
+			*req = *req.WithContext(ctx)
 			if injectsBody {
 				req.Header.Set("Accept-Encoding", "gzip")
 			}
@@ -558,6 +566,26 @@ func clientScheme(r *http.Request) string {
 		return "https"
 	}
 	return "http"
+}
+
+// clientHostKey: same freeze for the CLIENT host (with its
+// non-standard port when there is one — the demo runs on :3000). The
+// upstream policy rewrites req.Host to the backend origin: the
+// client value must be frozen BEFORE that.
+type clientHostKeyT struct{}
+
+var clientHostKey = new(clientHostKeyT)
+
+// requestHostOut: the client host for ModifyResponse injectors
+// (resp.Request = outgoing request): the value frozen by the
+// Director before the upstream policy rewrites it. Empty = absent.
+func requestHostOut(r *http.Request) string {
+	if r != nil {
+		if v, ok := r.Context().Value(clientHostKey).(string); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // requestSchemeOut: the client scheme for ModifyResponse injectors

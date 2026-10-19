@@ -526,6 +526,14 @@ type Route struct {
 	Host string `json:"host"`
 	Path string `json:"path"`
 
+	// Wildcard: named host/backend expansion — one route, N sites.
+	// Each key is a capture name ({name} in host and backend), its
+	// value the ALLOW-LIST of DNS labels it may take. The route is
+	// expanded AT LOAD into one concrete route per label (zero
+	// per-request cost); a label outside the lists has no route —
+	// fail-closed: the backend is never attacker-derived (anti-SSRF).
+	Wildcard Wildcard `json:"wildcard,omitempty"`
+
 	Frontend bool   `json:"frontend,omitempty"`
 	Backend  string `json:"backend"`
 
@@ -565,6 +573,167 @@ type Route struct {
 	// injection: bundle resolved at load (file: contents read,
 	// strict validation) — never serialized.
 	injection *InjectBundle `json:"-"`
+
+	// wildcardSrc: the wildcard pattern this route was expanded
+	// from (route table annotation; never decoded).
+	wildcardSrc string `json:"-"`
+}
+
+// Wildcard: a route's expansion allow-lists — key = capture name
+// ({name} in host and backend), value = the DNS labels it may take.
+type Wildcard map[string][]string
+
+// WildcardSource: the wildcard pattern the route was expanded from
+// ("" for a route declared literally) — route table annotation.
+func (r *Route) WildcardSource() string { return r.wildcardSrc }
+
+// wildcardLabel: an allow-list entry — one DNS label, lowercase,
+// no dots (the bounded-domain guarantee: a value can never jump to
+// another domain).
+var wildcardLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+// wildcardCapture: a host/backend label of the {name} form.
+var wildcardCapture = regexp.MustCompile(`^\{([a-z0-9_-]+)\}$`)
+
+// expandWildcards: every wildcard route is EXPANDED AT LOAD into its
+// concrete routes (cross product of the allow-lists, stable order) —
+// the request path never sees a wildcard: findRoute, rewriteBody,
+// redirects and the probe keep running on concrete compiled routes,
+// exactly as before (zero per-request cost). A label outside an
+// allow-list simply has no route.
+func (c *Config) expandWildcards() error {
+
+	if len(c.Routes) == 0 {
+		return nil
+	}
+
+	// the concrete (host, path) pairs already declared: an expansion
+	// colliding with one of them is a config AMBIGUITY — refused (a
+	// wildcard must never silently shadow an exact route).
+	taken := make(map[string]bool, len(c.Routes))
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		if r.Wildcard == nil {
+			taken[wildcardKey(r.Host, r.Path)] = true
+		}
+	}
+
+	expanded := make([]Route, 0, len(c.Routes))
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		if r.Wildcard == nil {
+			expanded = append(expanded, *r)
+			continue
+		}
+		variants, err := r.expandWildcard(taken)
+		if err != nil {
+			return fmt.Errorf("route %s: %v", r.Host, err)
+		}
+		expanded = append(expanded, variants...)
+	}
+	c.Routes = expanded
+	return nil
+}
+
+// wildcardKey: the collision key — normalized host + path.
+func wildcardKey(host, path string) string {
+	return strings.ToLower(host) + "|" + path
+}
+
+// expandWildcard: one wildcard route → its concrete variants.
+func (r *Route) expandWildcard(taken map[string]bool) ([]Route, error) {
+
+	// the host pattern: labels are literals or {name} captures
+	labels := strings.Split(r.Host, ".")
+	var names []string
+	seen := map[string]bool{}
+	for _, l := range labels {
+		m := wildcardCapture.FindStringSubmatch(l)
+		if m == nil {
+			if strings.ContainsAny(l, "{}*") {
+				return nil, fmt.Errorf(
+					"label %q: malformed capture (expected {name})", l)
+			}
+			continue
+		}
+		name := m[1]
+		if seen[name] {
+			return nil, fmt.Errorf("capture {%s}: declared twice", name)
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("wildcard host without any {capture}")
+	}
+
+	// every capture needs its allow-list; every allow-list entry
+	// must be referenced (no dead config). The capture MAY be absent
+	// from the backend: present = per-label backends (the binding
+	// host↔backend), absent = N host aliases on one fixed backend.
+	for _, name := range names {
+		if len(r.Wildcard[name]) == 0 {
+			return nil, fmt.Errorf("capture {%s}: no allow-list", name)
+		}
+	}
+	for name := range r.Wildcard {
+		if !seen[name] {
+			return nil, fmt.Errorf(
+				"wildcard param %q: not present in the host", name)
+		}
+	}
+
+	// cross product of the allow-lists, sorted parameters AND sorted
+	// values (deterministic expansion: same config → same route
+	// table, whatever the authoring order)
+	sort.Strings(names)
+	variants := []map[string]string{{}}
+	for _, name := range names {
+		labels := make([]string, len(r.Wildcard[name]))
+		copy(labels, r.Wildcard[name])
+		sort.Strings(labels)
+		var next []map[string]string
+		for _, v := range variants {
+			for _, label := range labels {
+				if !wildcardLabel.MatchString(label) {
+					return nil, fmt.Errorf(
+						"wildcard %s=%q: invalid label (a-z0-9, hyphens, no dots)",
+						name, label)
+				}
+				m := make(map[string]string, len(v)+1)
+				for k, val := range v {
+					m[k] = val
+				}
+				m[name] = label
+				next = append(next, m)
+			}
+		}
+		variants = next
+	}
+
+	out := make([]Route, 0, len(variants))
+	for _, vars := range variants {
+		host := r.Host
+		backend := r.Backend
+		for name, label := range vars {
+			host = strings.ReplaceAll(host, "{"+name+"}", label)
+			backend = strings.ReplaceAll(backend, "{"+name+"}", label)
+		}
+		key := wildcardKey(host, r.Path)
+		if taken[key] {
+			return nil, fmt.Errorf(
+				"expansion %s collides with an existing route (a wildcard must not shadow an exact route)",
+				host)
+		}
+		taken[key] = true
+		e := *r // shared sub-policies: read-only at compile
+		e.Host = host
+		e.Backend = backend
+		e.Wildcard = nil
+		e.wildcardSrc = r.Host
+		out = append(out, e)
+	}
+	return out, nil
 }
 
 // InjectionBundle: the route's resolved injection bundle; nil
@@ -711,6 +880,16 @@ func Load(path string) (*Config, error) {
 		}
 
 		return nil, err
+	}
+
+	// Wildcard routes expanded AT LOAD into concrete routes (one per
+	// allow-listed label): the request path never sees a wildcard —
+	// findRoute, rewriteBody, redirects and the probe keep running on
+	// concrete compiled routes exactly as before. A label outside an
+	// allow-list = no route (fail-closed: the backend is never
+	// attacker-derived).
+	if err := cfg.expandWildcards(); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 
 	// Upstream secrets (${VAR} in headers) resolved BEFORE the

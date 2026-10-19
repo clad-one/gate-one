@@ -954,3 +954,91 @@ func TestGzippedAssetPassthrough(t *testing.T) {
 		t.Errorf("asset content corrupted: %.60q", dec)
 	}
 }
+
+// Demo port: the client host carries a NON-STANDARD port — the
+// rewritten Location must mirror scheme AND host:port (an https-only
+// or port-less Location would throw the browser out of the proxy:
+// nothing listens on 443/80 there).
+func TestUpstreamRewriteRedirectsDemoPort(t *testing.T) {
+	gw, backend := upstreamGateway(t, `{
+		"routes": [{
+			"host": "wikipedia.demo.localhost", "path": "/*",
+			"frontend": true, "backend": "BACKEND",
+			"upstream": {"host": true, "rewriteRedirects": true}
+		}]
+	}`)
+
+	absolu := backend.Scheme + "://" + backend.Host + "/Correspondances/?a=1"
+	// the direct-HTTP demo variant: NO X-Forwarded-Proto (doGet
+	// simulates the prod ingress and forces https) — clientScheme
+	// falls back to plain http, as in the real demo.
+	resp := doRequestWithHeaders(t, gw, "wikipedia.demo.localhost:3000",
+		"/redirect?loc="+url.QueryEscape(absolu), nil)
+	if got := resp.Header.Get("Location"); got != "http://wikipedia.demo.localhost:3000/Correspondances/?a=1" {
+		t.Errorf("Location = %q (status %d), want http://wikipedia.demo.localhost:3000/Correspondances/?a=1",
+			got, resp.StatusCode)
+	}
+}
+
+// Wildcard {lang}: one route, N sites — the expansion happened at
+// load; the request path is the historical one: routing per expanded
+// host, backend receiving ITS origin as Host, SSRF blocked (a label
+// outside the allow-list has no route), rewriting mirroring the
+// client origin (scheme + host:port).
+func TestWildcardRoutingE2E(t *testing.T) {
+	// ALIAS form: the capture stays out of the backend (one fixed
+	// local backend, N hosts) — the whole e2e runs on the loopback,
+	// no network. The BOUND form ({lang} in the backend) is covered
+	// at string level by TestWildcardExpansion and live by the demo.
+	gw, backend := upstreamGateway(t, `{
+		"routes": [{
+			"host": "{lang}.wild.test", "path": "/*",
+			"backend": "BACKEND",
+			"wildcard": {"lang": ["fr", "en"]},
+			"frontend": true,
+			"upstream": {"host": true, "rewriteRedirects": true,
+			             "rewriteBody": {"enabled": true}}
+		}]
+	}`)
+
+	// routing per expanded host
+	resp := doGet(t, gw, "fr.wild.test:3000", "/echo")
+	if got := echoOf(t, resp)["host"]; got != backend.Host {
+		t.Errorf("backend Host = %v, want %v (upstream.host: true)", got, backend.Host)
+	}
+
+	// the OTHER expansion routes too (same route, same backend)
+	resp = doGet(t, gw, "en.wild.test:3000", "/echo")
+	if got := echoOf(t, resp)["host"]; got != backend.Host {
+		t.Errorf("backend Host = %v, want %v", got, backend.Host)
+	}
+
+	// SSRF fail-closed: a label outside the allow-list has NO route
+	resp = doGet(t, gw, "evil.wild.test:3000", "/echo")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 (fail-closed anti-SSRF)", resp.StatusCode)
+	}
+
+	// redirects: the rewritten Location mirrors the CLIENT origin
+	// (scheme + host:port)
+	absolu := backend.Scheme + "://" + backend.Host + "/Correspondances/?a=1"
+	resp = doRequestWithHeaders(t, gw, "fr.wild.test:3000",
+		"/redirect?loc="+url.QueryEscape(absolu), nil)
+	if got := resp.Header.Get("Location"); got != "http://fr.wild.test:3000/Correspondances/?a=1" {
+		t.Errorf("Location = %q, want http://fr.wild.test:3000/Correspondances/?a=1", got)
+	}
+
+	// the backend cites its own origin — rewritten to the client
+	// origin (with port), the reader stays in the proxy (the
+	// direct-HTTP demo variant: no X-Forwarded-Proto)
+	html := body(t, doRequestWithHeaders(t, gw, "fr.wild.test:3000",
+		"/rwpage", nil))
+	if !strings.Contains(html, `href="http://fr.wild.test:3000/edit/page?x=1"`) {
+		t.Errorf("captured-origin link not rewritten: %s", html)
+	}
+	// the documented traps stay intact: the longer-host decoy
+	// (host:port.more) and the websocket scheme
+	if !strings.Contains(html, `wss://`) {
+		t.Errorf("websocket link altered: %s", html)
+	}
+}

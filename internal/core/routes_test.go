@@ -395,3 +395,131 @@ func TestLoadRealConfigStrict(t *testing.T) {
 		t.Error("no routes loaded")
 	}
 }
+
+// Wildcard {name}: the route expands AT LOAD into one concrete route
+// per allow-listed label — cross product in stable order, all the
+// policies carried over, the expansion never visible to the request
+// path.
+func TestWildcardExpansion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"oidc": {"loginUrl": "http://login.test/login"},
+		"routes": [
+			{"host": "{lang}.wikipedia.demo.localhost", "path": "/*",
+			 "backend": "https://{lang}.wikipedia.org",
+			 "wildcard": {"lang": ["fr", "en", "de"]},
+			 "frontend": true,
+			 "auth": {}}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Routes) != 3 {
+		t.Fatalf("routes = %d, want 3 (one per allow-listed label)", len(c.Routes))
+	}
+	// stable order: sorted allow-list — de, en, fr
+	want := []struct{ host, backend string }{
+		{"de.wikipedia.demo.localhost", "https://de.wikipedia.org"},
+		{"en.wikipedia.demo.localhost", "https://en.wikipedia.org"},
+		{"fr.wikipedia.demo.localhost", "https://fr.wikipedia.org"},
+	}
+	for i, w := range want {
+		r := &c.Routes[i]
+		if r.Host != w.host || r.Backend != w.backend {
+			t.Errorf("route %d = %s → %s, want %s → %s",
+				i, r.Host, r.Backend, w.host, w.backend)
+		}
+		if r.Wildcard != nil {
+			t.Error("expanded route must not carry the wildcard policy")
+		}
+		if !r.Frontend || r.Auth == nil {
+			t.Error("policies must be carried over to the expansion")
+		}
+		if r.WildcardSource() != "{lang}.wikipedia.demo.localhost" {
+			t.Errorf("WildcardSource = %q, want the pattern", r.WildcardSource())
+		}
+	}
+}
+
+// Wildcard grammar and collisions: fail-fast at load.
+func TestWildcardRejects(t *testing.T) {
+	cases := []struct{ name, cfg string }{
+		{
+			"label outside the allow-list is not a config issue (no route) — but a BAD label is",
+			`{"routes": [{"host": "{lang}.x.localhost", "path": "/*",
+			  "backend": "https://{lang}.x.org", "wildcard": {"lang": ["FR"]}}]}`,
+		},
+		{
+			"label with a dot (domain jump)",
+			`{"routes": [{"host": "{lang}.x.localhost", "path": "/*",
+			  "backend": "https://{lang}.x.org", "wildcard": {"lang": ["fr.eu"]}}]}`,
+		},
+		{
+			"capture without allow-list",
+			`{"routes": [{"host": "{lang}.x.localhost", "path": "/*",
+			  "backend": "https://{lang}.x.org", "wildcard": {"other": ["a"]}}]}`,
+		},
+		{
+			"allow-list entry never referenced in the host",
+			`{"routes": [{"host": "{lang}.x.localhost", "path": "/*",
+			  "backend": "https://{lang}.x.org", "wildcard": {"lang": ["fr"], "tld": ["org"]}}]}`,
+		},
+		{
+			"malformed capture",
+			`{"routes": [{"host": "*.x.localhost", "path": "/*",
+			  "backend": "https://x.org", "wildcard": {"lang": ["fr"]}}]}`,
+		},
+		{
+			"collision with an exact route",
+			`{"routes": [
+			  {"host": "fr.wikipedia.demo.localhost", "path": "/*", "backend": "https://other.example"},
+			  {"host": "{lang}.wikipedia.demo.localhost", "path": "/*",
+			   "backend": "https://{lang}.wikipedia.org", "wildcard": {"lang": ["fr", "en"]}}]}`,
+		},
+	}
+	for _, c := range cases {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "routes.json")
+		if err := os.WriteFile(path, []byte(c.cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Errorf("%s: load must be REFUSED", c.name)
+		}
+	}
+}
+
+// Alias form: the capture MAY be absent from the backend — N host
+// aliases on one fixed backend (no SSRF surface at all).
+func TestWildcardAliasForm(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"routes": [
+			{"host": "{lang}.x.localhost", "path": "/*",
+			 "backend": "https://fixed.example", "wildcard": {"lang": ["fr", "en"]}}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Routes) != 2 {
+		t.Fatalf("routes = %d, want 2", len(c.Routes))
+	}
+	for _, r := range c.Routes {
+		if r.Backend != "https://fixed.example" {
+			t.Errorf("alias expansion must keep the fixed backend, got %s", r.Backend)
+		}
+	}
+}
