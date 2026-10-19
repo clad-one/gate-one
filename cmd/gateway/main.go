@@ -21,34 +21,34 @@ func main() {
 	configPath := flag.String(
 		"config",
 		"api-routes.json",
-		"chemin du fichier de routes",
+		"routes file path",
 	)
 	addr := flag.String(
 		"addr",
 		":3000",
-		"adresse d'écoute",
+		"listen address",
 	)
-	// authBridge : base URL du service d'authentification. Défaut :
-	// http://auth-bridge:3000 (nom de service du réseau Docker).
-	// Surchargable en CLI pour les smoke tests (stub local).
+	// authBridge: base URL of the authentication service. Default:
+	// http://auth-bridge:3000 (Docker network service name).
+	// Overridable on the CLI for smoke tests (local stub).
 	authBridge := flag.String(
 		"authBridge",
 		"",
-		"base URL de auth-bridge (défaut http://auth-bridge:3000)",
+		"auth-bridge base URL (default http://auth-bridge:3000)",
 	)
-	// check : valide la configuration et affiche les routes
-	// résolues, sans démarrer — fail-fast en CI, revue avant deploy.
+	// check: validates the configuration and prints the resolved
+	// routes, without starting — fail-fast in CI, review before deploy.
 	check := flag.Bool(
 		"check",
 		false,
-		"valider la config et afficher les routes, sans démarrer",
+		"validate the config and print the routes, without starting",
 	)
-	// logBody : mode debug — logge aussi query/body des requêtes
-	// (données potentiellement sensibles : désactivé par défaut).
+	// logBody: debug mode — also logs request query/body
+	// (potentially sensitive data: disabled by default).
 	logBody := flag.Bool(
 		"logBody",
 		false,
-		"logger query et body des requêtes (debug)",
+		"log request query and body (debug)",
 	)
 	flag.Parse()
 
@@ -61,7 +61,7 @@ func main() {
 	printRoutes(cfg)
 
 	if *check {
-		fmt.Println("configuration valide")
+		fmt.Println("configuration is valid")
 		return
 	}
 
@@ -72,10 +72,10 @@ func main() {
 		proxy.WithLogBody(*logBody),
 	}
 
-	// Config rechargeable à chaud (SIGHUP) : le fichier peut être un
-	// volume monté — ajouter une route = éditer + kill -s HUP, sans
-	// rebuild. Une config invalide est REFUSÉE : l'ancienne reste
-	// active (jamais d'interruption pour une typo).
+	// Hot-reloadable config (SIGHUP): the file can be a mounted
+	// volume — adding a route = edit + kill -s HUP, no rebuild. An
+	// invalid config is REFUSED: the old one stays active (never an
+	// outage over a typo).
 	handler := &proxy.Reloadable{}
 	load := func() error {
 		c, err := core.Load(*configPath)
@@ -93,9 +93,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Timeouts serveur : ReadHeaderTimeout coupe le slowloris ;
-	// PAS de Read/WriteTimeout globaux (ils tueraient les flux
-	// longs : SSE, uploads) ; IdleTimeout recycle les connexions.
+	// Server timeouts: ReadHeaderTimeout cuts slowloris;
+	// NO global Read/WriteTimeouts (they would kill long
+	// streams: SSE, uploads); IdleTimeout recycles connections.
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           handler,
@@ -103,15 +103,15 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// Arrêt gracieux : SIGTERM (docker stop) termine les requêtes en
-	// vol au lieu de les couper ; la marge (8 s) reste sous la
-	// grâce par défaut de docker (10 s).
+	// Graceful shutdown: SIGTERM (docker stop) lets in-flight
+	// requests finish instead of cutting them; the margin (8 s)
+	// stays under docker's default grace period (10 s).
 	stopped := make(chan struct{})
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, os.Interrupt)
 	go func() {
 		s := <-sig
-		log.Printf("%s : arrêt gracieux (8 s max)…", s)
+		log.Printf("%s: graceful shutdown (8 s max)…", s)
 		ctx, cancel := context.WithTimeout(
 			context.Background(), 8*time.Second)
 		defer cancel()
@@ -121,8 +121,8 @@ func main() {
 		close(stopped)
 	}()
 
-	// Reload à chaud : SIGHUP re-charge la config (validée) et
-	// bascule le routage atomiquement.
+	// Hot reload: SIGHUP re-loads the (validated) config and
+	// switches the routing atomically.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 
@@ -130,12 +130,12 @@ func main() {
 		for range hup {
 			if err := load(); err != nil {
 				log.Printf(
-					"SIGHUP : rechargement REFUSÉ (%v) — l'ancienne config reste active",
+					"SIGHUP: reload REFUSED (%v) — the previous config stays active",
 					err,
 				)
 				continue
 			}
-			log.Printf("SIGHUP : configuration rechargée")
+			log.Printf("SIGHUP: configuration reloaded")
 		}
 	}()
 
@@ -146,11 +146,11 @@ func main() {
 		log.Fatal(err)
 	}
 	<-stopped
-	log.Printf("Gateway arrêtée proprement")
+	log.Printf("Gateway shut down cleanly")
 }
 
-// printRoutes : la config résolue, une ligne par route — la revue
-// d'une config se fait en lisant le démarrage (ou -check).
+// printRoutes: the resolved config, one line per route — reviewing
+// a config is done by reading startup output (or -check).
 func printRoutes(cfg *core.Config) {
 	out := &strings.Builder{}
 	fmt.Fprintf(out, "%-42s %-26s %-44s %s\n",

@@ -54,12 +54,12 @@ func splitRoles(s string) []string {
 	return out
 }
 
-// authCacheEntry : identité mise en cache côté gateway. Sans lui,
-// CHAQUE requête (y compris chaque image d'une page lourde : le livre
-// proxifié = 878 images) paie un aller-retour auth-bridge + un
-// jwtVerify. La clé = hash de l'en-tête d'authentification + cookies
-// (propre à une session navigateur) ; TTL court : une reconnexion ou
-// un silent refresh change les cookies → nouvelle clé → miss naturel.
+// authCacheEntry: gateway-side cached identity. Without it, EVERY
+// request (including each image of a heavy page: the proxified book
+// = 878 images) pays an auth-bridge round-trip + a jwtVerify. The
+// key = hash of the authentication header + cookies (specific to one
+// browser session); short TTL: a re-sign-in or a silent refresh
+// changes the cookies → new key → natural miss.
 type authCacheEntry struct {
 	identity *RequestContext
 	expires  time.Time
@@ -97,7 +97,7 @@ func cachedAuth(key string) (*RequestContext, bool) {
 
 func cacheAuth(key string, identity *RequestContext) {
 	if authCacheSize > 500 {
-		// borne douce : purge des expirées avant d'ajouter
+		// soft bound: purge expired entries before adding
 		now := time.Now()
 		authCache.Range(func(k, v any) bool {
 			if now.After(v.(*authCacheEntry).expires) {
@@ -108,19 +108,19 @@ func cacheAuth(key string, identity *RequestContext) {
 		})
 	}
 	if authCacheSize > 2000 {
-		return // jamais gonfler sans limite (proxy amont abusif)
+		return // never grow without bound (abusive upstream proxy)
 	}
 	cp := *identity
-	// la copie ne porte QUE l'identité : les champs de requête
-	// (method/path/…) de l'appelant ne doivent pas fuiter au suivant
+	// the copy carries ONLY the identity: the caller's request
+	// fields (method/path/…) must not leak to the next one
 	cp.Method, cp.Path, cp.Query = "", "", nil
 	cp.Host, cp.Body, cp.Headers = "", nil, nil
 	authCache.Store(key, &authCacheEntry{identity: &cp, expires: time.Now().Add(authCacheTTL)})
 	authCacheSize++
 }
 
-// clearAuthCache : usage tests — le cache est global au process,
-// chaque test doit repartir d'un état neutre.
+// clearAuthCache: test usage — the cache is global to the process,
+// every test must start from a neutral state.
 func clearAuthCache() {
 	authCache.Range(func(k, v any) bool {
 		authCache.Delete(k)
@@ -142,10 +142,10 @@ func (g *Gateway) checkAuth(
 		r.Header.Get("Authorization") != "",
 	)
 
-	// Cache d'identité : un aller-retour auth-bridge par session et
-	// par TTL au lieu d'un par requête. Le Set-Cookie d'un silent
-	// refresh n'est propagé que sur l'appel frais (le cache n'en a
-	// pas) — après rotation, les cookies changent → nouvelle clé.
+	// Identity cache: one auth-bridge round-trip per session and per
+	// TTL instead of one per request. A silent refresh's Set-Cookie
+	// is only propagated on the fresh call (the cache does not have
+	// one) — after rotation, cookies change → new key.
 	if cached, ok := cachedAuth(authCacheKey(r)); ok {
 		atomic.AddInt64(&statAuthCacheHi, 1)
 		log.Printf("AUTH CACHE hit user=%q", cached.Username)
@@ -208,18 +208,18 @@ func (g *Gateway) checkAuth(
 	ctx.Roles = splitRoles(resp.Header.Get("X-Roles"))
 	ctx.Scopes = splitRoles(resp.Header.Get("X-Scopes"))
 
-	// Claims du token (base64-JSON du payload complet) : consommés
-	// par les conditions when.claims et la sonde /__gateway/auth.
+	// Token claims (base64-JSON of the full payload): consumed by
+	// the when.claims conditions and the /__gateway/auth probe.
 	if xc := resp.Header.Get("X-Claims"); xc != "" {
 		if raw, derr := base64.StdEncoding.DecodeString(xc); derr == nil {
 			var claims map[string]any
 			if jerr := json.Unmarshal(raw, &claims); jerr == nil {
 				ctx.Claims = claims
 			} else {
-				log.Printf("AUTH BRIDGE: X-Claims illisible: %v", jerr)
+				log.Printf("AUTH BRIDGE: unreadable X-Claims: %v", jerr)
 			}
 		} else {
-			log.Printf("AUTH BRIDGE: X-Claims non-base64: %v", derr)
+			log.Printf("AUTH BRIDGE: non-base64 X-Claims: %v", derr)
 		}
 	}
 	cacheAuth(authCacheKey(r), ctx)
@@ -247,10 +247,9 @@ func (g *Gateway) checkMCPAuth(
 		req.Header.Set("Authorization", auth)
 	}
 
-	// Header interne : le scope exigé déclaré par la policy mcp de la
-	// route (X-MCP-Scope). La requête est construite ici, jamais
-	// recopiée des headers d'entrée : un client externe ne peut pas le
-	// forger.
+	// Internal header: the required scope declared by the route's
+	// mcp policy (X-MCP-Scope). The request is built here, never
+	// copied from input headers: an external client cannot forge it.
 	req.Header.Set("X-MCP-Scope", scope)
 
 	resp, err := g.client.Do(req)
@@ -275,8 +274,8 @@ func (g *Gateway) checkMCPAuth(
 		return nil, ErrUnauthorized
 
 	case http.StatusForbidden:
-		// resource_metadata est attendu aussi sur le 403
-		// (MCP 2026-07-28, cohérence avec le 401).
+		// resource_metadata is expected on the 403 too
+		// (MCP 2026-07-28, consistency with the 401).
 		w.Header().Set(
 			"WWW-Authenticate",
 			fmt.Sprintf(

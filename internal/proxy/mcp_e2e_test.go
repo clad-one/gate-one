@@ -8,13 +8,13 @@ import (
 	"time"
 )
 
-// TestMCPE2EOnLine reproduit le scénario du smoke.sh (POST /mcp JSON
-// sans Authorization contre une route mcp + auth) en test Go :
-// auth-bridge stubbé, vérifie que le bridge reçoit X-MCP-Scope et que
-// le client voit un challenge 401 — au lieu du 200 sans auth observé
-// à tort dans une version précédente du diagnostic.
+// TestMCPE2EOnLine reproduces the smoke.sh scenario (POST /mcp JSON
+// without Authorization against an mcp + auth route) as a Go test:
+// stubbed auth-bridge, checks the bridge receives X-MCP-Scope and
+// the client sees a 401 challenge — instead of the unauthenticated
+// 200 wrongly observed in a previous diagnostic version.
 func TestMCPE2EOnLine(t *testing.T) {
-	// backend factice : répond 200 vide sur tout
+	// fake backend: answers an empty 200 on everything
 	backend := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -44,7 +44,7 @@ func TestMCPE2EOnLine(t *testing.T) {
 	gw := loadGatewayForTest(t, routesJSON)
 	gw.authBridgeBaseURL = bridge.URL
 
-	// GET /mcp sans Authorization → checkMCPAuth doit être appelé
+	// GET /mcp without Authorization → checkMCPAuth must be called
 	req := httptest.NewRequest(http.MethodGet, "http://mcp.smoke.local/mcp", nil)
 	req.Host = "mcp.smoke.local"
 	rec := httptest.NewRecorder()
@@ -60,14 +60,14 @@ func TestMCPE2EOnLine(t *testing.T) {
 		t.Errorf("WWW-Authenticate = %q, want scope=smoke-scope", www)
 	}
 	if len(seenScopes) != 1 || seenScopes[0] != "smoke-scope" {
-		t.Errorf("X-MCP-Scope reçu par auth-bridge = %v, want [smoke-scope]", seenScopes)
+		t.Errorf("X-MCP-Scope received by auth-bridge = %v, want [smoke-scope]", seenScopes)
 	}
 }
 
-// TestMCPBridgeUnreachable vérifie qu'une erreur transport vers
-// auth-bridge (DNS/service mort) ne produit pas de réponse 200 vide :
-// la gateway répond 502 explicite (l'ancien code faisait un return nu,
-// Go émettait alors un 200 vide).
+// TestMCPBridgeUnreachable checks that a transport error toward
+// auth-bridge (DNS/dead service) does not produce an empty 200
+// response: the gateway answers an explicit 502 (the old code did a
+// bare return, Go then emitted an empty 200).
 func TestMCPBridgeUnreachable(t *testing.T) {
 	routesJSON := `{
 		"routes": [{
@@ -80,9 +80,9 @@ func TestMCPBridgeUnreachable(t *testing.T) {
 	}`
 
 	gw := loadGatewayForTest(t, routesJSON)
-	// auth-bridge factice injoignable : port 1, connection refused.
-	// Client à timeout court : le test ne doit pas subir le timeout
-	// système (30 s) du client de production.
+	// unreachable fake auth-bridge: port 1, connection refused.
+	// Short-timeout client: the test must not suffer the production
+	// client's system timeout (30 s).
 	gw.authBridgeBaseURL = "http://127.0.0.1:1"
 	gw.client = &http.Client{Timeout: 2 * time.Second}
 
@@ -92,11 +92,11 @@ func TestMCPBridgeUnreachable(t *testing.T) {
 	gw.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 (l'ancien code laissait Go émettre un 200 vide)", rec.Code)
+		t.Fatalf("status = %d, want 502 (the old code let Go emit an empty 200)", rec.Code)
 	}
 }
 
-// loadGatewayForTest charge une config JSON et construit la gateway.
+// loadGatewayForTest loads a JSON config and builds the gateway.
 func loadGatewayForTest(t *testing.T, routesJSON string) *Gateway {
 	t.Helper()
 

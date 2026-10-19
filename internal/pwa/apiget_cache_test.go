@@ -9,8 +9,9 @@ import (
 	"cladone/gateway/internal/core"
 )
 
-// method:"GET" sur un endpoint déclaré => route SWR (cache répond
-// immédiatement, réseau rafraîchit en fond), pas le replay network-first.
+// method:"GET" on a declared endpoint => SWR route (cache answers
+// instantly, network refreshes in the background), not the
+// network-first replay.
 func TestSWApiCacheMethodGET(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCaches = []*core.PWAApiCache{{Path: "/openapi.json", Method: "GET"}}
@@ -23,48 +24,48 @@ func TestSWApiCacheMethodGET(t *testing.T) {
 		_ = want // nothing: assertions below use dedicated checks
 	}
 	if !strings.Contains(sw, "workbox.routing.registerRoute(\n    ({url}) => url.pathname === '/openapi.json'") {
-		t.Fatalf("route GET non générée:\n%s", sw)
+		t.Fatalf("GET route not generated:\n%s", sw)
 	}
 	if !strings.Contains(sw, "cache.match(req)") {
-		t.Error("GET: cache.match(req) (clé = URL seule) attendu")
+		t.Error("GET: cache.match(req) (key = URL alone) expected")
 	}
 	if !strings.Contains(sw, "'GET'\n  );") {
-		t.Error("GET: route enregistrée méthode 'GET' attendue")
+		t.Error("GET: route registered with method 'GET' expected")
 	}
 	if strings.Contains(sw, "storeCompleteResponse(cache, 'gateway-pwa-api-openapi.json") {
-		t.Error("GET: pas de storeCompleteResponse (pas de tee/idle SSE)")
+		t.Error("GET: no storeCompleteResponse (no SSE tee/idle)")
 	}
 }
 
-// Défaut : method vide = POST, comportement inchangé (replay).
+// Default: empty method = POST, unchanged behavior (replay).
 func TestSWApiCacheMethodDefaultPOST(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCaches = []*core.PWAApiCache{{Path: "/api/process_stream"}}
 	sw := New(pol).swJS()
 	if !strings.Contains(sw, "'POST'\n  );") {
-		t.Error("POST: route enregistrée méthode 'POST' attendue")
+		t.Error("POST: route registered with method 'POST' expected")
 	}
 	if !strings.Contains(sw, "storeCompleteResponse") {
-		t.Error("POST: storeCompleteResponse (tee/idle) attendu")
+		t.Error("POST: storeCompleteResponse (tee/idle) expected")
 	}
 }
 
-// apiGETCache présent => catch-all GET en dernier, excluant le préfixe
-// virtuel, les paths déclarés et les excludes déclarés.
+// apiGETCache present => GET catch-all registered last, excluding
+// the virtual prefix, the declared paths and the declared excludes.
 func TestSWApiGETCatchAll(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCaches = []*core.PWAApiCache{{Path: "/api/process_stream"}}
 	pol.ApiGETCache = &core.PWAApiGETCache{Excludes: []string{"/api/auth/"}}
 	sw := New(pol).swJS()
 
-	// catch-all enregistrée après les routes explicites
+	// catch-all registered after the explicit routes
 	iExplicit := strings.Index(sw, "url.pathname === '/api/process_stream'")
 	iAll := strings.Index(sw, "gateway-pwa-api-all-v")
 	if iExplicit < 0 || iAll < 0 {
-		t.Fatalf("routes attendues absentes: explicit=%d all=%d", iExplicit, iAll)
+		t.Fatalf("expected routes missing: explicit=%d all=%d", iExplicit, iAll)
 	}
 	if iAll < iExplicit {
-		t.Error("catch-all enregistrée AVANT la route explicite")
+		t.Error("catch-all registered BEFORE the explicit route")
 	}
 
 	for _, want := range []string{
@@ -76,21 +77,21 @@ func TestSWApiGETCatchAll(t *testing.T) {
 		"purgeOnQuotaError: true",
 	} {
 		if !strings.Contains(sw, want) {
-			t.Errorf("catch-all attendu %q:\n%s", want, sw[iAll-200:])
+			t.Errorf("expected catch-all %q:\n%s", want, sw[iAll-200:])
 		}
 	}
 }
 
-// apiGETCache absent => aucune régression : pas de catch-all générée.
+// apiGETCache absent => no regression: no catch-all generated.
 func TestSWApiGETCatchAllAbsent(t *testing.T) {
 	sw := New(emptyPolicy()).swJS()
 	if strings.Contains(sw, "gateway-pwa-api-all-v") {
-		t.Error("catch-all générée sans apiGETCache")
+		t.Error("catch-all generated without apiGETCache")
 	}
 }
 
-// Reconfigurer la catch-all n'invalide pas les caches des endpoints
-// explicites, et inversement (hachage par bloc, cf. versionnage).
+// Reconfiguring the catch-all does not invalidate the explicit
+// endpoints' caches, and vice versa (per-block hashing, see versioning).
 func TestApiGETCatchAllVersioning(t *testing.T) {
 	pol1 := emptyPolicy()
 	pol1.ApiGETCache = &core.PWAApiGETCache{}
@@ -101,13 +102,13 @@ func TestApiGETCatchAllVersioning(t *testing.T) {
 	name2 := extractCatchAllName(New(pol2).swJS())
 
 	if name1 == "" || name2 == "" {
-		t.Fatalf("noms vides: %q / %q", name1, name2)
+		t.Fatalf("empty names: %q / %q", name1, name2)
 	}
 	if name1 == name2 {
-		t.Errorf("changer excludes n'a pas invalidé la catch-all: %q", name1)
+		t.Errorf("changing excludes did not invalidate the catch-all: %q", name1)
 	}
 
-	// endpoint déclaré reconfiguré : la catch-all garde son nom
+	// declared endpoint reconfigured: the catch-all keeps its name
 	pol3 := emptyPolicy()
 	pol3.ApiGETCache = &core.PWAApiGETCache{}
 	pol3.ApiCaches = []*core.PWAApiCache{{Path: "/api/a"}}
@@ -117,7 +118,7 @@ func TestApiGETCatchAllVersioning(t *testing.T) {
 	pol4.ApiCaches = []*core.PWAApiCache{{Path: "/api/a", MaxEntries: 9}}
 	nB := extractCatchAllName(New(pol4).swJS())
 	if nA != nB {
-		t.Errorf("reconfigurer un endpoint a invalidé la catch-all: %q vs %q", nA, nB)
+		t.Errorf("reconfiguring an endpoint invalidated the catch-all: %q vs %q", nA, nB)
 	}
 }
 
@@ -135,8 +136,8 @@ func extractCatchAllName(sw string) string {
 	return rest[:j]
 }
 
-// method "none" : le path est opt-out du caching — aucune route
-// générée pour lui, la catch-all l'ignore (path déclaré = maître).
+// method "none": the path opts out of caching — no route
+// generated for it, the catch-all ignores it (declared path = master).
 func TestSWApiCacheMethodNone(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCaches = []*core.PWAApiCache{
@@ -146,33 +147,33 @@ func TestSWApiCacheMethodNone(t *testing.T) {
 	pol.ApiGETCache = &core.PWAApiGETCache{}
 	sw := New(pol).swJS()
 
-	// aucune route pour /api/live
+	// no route for /api/live
 	if strings.Contains(sw, "url.pathname === '/api/live'") {
-		t.Error("method none: aucune route ne doit être générée pour le path")
+		t.Error("method none: no route must be generated for the path")
 	}
 	if strings.Contains(sw, "gateway-pwa-api-api-live-") {
-		t.Error("method none: aucun cache dédié ne doit être créé")
+		t.Error("method none: no dedicated cache must be created")
 	}
-	// la catch-all l'exclut tout de même (défense en profondeur si un
-	// autre jour l'exclusion des paths déclarés change de forme)
+	// the catch-all still excludes it (defense in depth if one day
+	// the declared paths' exclusion changes shape)
 	if !strings.Contains(sw, "!url.pathname.startsWith('/api/live')") {
-		t.Error("method none: le path doit rester exclu de la catch-all")
+		t.Error("method none: the path must remain excluded from the catch-all")
 	}
-	// l'autre endpoint fonctionne normalement
+	// the other endpoint works normally
 	if !strings.Contains(sw, "url.pathname === '/api/poems'") {
-		t.Error("method none: l'endpoint voisin doit rester générés")
+		t.Error("method none: the neighboring endpoint must still be generated")
 	}
 	// case-insensitive
 	pol2 := emptyPolicy()
 	pol2.ApiCaches = []*core.PWAApiCache{{Path: "/api/x", Method: "NONE"}}
 	sw2 := New(pol2).swJS()
 	if strings.Contains(sw2, "url.pathname === '/api/x'") {
-		t.Error("method NONE (majuscule) doit aussi opt-out")
+		t.Error("method NONE (uppercase) must also opt out")
 	}
 }
 
-// excludePatterns : RegExp testées contre l'URL complète (pathname +
-// query) — un paramètre particulier disqualifie la requête.
+// excludePatterns: RegExps tested against the complete URL (pathname +
+// query) — a particular parameter disqualifies the request.
 func TestSWApiGETExcludePatterns(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiGETCache = &core.PWAApiGETCache{
@@ -186,27 +187,27 @@ func TestSWApiGETExcludePatterns(t *testing.T) {
 		".test(url.href)",
 	} {
 		if !strings.Contains(sw, want) {
-			t.Errorf("excludePatterns attendu %q dans:\n%s", want, sw)
+			t.Errorf("expected excludePatterns %q in:\n%s", want, sw)
 		}
 	}
-	// plusieurs patterns => index incrémentés
+	// several patterns => incremented indexes
 	pol2 := emptyPolicy()
 	pol2.ApiGETCache = &core.PWAApiGETCache{
 		ExcludePatterns: []string{"/a/", "/b/"},
 	}
 	sw2 := New(pol2).swJS()
 	if !strings.Contains(sw2, "EXCLUDE_RE_0") || !strings.Contains(sw2, "EXCLUDE_RE_1") {
-		t.Error("plusieurs patterns attendus (EXCLUDE_RE_0, EXCLUDE_RE_1)")
+		t.Error("several patterns expected (EXCLUDE_RE_0, EXCLUDE_RE_1)")
 	}
-	// aucun pattern => aucune déclaration, match inchangé
+	// no pattern => no declaration, match unchanged
 	sw3 := New(emptyPolicy()).swJS()
 	if strings.Contains(sw3, "EXCLUDE_RE_") {
-		t.Error("aucune RegExp attendue sans excludePatterns")
+		t.Error("no RegExp expected without excludePatterns")
 	}
 }
 
-// Config load : pattern invalide => rejet au chargement (fail fast),
-// pas de SW qui cacherait ce qui devait être exclu.
+// Config load: invalid pattern => rejected at load (fail fast),
+// no SW that would cache what should have been excluded.
 func TestConfigRejectsInvalidExcludePattern(t *testing.T) {
 	tmp := t.TempDir() + "/routes.json"
 	cfg := `{"routes":[{"host":"x.test","path":"/*","backend":"http://b","pwa":{"enabled":true,"apiGETCache":{"excludePatterns":["([bad"]}}}]}` + "\n"
@@ -214,23 +215,23 @@ func TestConfigRejectsInvalidExcludePattern(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := core.Load(tmp); err == nil {
-		t.Fatal("config avec RegExp invalide doit être rejetée au chargement")
+		t.Fatal("config with invalid RegExp must be rejected at load")
 	}
-	// pattern valide accepté
+	// valid pattern accepted
 	cfg2 := `{"routes":[{"host":"x.test","path":"/*","backend":"http://b","pwa":{"enabled":true,"apiGETCache":{"excludePatterns":["^https://x\\.test/api/poems\\?"]}}}]}` + "\n"
 	if err := os.WriteFile(tmp, []byte(cfg2), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := core.Load(tmp); err != nil {
-		t.Fatalf("pattern valide rejeté: %v", err)
+		t.Fatalf("valid pattern rejected: %v", err)
 	}
 }
 
-// pwa.networkOnly déclaratif : la route NetworkOnly est générée à
-// partir des patterns de la config (aucun filtre en dur — la gateway
-// supporte tout serveur d'authentification). Les URLs de callback OIDC
-// (query code/state/session_state/iss) doivent être exclues par les
-// patterns déclarés.
+// pwa.networkOnly declarative: the NetworkOnly route is generated
+// from the config's patterns (no hard-coded filter — the gateway
+// supports any authentication server). The OIDC callback URLs
+// (query code/state/session_state/iss) must be excluded by the
+// declared patterns.
 func TestSWNetworkOnlyGenerated(t *testing.T) {
 	pol := emptyPolicy()
 	pol.NetworkOnly = &core.PWANetworkOnlyPolicy{
@@ -246,36 +247,36 @@ func TestSWNetworkOnlyGenerated(t *testing.T) {
 	sw := New(pol).swJS()
 
 	if !strings.Contains(sw, "new workbox.strategies.NetworkOnly()") {
-		t.Error("route NetworkOnly attendue quand networkOnly est déclaré")
+		t.Error("NetworkOnly route expected when networkOnly is declared")
 	}
 	for i, pat := range pol.NetworkOnly.ExcludePatterns {
 		want := fmt.Sprintf("const NO_CACHE_RE_%d = new RegExp('%s');", i, pat)
 		if !strings.Contains(sw, want) {
-			t.Errorf("NO_CACHE_RE_%d attendu: %q", i, want)
+			t.Errorf("expected NO_CACHE_RE_%d: %q", i, want)
 		}
 		wantTest := fmt.Sprintf("NO_CACHE_RE_%d.test(url.href)", i)
 		if !strings.Contains(sw, wantTest) {
-			t.Errorf("test d'URL complet attendu: %q", wantTest)
+			t.Errorf("full URL test expected: %q", wantTest)
 		}
 	}
 }
 
-// networkOnly absent => aucune route NetworkOnly, aucune NO_CACHE_RE.
+// networkOnly absent => no NetworkOnly route, no NO_CACHE_RE.
 func TestSWNetworkOnlyAbsent(t *testing.T) {
 	sw := New(emptyPolicy()).swJS()
 	if strings.Contains(sw, "NetworkOnly") {
-		t.Error("aucune route NetworkOnly sans pwa.networkOnly déclaré")
+		t.Error("no NetworkOnly route without a declared pwa.networkOnly")
 	}
 	if strings.Contains(sw, "NO_CACHE_RE") {
-		t.Error("aucune RegExp d'exclusion sans pwa.networkOnly déclaré")
+		t.Error("no exclusion RegExp without a declared pwa.networkOnly")
 	}
 }
 
-// L'ordre d'enregistrement fait foi : la route networkOnly doit être
-// ENREGISTRÉE AVANT la route assets — workbox s'arrête à la première
-// route matchante, et la page de callback OIDC est un document
-// (destination 'document') que la route assets cacherait si elle
-// était consultée en premier.
+// The registration order is authoritative: the networkOnly route must
+// be REGISTERED BEFORE the assets route — workbox stops at the first
+// matching route, and the OIDC callback page is a document
+// (destination 'document') that the assets route would cache if it
+// were consulted first.
 func TestSWNetworkOnlyBeforeAssets(t *testing.T) {
 	pol := emptyPolicy()
 	pol.NetworkOnly = &core.PWANetworkOnlyPolicy{ExcludePatterns: []string{"[?&]code="}}
@@ -287,6 +288,6 @@ func TestSWNetworkOnlyBeforeAssets(t *testing.T) {
 		t.Fatalf("routes attendues absentes: networkOnly=%d assets=%d", iNo, iAssets)
 	}
 	if iNo > iAssets {
-		t.Error("networkOnly enregistré APRÈS assets: un document de callback serait caché par assets avant l'exclusion")
+		t.Error("networkOnly registered AFTER assets: a callback document would be cached by assets before the exclusion")
 	}
 }

@@ -1,21 +1,20 @@
 package proxy
 
-// Registry des injecteurs — le point d'extension unique des
-// modifications apportées aux RÉPONSES proxifiées. Chaque feature
-// (décompression, garde 401/403, réécriture du corps, ajustements
-// upstream, PWA, injections custom) implémente l'interface ; la chaîne
-// est construite une fois par route au chargement de la config, dans
-// l'ordre d'exécution. Fin du câblage à coups de closures imbriquées
-// dans proxy.go : ajouter une feature = ajouter un injector.
+// Injector registry — the single extension point for modifications
+// made to PROXIFIED RESPONSES. Each feature (decompression, 401/403
+// guard, body rewrite, upstream adjustments, PWA, custom injections)
+// implements the interface; the chain is built once per route at
+// config load, in execution order. End of wiring through nested
+// closures in proxy.go: adding a feature = adding an injector.
 //
-// Ordre d'exécution (l'ordre du slice) — équivalent strict au
-// chaînage historique, prouvé par les tests inchangés :
+// Execution order (the slice order) — strict equivalent of the
+// historical chaining, proven by unchanged tests:
 //
-//	gzip → garde → rewriteBody → upstream(headers) → pwa → custom
+//	gzip → guard → rewriteBody → upstream(headers) → pwa → custom
 //
-// En-têtes seulement ou enveloppe de resp.Body en flux : les deux
-// mécanismes passent par la même interface — aucun buffering, la
-// mémoire reste O(1) quelle que soit la taille de la page.
+// Headers only or a streaming resp.Body wrapper: both mechanisms go
+// through the same interface — no buffering, memory stays O(1)
+// regardless of the page size.
 
 import (
 	"errors"
@@ -29,32 +28,32 @@ import (
 	"cladone/gateway/internal/pwa"
 )
 
-// injector : une modification de réponse appliquée aux routes qui y
-// sont éligibles.
+// injector: one response modification applied to the routes eligible
+// for it.
 type injector interface {
 	name() string
-	// modify applique sa modification (en-têtes, enveloppe de corps
-	// en flux, insertion…). Retourner errStopChain pour arrêter la
-	// chaîne SANS erreur (réponse servie telle quelle).
+	// modify applies its modification (headers, streaming body
+	// wrapper, insertion…). Returning errStopChain stops the chain
+	// WITHOUT an error (response served as-is).
 	modify(resp *http.Response) error
 }
 
-// errStopChain : la réponse ne doit pas être manipulée davantage
-// (ex. encodage indécodable) — elle est servie telle quelle, sans
-// erreur (fail-open documenté).
-var errStopChain = errors.New("injection: chaîne arrêtée — réponse servie telle quelle")
+// errStopChain: the response must not be manipulated further (e.g.
+// undecodable encoding) — it is served as-is, without an error
+// (documented fail-open).
+var errStopChain = errors.New("injection: chain stopped — response served as-is")
 
-// isHTMLResponse : les injecteurs de corps ne touchent que les 200
-// HTML (assets, JSON, PDF, 30x… jamais modifiés).
+// isHTMLResponse: body injectors only touch HTML 200s (assets, JSON,
+// PDF, 30x… never modified).
 func isHTMLResponse(resp *http.Response) bool {
 	return resp.StatusCode == http.StatusOK &&
 		strings.Contains(resp.Header.Get("Content-Type"), "text/html")
 }
 
-// buildInjectors : la chaîne d'injection d'une route, dans l'ordre
-// d'exécution. u = URL du backend ; rwPlan = politique rewriteBody
-// compilée (nil si absente) ; injectsBody = une injection de corps est
-// attendue (forçage gzip amont déjà décidé).
+// buildInjectors: a route's injection chain, in execution order.
+// u = backend URL; rwPlan = compiled rewriteBody policy (nil when
+// absent); injectsBody = a body injection is expected (upstream gzip
+// forcing already decided).
 func buildInjectors(
 	cfg *core.Config,
 	route *core.Route,
@@ -135,9 +134,9 @@ func buildInjectors(
 	return injectors
 }
 
-// chainInjectors : la ModifyResponse générique — chaque injecteur
-// passe la main dans l'ordre ; errStopChain = le reste de la chaîne
-// est sauté, la réponse part telle quelle.
+// chainInjectors: the generic ModifyResponse — each injector passes
+// the baton in order; errStopChain = the rest of the chain is
+// skipped, the response goes out as-is.
 func chainInjectors(items []injector) func(*http.Response) error {
 	return func(resp *http.Response) error {
 		for _, in := range items {
@@ -152,10 +151,10 @@ func chainInjectors(items []injector) func(*http.Response) error {
 	}
 }
 
-// gzipDecodeInjector : décompression EN FLUX du HTML gzip avant toute
-// manipulation (le stdlib Go ne décode ni brotli ni zstd — incident
-// 2026-10-17). Un encodage indécodable qui aurait franchi le forçage
-// amont = réponse servie telle quelle, sans injection.
+// gzipDecodeInjector: STREAMING decompression of gzip HTML before
+// any manipulation (the Go stdlib decodes neither brotli nor zstd —
+// 2026-10-17 incident). An undecodable encoding that got past the
+// upstream forcing = response served as-is, without injection.
 type gzipDecodeInjector struct {
 	host string
 }
@@ -169,7 +168,7 @@ func (i *gzipDecodeInjector) modify(resp *http.Response) error {
 
 	switch enc := resp.Header.Get("Content-Encoding"); enc {
 	case "", "identity":
-		// déjà en clair
+		// already plain
 	case "gzip":
 		if err := decodeGzipBody(resp); err != nil {
 			log.Printf("GUNZIP failed host=%s: %v", i.host, err)
@@ -177,7 +176,7 @@ func (i *gzipDecodeInjector) modify(resp *http.Response) error {
 		}
 	default:
 		log.Printf(
-			"INJECTION skipped host=%s: Content-Encoding %q indécodable — réponse servie telle quelle",
+			"INJECTION skipped host=%s: Content-Encoding %q undecodable — response served as-is",
 			i.host,
 			enc,
 		)
@@ -186,10 +185,10 @@ func (i *gzipDecodeInjector) modify(resp *http.Response) error {
 	return nil
 }
 
-// guardInjector : le script de garde 401/403 (auth sans rechargement,
-// gating déclaratif, badge, réécriture runtime) inséré en flux après
-// <head>/meta charset. Le script est construit UNE fois à la compile
-// de la route.
+// guardInjector: the 401/403 guard script (auth without reload,
+// declarative gating, badge, runtime rewrite) inserted in streaming
+// mode after <head>/charset meta. The script is built ONCE at route
+// compile time.
 type guardInjector struct {
 	host   string
 	script string
@@ -201,14 +200,14 @@ func (i *guardInjector) modify(resp *http.Response) error {
 	if !isHTMLResponse(resp) {
 		return nil
 	}
-	// Injection EN FLUX : elle ne lit pas le corps ici (aucun
-	// buffering) — les erreurs transport surfent pendant la copie.
+	// STREAMING injection: it does not read the body here (no
+	// buffering) — transport errors surface during the copy.
 	injectGuardScript(resp, i.script)
 	return nil
 }
 
-// rewriteBodyInjector : réécriture des URLs d'origine dans le corps
-// HTML (upstream.rewriteBody), en flux.
+// rewriteBodyInjector: rewriting of origin URLs in the HTML body
+// (upstream.rewriteBody), streaming.
 type rewriteBodyInjector struct {
 	plan *rewritePlan
 }
@@ -219,10 +218,10 @@ func (i *rewriteBodyInjector) modify(resp *http.Response) error {
 	if !isHTMLResponse(resp) {
 		return nil
 	}
-	// Réécriture EN FLUX idem guardStream : aucun buffering,
-	// Content-Length retiré (chunked, flush par écriture car
-	// ContentLength vaut -1). Le schéma des URLs réécrites suit la
-	// requête (https en production, http en démo).
+	// STREAMING rewrite like guardStream: no buffering,
+	// Content-Length removed (chunked, flush per write because
+	// ContentLength is -1). The rewritten URLs' scheme follows the
+	// request (https in production, http in demo).
 	resp.Header.Del("Content-Length")
 	resp.Header.Del("Content-Encoding")
 	resp.ContentLength = -1
@@ -231,9 +230,9 @@ func (i *rewriteBodyInjector) modify(resp *http.Response) error {
 	return nil
 }
 
-// upstreamAdjustInjector : ajustements de la RÉPONSE du backend —
-// réécriture des Location absolues, en-têtes set/remove, traduction
-// des Set-Cookie (upstream.rewriteCookies).
+// upstreamAdjustInjector: adjustments to the backend's RESPONSE —
+// rewriting of absolute Locations, set/remove headers, translation
+// of Set-Cookies (upstream.rewriteCookies).
 type upstreamAdjustInjector struct {
 	modifyResponse func(*http.Response) error
 }
@@ -244,8 +243,8 @@ func (i *upstreamAdjustInjector) modify(resp *http.Response) error {
 	return i.modifyResponse(resp)
 }
 
-// pwaInjector : link manifest + enregistrement du service worker
-// injectés dans le <head> des 200 HTML.
+// pwaInjector: manifest link + service worker registration injected
+// into the <head> of HTML 200s.
 type pwaInjector struct{}
 
 func (i *pwaInjector) name() string { return "pwa" }
@@ -254,8 +253,8 @@ func (i *pwaInjector) modify(resp *http.Response) error {
 	return pwa.InjectResponse(resp)
 }
 
-// customInjector : les injections déclarées par le bundle de la route
-// (upstream "inject" — HTML/JS/CSS par cible nommée), en flux.
+// customInjector: the injections declared by the route's bundle
+// (upstream "inject" — HTML/JS/CSS by named target), streaming.
 type customInjector struct {
 	host   string
 	bundle *core.InjectBundle
@@ -267,15 +266,15 @@ func (i *customInjector) modify(resp *http.Response) error {
 	if !isHTMLResponse(resp) {
 		return nil
 	}
-	// Les entrées sont chaînées en ordre DÉCROISSANT : chaque passe
-	// insère APRÈS le marqueur de la précédente — l'ordre du document
-	// final suit l'ordre croissant des Order.
+	// Entries are chained in DESCENDING order: each pass inserts
+	// AFTER the previous pass's marker — the final document order
+	// follows the ascending Order.
 	items := i.bundle.Contents
 	for j := len(items) - 1; j >= 0; j-- {
 		item := &items[j]
-		// le ciblage par page (when.path) se décide par requête :
-		// le chemin de la requête a traversé le director sans être
-		// réécrit (seul Host change)
+		// per-page targeting (when.path) is decided per request:
+		// the request path went through the director without being
+		// rewritten (only the Host changes)
 		if !itemMatchesPath(item, resp.Request) {
 			continue
 		}

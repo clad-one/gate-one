@@ -10,14 +10,14 @@ import (
 	"testing"
 )
 
-// Kit de tests du refactor injection EN FLUX. Pilier : la PARITÉ
-// entre la décision en flux et l'algorithme bufferisé historique (un
-// point d'insertion divergent = garde au mauvais endroit ou jamais —
-// et les incidents encoding/troncature de 2026-10-17 ont tous leur
-// racine ici).
+// Test kit of the STREAMING injection refactor. Cornerstone: PARITY
+// between the streaming decision and the historical buffered
+// algorithm (a divergent insertion point = guard at the wrong place
+// or nowhere — and the 2026-10-17 encoding/truncation incidents all
+// have their root here).
 
-// guardBufferedReference : réplique EXACTE de l'algorithme bufferisé
-// d'avant le streaming (2026-10-18) — la référence de parité.
+// guardBufferedReference: EXACT replica of the buffered algorithm
+// from before streaming (2026-10-18) — the parity reference.
 func guardBufferedReference(body []byte, script string) string {
 	var out []byte
 	if idx := headOpen.FindIndex(body); idx != nil {
@@ -38,10 +38,10 @@ func guardBufferedReference(body []byte, script string) string {
 	return string(out)
 }
 
-// sizedReader : au plus n octets par Read (1 = pire cas : la balise
-// <head> scindée EN PLEIN MILIEU d'un Read — le flux doit quand même
-// tomber au point d'insertion exact ; l'ancien algorithme ne voyait
-// que des corps entiers, jamais ce découpage).
+// sizedReader: at most n bytes per Read (1 = worst case: the
+// <head> tag split IN THE MIDDLE of a Read — the stream must still
+// land the exact insertion point; the old algorithm only ever saw
+// whole bodies, never this chunking).
 type sizedReader struct {
 	src io.Reader
 	n   int
@@ -56,26 +56,26 @@ func (r *sizedReader) Read(p []byte) (int, error) {
 
 var streamCases = []string{
 	"<html><head><title>t</title></head><body>x</body></html>",
-	// meta charset placé APRÈS <head> mais dans la fenêtre :
-	// l'injection se fait après LUI (incident mojibake)
+	// charset meta placed AFTER <head> but within the window:
+	// injection happens after IT (mojibake incident)
 	"<html><head><meta charset=\"utf-8\"><title>t</title></head>" +
-		"<body>méta-presque-tôt</body></html>",
-	// pas de head du tout : fallback historique (script en tête)
+		"<body>meta-almost-early</body></html>",
+	// no head at all: historical fallback (script at the top)
 	"pas du html du tout",
-	// head multi-lignes avec attribut + meta derrière
+	// multi-line head with attribute + meta behind it
 	"<!DOCTYPE html>\n<html lang=\"fr\">\n<head data-x=\"1\">" +
 		"<meta charset=\"utf-8\">suite",
-	// head juste avant la fin de la fenêtre de sniff (1024)
+	// head just before the end of the sniff window (1024)
 	strings.Repeat("z", 995) + "<html><head>meta-late</head>",
-	// head APRÈS la fenêtre de sniff mais DANS la fenêtre de scan :
-	// l'algo bufferisé cherchait <head> dans le corps entier et
-	// injectait après lui — le flux doit en faire autant
+	// head AFTER the sniff window but WITHIN the scan window:
+	// the buffered algorithm searched <head> in the whole body and
+	// injected after it — the stream must do exactly the same
 	strings.Repeat("z", 4096) + "<html><head>late-head</head>",
-	// page SANS head plus grande que la fenêtre de scan : fallback,
-	// identique au bufferisé (lui aussi préfixait)
+	// page WITHOUT a head bigger than the scan window: fallback,
+	// identical to the buffered one (it also prefixed)
 	strings.Repeat("f", 70*1024),
-	// page AVEC head bien plus grande que tout : prise de décision
-	// vers l'octet 1024, le reste passe SANS relecture
+	// page WITH a head much bigger than everything: decision around
+	// byte 1024, the rest passes WITHOUT re-reading
 	"<html><head><meta charset=\"utf-8\"><title>big</title></head>" +
 		"<body>" + strings.Repeat("b", 300*1024) + "</body></html>",
 }
@@ -99,7 +99,7 @@ func TestGuardStreamMatchesBufferedInjection(t *testing.T) {
 			}
 			if string(got) != want {
 				t.Errorf(
-					"case %d chunk %d: le flux diverge de l'algo bufferisé",
+					"case %d chunk %d: the stream diverges from the buffered algorithm",
 					ci, chunk,
 				)
 			}
@@ -107,10 +107,11 @@ func TestGuardStreamMatchesBufferedInjection(t *testing.T) {
 	}
 }
 
-// head placé APRÈS la fenêtre de scan (document malformé) : le flux
-// retombe sur le fallback (script en tête) — DIVERGENCE DOCUMENTÉE
-// avec le bufferisé (qui cherchait head dans tout le corps), testée
-// pour rester consciente de son existence ; le document reste entier.
+// head placed AFTER the scan window (malformed document): the
+// stream falls back (script at the top) — DOCUMENTED DIVERGENCE
+// from the buffered version (which searched head in the whole
+// body), tested to stay aware of its existence; the document stays
+// whole.
 func TestGuardStreamHeadBeyondWindowFallsBack(t *testing.T) {
 	script := "<script>var GUARD=2;</script>"
 	doc := strings.Repeat("w", 70*1024) + "<html><head>very late</head>"
@@ -124,16 +125,16 @@ func TestGuardStreamHeadBeyondWindowFallsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(string(got), script) {
-		t.Error("fallback attendu : script en tête du document")
+		t.Error("expected fallback: script at the top of the document")
 	}
-	// le document entier suit le script à l'identique (jamais tronqué)
+	// the whole document follows the script identically (never truncated)
 	if !strings.HasSuffix(string(got), doc) {
-		t.Error("le corps d'origine doit suivre le script à l'identique")
+		t.Error("the original body must follow the script identically")
 	}
 }
 
-// decodeGzipBody en flux : le corps décompressé sort au fur et à
-// mesure, quelles que soient les tailles de chunk de l'origine.
+// decodeGzipBody streaming: the decompressed body comes out as it
+// goes, whatever the origin's chunk sizes.
 func TestGunzipStreamsHugeBody(t *testing.T) {
 	plain := "<html><head><title>huge</title></head><body>" +
 		strings.Repeat("g", 2<<20) + "</body></html>"
@@ -162,19 +163,19 @@ func TestGunzipStreamsHugeBody(t *testing.T) {
 	}
 	resp.Body.Close()
 	if string(got) != plain {
-		t.Errorf("corps décompressé = %d octets, want %d (dégâts ?)",
+		t.Errorf("decompressed body = %d bytes, want %d (damage?)",
 			len(got), len(plain))
 	}
 	if resp.ContentLength != -1 ||
 		resp.Header.Get("Content-Encoding") != "" ||
 		resp.Header.Get("Content-Length") != "" {
-		t.Error("en-têtes gzip/Content-Length non nettoyés — page illisible")
+		t.Error("gzip/Content-Length headers not cleaned — unreadable page")
 	}
 }
 
-// Bout en bout à travers la gateway : une page gzip ÉNORME (2 Mo) est
-// servie DÉCOMPRIMÉE et INJECTÉE, intègre, chunked — le gunzip
-// paresseux et le guardStream s'enchaînent sans buffering.
+// End to end through the gateway: a HUGE gzip page (2 MB) is served
+// DECOMPRESSED and INJECTED, intact, chunked — the lazy gunzip and
+// the guardStream chain without buffering.
 func TestGunzipAndGuardStreamHugePageThroughGateway(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -192,29 +193,29 @@ func TestGunzipAndGuardStreamHugePageThroughGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(raw) != hugeGzPageLen+guardInjectedLen(t) {
-		t.Errorf("body = %d octets, want %d (gunzip + injection en flux)",
+		t.Errorf("body = %d bytes, want %d (gunzip + streaming injection)",
 			len(raw), hugeGzPageLen+guardInjectedLen(t))
 	}
 	head := string(raw[:2048])
 	if !strings.Contains(string(raw), "huge-gz-title") {
-		t.Error("contenu du head perdu par le gunzip en flux")
+		t.Error("head content lost by the streaming gunzip")
 	}
 	if !strings.Contains(head, "__cladoneAuthGuard") {
-		t.Error("garde non injectée sur la page gzip de 2 Mo")
+		t.Error("guard not injected on the 2 MB gzip page")
 	}
 	if resp.Header.Get("Content-Length") != "" {
-		t.Error("Content-Length doit disparaître sur une page injectée en flux")
+		t.Error("Content-Length must disappear on a streaming-injected page")
 	}
 }
 
-// Une erreur transport EN COURS de flux (origine coupée) : les octets
-// déjà écrits sont servis puis l'erreur est PROPAGÉE — elle n'est
-// jamais avalée silencieusement (sinon : page moitié-morte sans
-// trace côté gateway).
+// A transport error MID-STREAM (origin cut off): the bytes already
+// written are served then the error is PROPAGATED — it is never
+// silently swallowed (otherwise: a half-dead page with no trace on
+// the gateway side).
 func TestGuardStreamPropagatesTransportError(t *testing.T) {
 	script := "<script>var GUARD=3;</script>"
 	srcErr := io.ErrUnexpectedEOF
-	// origine : servo 60 o du head puis une erreur
+	// origin: serve 60 bytes of the head then an error
 	head := "<html><head><title>t</title></head>"
 	src := io.MultiReader(
 		strings.NewReader(head),
@@ -223,25 +224,25 @@ func TestGuardStreamPropagatesTransportError(t *testing.T) {
 
 	gs := newGuardStream(io.NopCloser(src), script)
 	out, firstErr := io.ReadAll(gs)
-	// ReadAll retourne data + err : l'erreur est propagée…
+	// ReadAll returns data + err: the error is propagated…
 	if firstErr != srcErr {
-		t.Fatalf("erreur transport avalée : %v (want %v)", firstErr, srcErr)
+		t.Fatalf("transport error swallowed: %v (want %v)", firstErr, srcErr)
 	}
-	// … et les octets arrivés tiennent tout dans l'ordre : le
-	// fallback du scan (EOF forcé) a inséré le script après <head>.
+	// … and the arrived bytes hold everything in order: the scan
+	// fallback (forced EOF) inserted the script after <head>.
 	got := string(out)
 	if !strings.HasPrefix(got, "<html><head>") ||
 		!strings.HasSuffix(got, "<title>t</title></head>") {
-		t.Errorf("octets d'origine perdus sur transport error: %q", got)
+		t.Errorf("origin bytes lost on transport error: %q", got)
 	}
 	if len(out) != len(head)+len(script) {
-		t.Errorf("longueur = %d, want %d (octets mal servis)",
+		t.Errorf("length = %d, want %d (badly served bytes)",
 			len(out), len(head)+len(script))
 	}
 }
 
-// erreurReader : sert l'erreur immédiatement — pour forcer le chemin
-// erreur-en-cours-de-flux d'un guardStream.
+// errorReader: serves the error immediately — to force the
+// error-mid-stream path of a guardStream.
 type errorReader struct{ err error }
 
 func (r *errorReader) Read(p []byte) (int, error) {

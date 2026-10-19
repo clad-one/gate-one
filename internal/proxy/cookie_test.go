@@ -1,10 +1,10 @@
 package proxy
 
-// Tests de upstream.rewriteCookies (point 12 de l'audit) : les
-// Set-Cookie posés par l'origine avec Domain=<son propre host> sont
-// rejetés par le navigateur depuis le host public — la policy les
-// traduit (rewrite vers le host public, ou strip). Unitaires sur la
-// chirurgie textuelle (byte-exact) + E2E via la gateway.
+// Tests of upstream.rewriteCookies (audit point 12): Set-Cookies set
+// by the origin with Domain=<its own host> are rejected by the
+// browser from the public host — the policy translates them (rewrite
+// toward the public host, or strip). Unit tests on the (byte-exact)
+// textual surgery + E2E through the gateway.
 
 import (
 	"fmt"
@@ -18,8 +18,8 @@ import (
 	"cladone/gateway/internal/core"
 )
 
-// Table unitaire de rewriteCookieDomain : entrée = ligne Set-Cookie
-// brute de l'origine, sortie attendue (byte-exact).
+// Unit table of rewriteCookieDomain: input = raw Set-Cookie line
+// from the origin, expected output (byte-exact).
 func TestRewriteCookieDomainRules(t *testing.T) {
 	const origin = "jacquelot.benoit-rolland.workers.dev"
 	cases := []struct {
@@ -29,73 +29,73 @@ func TestRewriteCookieDomainRules(t *testing.T) {
 		want string
 	}{
 		{
-			name: "Domain exact réécrit vers public, autres attributs intacts",
+			name: "exact Domain rewritten to public, other attributes untouched",
 			mode: "rewrite",
 			in:   "theme=dark; Domain=" + origin + "; Path=/; Secure; HttpOnly; SameSite=Lax",
 			want: "theme=dark; Domain=public.test; Path=/; Secure; HttpOnly; SameSite=Lax",
 		},
 		{
-			name: "Domain parent de l'origine réécrit",
+			name: "Domain parent of the origin rewritten",
 			mode: "rewrite",
 			in:   "c=1; Domain=benoit-rolland.workers.dev",
 			want: "c=1; Domain=public.test",
 		},
 		{
-			name: "forme pointée RFC historique (.host)",
+			name: "historical RFC dotted form (.host)",
 			mode: "rewrite",
 			in:   "c=1; Domain=." + origin,
 			want: "c=1; Domain=public.test",
 		},
 		{
-			name: "casse de la clé et de la valeur indifférente (clé d'origine préservée)",
+			name: "key and value case-insensitive (origin key preserved)",
 			mode: "rewrite",
 			in:   "c=1; DOMAIN=Jacquelot.Benoit-Rolland.Workers.Dev",
 			want: "c=1; DOMAIN=public.test",
 		},
 		{
-			name: "Domain en dernier attribut",
+			name: "Domain as last attribute",
 			mode: "rewrite",
 			in:   "c=1; Domain=" + origin,
 			want: "c=1; Domain=public.test",
 		},
 		{
-			name: "Domain sans rapport : intact",
+			name: "unrelated Domain: untouched",
 			mode: "rewrite",
 			in:   "c=1; Domain=cloudflare.com; Path=/",
 			want: "c=1; Domain=cloudflare.com; Path=/",
 		},
 		{
-			name: "pas de Domain : intact",
+			name: "no Domain: untouched",
 			mode: "rewrite",
 			in:   "c=1; Path=/; Secure",
 			want: "c=1; Path=/; Secure",
 		},
 		{
-			name: "cookie attribut-seul (pas de '=') : intact",
+			name: "attribute-only cookie (no '='): untouched",
 			mode: "rewrite",
 			in:   "flag",
 			want: "flag",
 		},
 		{
-			name: "valeur citée contenant un ';' : l'attribut reste trouvé",
+			name: "quoted value containing a ';': the attribute is still found",
 			mode: "rewrite",
 			in:   `c="a;b"; Domain=` + origin + `; Path=/`,
 			want: `c="a;b"; Domain=public.test; Path=/`,
 		},
 		{
-			name: "mode strip : attribut retiré, séparateur nettoyé",
+			name: "strip mode: attribute removed, separator cleaned",
 			mode: "strip",
 			in:   "c=1; Domain=" + origin + "; Path=/",
 			want: "c=1; Path=/",
 		},
 		{
-			name: "mode strip : Domain en dernier attribut",
+			name: "strip mode: Domain as last attribute",
 			mode: "strip",
 			in:   "c=1; Path=/; Domain=" + origin,
 			want: "c=1; Path=/",
 		},
 		{
-			name: "mode strip : Domain sans rapport intact",
+			name: "strip mode: unrelated Domain untouched",
 			mode: "strip",
 			in:   "c=1; Domain=cloudflare.com",
 			want: "c=1; Domain=cloudflare.com",
@@ -111,9 +111,9 @@ func TestRewriteCookieDomainRules(t *testing.T) {
 	}
 }
 
-// Un Set-Cookie de l'origine portant un nom réservé (session gateway)
-// est retiré ; les autres passent (et sont traduits). Les noms de
-// cookies sont sensibles à la casse : SESSION ≠ session, pas de drop.
+// A Set-Cookie from the origin carrying a reserved name (gateway
+// session) is dropped; the others pass (and are translated). Cookie
+// names are case-sensitive: SESSION ≠ session, no drop.
 func TestRewriteUpstreamCookiesDropsReservedNames(t *testing.T) {
 	resp := &http.Response{Header: http.Header{}}
 	for _, c := range []string{
@@ -121,7 +121,7 @@ func TestRewriteUpstreamCookiesDropsReservedNames(t *testing.T) {
 		"refresh_token=r; Path=/",
 		"id_token=i; Path=/",
 		"session=s; Path=/",
-		"SESSION=pas-reserve; Path=/",
+		"SESSION=not-reserved; Path=/",
 		"theme=dark; Domain=127.0.0.1",
 	} {
 		resp.Header.Add("Set-Cookie", c)
@@ -133,7 +133,7 @@ func TestRewriteUpstreamCookiesDropsReservedNames(t *testing.T) {
 		&core.RewriteCookiesPolicy{Domain: "rewrite"}, resp)
 
 	got := resp.Header.Values("Set-Cookie")
-	want := []string{"SESSION=pas-reserve; Path=/", "theme=dark; Domain=public.test"}
+	want := []string{"SESSION=not-reserved; Path=/", "theme=dark; Domain=public.test"}
 	if len(got) != len(want) {
 		t.Fatalf("Set-Cookie = %q, want %q", got, want)
 	}
@@ -144,8 +144,8 @@ func TestRewriteUpstreamCookiesDropsReservedNames(t *testing.T) {
 	}
 }
 
-// E2E : la gateway traduit les Set-Cookie de l'origine ; sans la
-// policy, ils traversent intacts (comportement historique).
+// E2E: the gateway translates the origin's Set-Cookies; without the
+// policy, they pass through untouched (historical behavior).
 func TestRewriteCookiesGatewayE2E(t *testing.T) {
 	run := func(t *testing.T, upstreamJSON string) []string {
 		t.Helper()
@@ -157,12 +157,12 @@ func TestRewriteCookiesGatewayE2E(t *testing.T) {
 			}]
 		}`, upstreamJSON))
 
-		// host d'origine = 127.0.0.1 (hostname de l'URL backend)
+		// origin host = 127.0.0.1 (hostname of the backend URL)
 		set := []string{
 			"theme=dark; Domain=127.0.0.1; Path=/; Secure",
-			"pref=big; Domain=cloudflare.com", // sans rapport : intact
-			"noflag=1",                        // pas de Domain : intact
-			"session=pirate; Path=/",          // nom réservé : droppé
+			"pref=big; Domain=cloudflare.com", // unrelated: untouched
+			"noflag=1",                        // no Domain: untouched
+			"session=pirate; Path=/",          // reserved name: dropped
 		}
 		q := url.Values{}
 		for _, c := range set {
@@ -193,10 +193,10 @@ func TestRewriteCookiesGatewayE2E(t *testing.T) {
 		}
 	})
 
-	t.Run("sans policy : historique intact", func(t *testing.T) {
+	t.Run("without policy: history untouched", func(t *testing.T) {
 		got := run(t, `{"host": true}`)
 		if len(got) != 4 {
-			t.Fatalf("Set-Cookie = %q (4 attendus)", got)
+			t.Fatalf("Set-Cookie = %q (4 expected)", got)
 		}
 		for i, c := range []string{
 			"theme=dark; Domain=127.0.0.1; Path=/; Secure",
@@ -211,7 +211,7 @@ func TestRewriteCookiesGatewayE2E(t *testing.T) {
 	})
 }
 
-// La grammaire stricte refuse un mode inconnu.
+// The strict grammar rejects an unknown mode.
 func TestRewriteCookiesRejectsUnknownMode(t *testing.T) {
 	srv := upstreamTestServer(t)
 	dir := t.TempDir()
@@ -227,8 +227,8 @@ func TestRewriteCookiesRejectsUnknownMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := core.Load(cfgPath); err == nil {
-		t.Fatal("config acceptée : rewriteCookies.domain invalide devrait être refusé")
+		t.Fatal("config accepted: invalid rewriteCookies.domain should be rejected")
 	} else if !strings.Contains(err.Error(), "rewriteCookies.domain") {
-		t.Errorf("erreur sans le contexte attendu : %v", err)
+		t.Errorf("error without the expected context: %v", err)
 	}
 }

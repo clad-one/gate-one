@@ -40,11 +40,11 @@ func New(
 			return server
 		},
 		&mcp.StreamableHTTPOptions{
-			// Important pour cette première version :
-			// chaque requête est indépendante.
+			// Important for this first version:
+			// each request is independent.
 			Stateless: true,
 
-			// Plus facile à tester avec curl.
+			// Easier to test with curl.
 			JSONResponse: true,
 		},
 	)

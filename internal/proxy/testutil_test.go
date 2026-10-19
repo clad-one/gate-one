@@ -1,9 +1,9 @@
 package proxy
 
-// Socle commun des tests du proxy : la config de test porte le bloc
-// oidc (la validation au load exige un login pour toute route à garde
-// active et un issuer pour toute route MCP — AUCUNE URL n'est codée
-// en dur dans le code).
+// Common base of the proxy tests: the test config carries the oidc
+// block (load-time validation requires a login for every active-guard
+// route and an issuer for every MCP route — NO URL is hardcoded in
+// the code).
 
 import (
 	"encoding/json"
@@ -15,17 +15,17 @@ import (
 	"cladone/gateway/internal/core"
 )
 
-// testLoginURL : la page de login des configs de test (le harnais UI
-// et les assertions de redirect s'y réfèrent).
+// testLoginURL: the login page of the test configs (the UI harness
+// and the redirect assertions refer to it).
 const testLoginURL = "https://login.test/login"
 
-// withTestOIDC : injecte le bloc oidc de test dans une config JSON
-// s'il n'est pas déjà déclaré (un test qui veut un autre IdP le
-// déclare lui-même).
+// withTestOIDC: injects the test oidc block into a JSON config if
+// not already declared (a test wanting another IdP declares it
+// itself).
 func withTestOIDC(routesJSON string) string {
 	var m map[string]any
 	if err := json.Unmarshal([]byte(routesJSON), &m); err != nil {
-		panic(fmt.Sprintf("config de test invalide : %v", err))
+		panic(fmt.Sprintf("invalid test config: %v", err))
 	}
 	if _, ok := m["oidc"]; !ok {
 		m["oidc"] = map[string]any{
@@ -40,8 +40,8 @@ func withTestOIDC(routesJSON string) string {
 	return string(b)
 }
 
-// loadForTestIn : idem, mais dans le répertoire fourni (les tests
-// qui co-localisent bundle + config).
+// loadForTestIn: same, but in the provided directory (tests that
+// co-locate bundle + config).
 func loadForTestIn(
 	t *testing.T,
 	dir, routesJSON string,
@@ -62,8 +62,8 @@ func loadForTestIn(
 	return cfg
 }
 
-// loadForTest : écrit la config (avec bloc oidc de test) dans un
-// répertoire temporaire et la charge via la grammaire stricte.
+// loadForTest: writes the config (with the test oidc block) into a
+// temporary directory and loads it through the strict grammar.
 func loadForTest(t *testing.T, routesJSON string) *core.Config {
 	t.Helper()
 	return loadForTestIn(t, t.TempDir(), routesJSON)

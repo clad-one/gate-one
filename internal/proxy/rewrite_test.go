@@ -17,11 +17,11 @@ import (
 	"cladone/gateway/internal/pwa"
 )
 
-// Politique de réécriture de test : origine "origin.example" réécrite
-// vers "https://public.test", exceptions couvrant les trois verdicts :
-// rester à l'origine (forme chaîne), host alternatif ({path,to}), et
-// le préfixe le plus long gagne (/l1/detail règle longue contre /l1).
-// Tri : préfixe le plus long d'abord (comme après compilation).
+// Test rewrite policy: origin "origin.example" rewritten toward
+// "https://public.test", exceptions covering the three verdicts:
+// stay at the origin (string form), alternative host ({path,to}),
+// and longest-prefix wins (/l1/detail long rule against /l1).
+// Sort: longest prefix first (as after compilation).
 func rewriteTestPlan() *rewritePlan {
 	except := []core.RewriteExcept{
 		{Path: "/lecture/bonpapa"},
@@ -44,24 +44,24 @@ func rewriteTestPlan() *rewritePlan {
 	}
 }
 
-// rewriteTestSpec : la même politique côté SW client.
+// rewriteTestSpec: the same policy on the client SW side.
 func rewriteTestSpec() *pwa.RewriteSpec {
 	return rewriteTestPlan().clientSpec()
 }
 
 type rwCase struct {
 	Name string
-	// Input : entrée HTML/texte ; pour la parité SW : URL absolue pure.
+	// Input: HTML/text input; for SW parity: pure absolute URL.
 	Input string
-	// Expect = sortie EXACTE attendue ; vide = le texte original passe
-	// sans modification (aucune interception/réécriture).
+	// Expect = EXACT expected output; empty = the original text goes
+	// through unmodified (no interception/rewrite).
 	Expect string
 }
 
-// rewriteTextCases : liste partagée des sémantiques — le moteur en
-// flux (découpes 1..4096 octets), l'oracle bufferisé indépendant et le
-// SW JS (harnais node, cf. rewrite_parity_harness.cjs) doivent
-// produire EXACTEMENT la même sortie pour ces entrées.
+// rewriteTextCases: shared list of semantics — the streaming engine
+// (chunk sizes 1..4096 bytes), the independent buffered oracle and
+// the SW JS (node harness, see rewrite_parity_harness.cjs) must
+// produce EXACTLY the same output for these inputs.
 func rewriteTextCases() []rwCase {
 	return []rwCase{
 		{
@@ -70,60 +70,60 @@ func rewriteTextCases() []rwCase {
 			Expect: `<a href="https://public.test/edit/page?x=1">edit</a>`,
 		},
 		{
-			Name:   "http simple réécrit en https",
+			Name:   "http simple rewritten to https",
 			Input:  `<a href="http://origin.example/x">`,
 			Expect: `<a href="https://public.test/x">`,
 		},
 		{
-			Name:   "schéma relatif",
+			Name:   "relative scheme",
 			Input:  `<img src="//origin.example/img.png">`,
 			Expect: `<img src="https://public.test/img.png">`,
 		},
 		{
-			Name:  "exception chaîne : reste à l'origine",
+			Name:  "string exception: stays at the origin",
 			Input: `<a href="https://origin.example/lecture/bonpapa/ch1">l</a>`,
 		},
 		{
-			Name:  "exception chaîne avec query",
+			Name:  "string exception with query",
 			Input: `<a href="https://origin.example/lecture/bonpapa/fin?y=2">l</a>`,
 		},
 		{
-			Name:   "exception {path,to}",
+			Name:   "{path,to} exception",
 			Input:  `<a href="https://origin.example/alt/chemin">a</a>`,
 			Expect: `<a href="https://alt.example/alt/chemin">a</a>`,
 		},
 		{
-			Name:   "préfixe le plus long gagne (to)",
+			Name:   "longest prefix wins (to)",
 			Input:  `<a href="https://origin.example/l1/detail/ou">d</a>`,
 			Expect: `<a href="https://deep.example/l1/detail/ou">d</a>`,
 		},
 		{
-			Name:  "préfixe le plus long gagne (resté à l'origine)",
+			Name:  "longest prefix wins (stayed at the origin)",
 			Input: `<a href="https://origin.example/l1/autre">k</a>`,
 		},
 		{
-			Name:   "port explicite : réécrit, port perdu",
+			Name:   "explicit port: rewritten, port lost",
 			Input:  `<a href="https://origin.example:4443/port">p</a>`,
 			Expect: `<a href="https://public.test/port">p</a>`,
 		},
 		{
-			Name:  "port + exception chaîne : texte tel quel",
+			Name:  "port + string exception: text as-is",
 			Input: `<a href="https://origin.example:9/lecture/bonpapa">p</a>`,
 		},
 		{
-			Name:  "autre host : intact",
+			Name:  "other host: untouched",
 			Input: `<a href="https://autre.example/x">a</a>`,
 		},
 		{
-			Name:  "host plus long (suffixe) : intact",
+			Name:  "longer host (suffix): untouched",
 			Input: `<a href="https://origin.example.more/interieur">m</a>`,
 		},
 		{
-			Name:  "wss : intact (frontière gauche)",
+			Name:  "wss: untouched (left boundary)",
 			Input: `<a href="wss://origin.example/ws">w</a>`,
 		},
 		{
-			Name:  "mot collé avant le scheme : intact",
+			Name:  "word glued before the scheme: untouched",
 			Input: `<a href="xhttps://origin.example/x">g</a>`,
 		},
 		{
@@ -137,12 +137,12 @@ func rewriteTextCases() []rwCase {
 			Expect: `body{background:url(https://public.test/fond.css)}`,
 		},
 		{
-			Name:   "texte brut",
+			Name:   "plain text",
 			Input:  `<p>voir https://origin.example/txt/fin — suite</p>`,
 			Expect: `<p>voir https://public.test/txt/fin — suite</p>`,
 		},
 		{
-			Name:   "URL dans une query",
+			Name:   "URL inside a query",
 			Input:  `<a href="https://origin.example/api?u=https://origin.example/other">q</a>`,
 			Expect: `<a href="https://public.test/api?u=https://public.test/other">q</a>`,
 		},
@@ -152,21 +152,21 @@ func rewriteTextCases() []rwCase {
 			Expect: `<a href="https://public.test/doc#ici">f</a>`,
 		},
 		{
-			Name:  "host nu sans scheme : intact",
+			Name:  "bare host without scheme: untouched",
 			Input: `<p>voir origin.example/txt</p>`,
 		},
 	}
 }
 
-// rewriteReference : oracle bufferisé INDÉPENDANT du moteur en flux —
-// contexte total (jamais de question de fenêtre), sémantique décrite
-// dans rewrite.go, implémentation distincte.
+// rewriteReference: buffered oracle INDEPENDENT of the streaming
+// engine — total context (never a window question), semantics
+// described in rewrite.go, distinct implementation.
 func rewriteReference(body []byte, plan *rewritePlan) string {
 	var sb bytes.Buffer
 	i := 0
 	for i < len(body) {
-		// première occurrence d'un host d'origine ; à index égal, la
-		// plus longue (miroir de findHost)
+		// first occurrence of an origin host; at equal index the
+		// longest (mirror of findHost)
 		h, hl := -1, 0
 		for _, o := range plan.origins {
 			j := bytes.Index(body[i:], []byte(o))
@@ -183,7 +183,7 @@ func rewriteReference(body []byte, plan *rewritePlan) string {
 			return sb.String()
 		}
 
-		// forme (scheme) entièrement présente dans body[i:h]
+		// (scheme) form entirely present in body[i:h]
 		formLen := 0
 		switch {
 		case h-8 >= i && string(body[h-8:h]) == "https://":
@@ -209,8 +209,8 @@ func rewriteReference(body []byte, plan *rewritePlan) string {
 			invalid = true
 		}
 
-		// port optionnel :digits — inclus dans le préfixe réécrit,
-		// absent des remplacements
+		// optional :digits port — included in the rewritten prefix,
+		// absent from the replacements
 		portEnd := h + hl
 		if !invalid && portEnd < len(body) && body[portEnd] == ':' {
 			k := portEnd + 1
@@ -218,13 +218,13 @@ func rewriteReference(body []byte, plan *rewritePlan) string {
 				k++
 			}
 			if k == portEnd+1 {
-				invalid = true // ':' sans chiffre (":/x")
+				invalid = true // ':' without a digit (":/x")
 			} else {
 				portEnd = k
 			}
 		}
 		if !invalid && portEnd < len(body) && isHostChar(body[portEnd]) {
-			invalid = true // host qui se poursuit (a.b dans a.b.c)
+			invalid = true // host that continues (a.b within a.b.c)
 		}
 		if invalid {
 			sb.Write(body[i : h+1])
@@ -232,7 +232,7 @@ func rewriteReference(body []byte, plan *rewritePlan) string {
 			continue
 		}
 
-		// exceptions : préfixe le plus long gagne (trié en amont)
+		// exceptions: longest prefix wins (sorted upstream)
 		keep, repl := false, plan.pub
 		end := len(body)
 		for j := portEnd; j < len(body); j++ {
@@ -272,14 +272,14 @@ func rewriteStreamCase(t *testing.T, plan *rewritePlan, body []byte, chunk int) 
 	)
 	got, err := io.ReadAll(rs)
 	if err != nil {
-		t.Fatalf("flux (bloc %d) : %v", chunk, err)
+		t.Fatalf("stream (chunk %d): %v", chunk, err)
 	}
 	return string(got)
 }
 
-// Le moteur en flux doit produire EXACTEMENT la sortie de l'oracle,
-// quel que soit le découpage de lecture (1 octet = pire cas : la
-// fenêtre glissante est sollicitée à chaque octet).
+// The streaming engine must produce EXACTLY the oracle's output,
+// whatever the read chunking (1 byte = worst case: the sliding
+// window is exercised at every byte).
 func TestRewriteStreamMatchesReference(t *testing.T) {
 	plan := rewriteTestPlan()
 	for _, c := range rewriteTextCases() {
@@ -289,13 +289,13 @@ func TestRewriteStreamMatchesReference(t *testing.T) {
 		}
 		body := []byte(c.Input)
 		if got := rewriteReference(body, plan); got != want {
-			t.Errorf("oracle %q :\n got  %q\n want %q", c.Name, got, want)
+			t.Errorf("oracle %q:\n got  %q\n want %q", c.Name, got, want)
 			continue
 		}
 		for _, n := range []int{1, 2, 3, 5, 7, 8, 13, 33, 64, 4096} {
 			if got := rewriteStreamCase(t, plan, body, n); got != want {
 				t.Errorf(
-					"flux %q (bloc %d) :\n got  %q\n want %q",
+					"stream %q (chunk %d):\n got  %q\n want %q",
 					c.Name, n, got, want,
 				)
 			}
@@ -303,9 +303,9 @@ func TestRewriteStreamMatchesReference(t *testing.T) {
 	}
 }
 
-// Assemblages chaotiques de cas : découpes 1 octet sur la page complète
-// (toutes les sémantiques traversées dans UN flux, fenêtre toujours
-// au bord).
+// Chaotic assemblies of cases: 1-byte chunks over the whole page
+// (all semantics crossed within ONE stream, window always at the
+// edge).
 func TestRewriteStreamWholePageChunkOfOne(t *testing.T) {
 	plan := rewriteTestPlan()
 	var body bytes.Buffer
@@ -315,13 +315,13 @@ func TestRewriteStreamWholePageChunkOfOne(t *testing.T) {
 	}
 	want := rewriteReference(body.Bytes(), plan)
 	if got := rewriteStreamCase(t, plan, body.Bytes(), 1); got != want {
-		t.Fatalf("flux bloc 1 :\n got  %q\n want %q", got, want)
+		t.Fatalf("chunk-1 stream:\n got  %q\n want %q", got, want)
 	}
 }
 
-// Page énorme parsemée d'URLs d'origine : livrée INTÉGRALE et
-// réécrite (un octet manquant ou dupliqué casse la longueur exacte —
-// comme guardStream, la troncature est structurellement impossible).
+// Huge page sprinkled with origin URLs: delivered IN FULL and
+// rewritten (one missing or duplicated byte breaks the exact length —
+// like guardStream, truncation is structurally impossible).
 func TestRewriteStreamsHugePageWithoutTruncation(t *testing.T) {
 	plan := rewriteTestPlan()
 	var body bytes.Buffer
@@ -335,16 +335,15 @@ func TestRewriteStreamsHugePageWithoutTruncation(t *testing.T) {
 	want := rewriteReference(body.Bytes(), plan)
 	got := rewriteStreamCase(t, plan, body.Bytes(), 4096)
 	if got != want {
-		t.Fatalf("page %d octets : reçu %d octets (troncature ?)",
+		t.Fatalf("page %d bytes: got %d bytes (truncation?)",
 			body.Len(), len(got))
 	}
 	if !strings.Contains(got, "https://public.test/p/19999") {
-		t.Error("dernière URL non réécrite")
+		t.Error("last URL not rewritten")
 	}
 }
 
-// Erreur transport : propagée (jamais avalée), conformément à
-// guardStream.
+// Transport error: propagated (never swallowed), per guardStream.
 func TestRewriteStreamPropagatesTransportError(t *testing.T) {
 	plan := rewriteTestPlan()
 	boom := errors.New("boom transport")
@@ -355,14 +354,14 @@ func TestRewriteStreamPropagatesTransportError(t *testing.T) {
 	}
 }
 
-// Données puis erreur transport AU MILIEU d'une URL : les octets déjà
-// reçus partent BRUTS (un corps coupé ne doit pas être semi-réécrit),
-// puis l'erreur sort (jamais avalée).
+// Data then transport error IN THE MIDDLE of a URL: the bytes
+// already received go out RAW (a cut-off body must not be
+// half-rewritten), then the error comes out (never swallowed).
 func TestRewriteStreamRawFlushThenError(t *testing.T) {
 	plan := rewriteTestPlan()
-	boom := errors.New("coupe")
-	// URL valide… coupée en pleine host (< hold retenus ne changent
-	// rien : l'erreur force l'émission brutale)
+	boom := errors.New("cut")
+	// Valid URL… cut in the middle of the host (< hold retained does
+	// not change anything: the error forces the brutal emission)
 	src := io.MultiReader(
 		strings.NewReader(`<a href="https://origin.exa`),
 		&errorReader{boom},
@@ -373,14 +372,14 @@ func TestRewriteStreamRawFlushThenError(t *testing.T) {
 		t.Fatalf("err = %v, want %v", err, boom)
 	}
 	if string(out) != `<a href="https://origin.exa` {
-		t.Errorf("octets pré-erreur réécrits malgré la coupure : %q", string(out))
+		t.Errorf("pre-error bytes rewritten despite the cut: %q", string(out))
 	}
 }
 
-// E2E via la gateway complète (config JSON réelle, grammaire stricte
-// de core.Load) : la page HTML est réécrite (hors exceptions), le
-// garde reste injecté, Content-Length/Content-Encoding retirés
-// (chunked), et la page gzip est décompressée puis réécrite.
+// E2E through the full gateway (real JSON config, core.Load's strict
+// grammar): the HTML page is rewritten (outside exceptions), the
+// guard stays injected, Content-Length/Content-Encoding removed
+// (chunked), and the gzip page is decompressed then rewritten.
 func TestRewriteBodyGatewayE2E(t *testing.T) {
 	gw, backend := upstreamGateway(t, `{
 		"routes": [{
@@ -400,12 +399,12 @@ func TestRewriteBodyGatewayE2E(t *testing.T) {
 			}
 		}]
 	}`)
-	backendHost := backend.Host // host:port imposé au backend
+	backendHost := backend.Host // host:port imposed to the backend
 
 	for _, path := range []string{"/rwpage", "/rwgz"} {
 		resp := doGet(t, gw, "public.test", path)
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("%s : status = %d", path, resp.StatusCode)
+			t.Fatalf("%s: status = %d", path, resp.StatusCode)
 		}
 		b, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -416,31 +415,31 @@ func TestRewriteBodyGatewayE2E(t *testing.T) {
 		if resp.ContentLength != -1 ||
 			resp.Header.Get("Content-Length") != "" ||
 			resp.Header.Get("Content-Encoding") != "" {
-			t.Errorf("%s : CL=%d CE=%q — réécrite = chunked clair",
+			t.Errorf("%s: CL=%d CE=%q — rewritten = plain chunked",
 				path, resp.ContentLength, resp.Header.Get("Content-Encoding"))
 		}
 		if !strings.Contains(s, "__cladoneAuthGuard") {
-			t.Errorf("%s : garde absente", path)
+			t.Errorf("%s: guard missing", path)
 		}
 
 		origin := "https://" + backendHost
 		for _, want := range []string{
-			`https://public.test/edit/page?x=1`, // réécriture standard
-			origin + `/lecture/bonpapa/`,        // exception : origine
-			`https://alt.example/alt/chemin`,    // {path,to} : chemin suivi
+			`https://public.test/edit/page?x=1`, // standard rewrite
+			origin + `/lecture/bonpapa/`,        // exception: origin
+			`https://alt.example/alt/chemin`,    // {path,to}: path follows
 			`https://deep.example/l1/detail/ou`, // /l1/detail (long)
-			origin + `/l1/autre`,                // /l1 (court) : origine
-			`https://public.test/img.png`,       // //origine
-			`https://public.test/port`,          // port perdu
-			`https://autre.example/x`,           // autre host intact
-			origin + `.more/interieur`,          // suffixe intact
-			`wss://` + backendHost + `/ws`,      // wss intact
+			origin + `/l1/autre`,                // /l1 (short): origin
+			`https://public.test/img.png`,       // //origin
+			`https://public.test/port`,          // port lost
+			`https://autre.example/x`,           // other host untouched
+			origin + `.more/interieur`,          // suffix untouched
+			`wss://` + backendHost + `/ws`,      // wss untouched
 			`https://public.test/a.jpg 2x, https://public.test/b.jpg 1x`,
 			`url(https://public.test/fond.css)`,
 			`https://public.test/txt/fin`,
 		} {
 			if !strings.Contains(s, want) {
-				t.Errorf("%s : absence de %q", path, want)
+				t.Errorf("%s: missing %q", path, want)
 			}
 		}
 		for _, not := range []string{
@@ -450,17 +449,17 @@ func TestRewriteBodyGatewayE2E(t *testing.T) {
 			backendHost + `/port`,
 		} {
 			if strings.Contains(s, not) {
-				t.Errorf("%s : réécriture manquée %q", path, not)
+				t.Errorf("%s: missed rewrite %q", path, not)
 			}
 		}
 	}
 }
 
-// Un asset JS n'est pas réécrit (le SW client couvre le runtime) ni
-// décompressé (décompression HTML uniquement) : le corps zippe passe
-// à l'identique, Content-Encoding compris.
+// A JS asset is not rewritten (the client SW covers the runtime) nor
+// decompressed (HTML decompression only): the zipped body passes
+// identical, Content-Encoding included.
 func TestRewriteJSAssetUntouched(t *testing.T) {
-	// octets gzip EXACTS servis par l'origine
+	// EXACT gzip bytes served by the origin
 	buf := &bytes.Buffer{}
 	zw := gzip.NewWriter(buf)
 	_, _ = zw.Write([]byte("console.log('gz');"))
@@ -481,7 +480,7 @@ func TestRewriteJSAssetUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(body, zipped) {
-		t.Errorf("corps JS modifié : %d octets (want %d identiques)",
+		t.Errorf("JS body modified: %d bytes (want %d identical)",
 			len(body), len(zipped))
 	}
 	if resp.Header.Get("Content-Encoding") != "gzip" {
@@ -489,9 +488,9 @@ func TestRewriteJSAssetUntouched(t *testing.T) {
 	}
 }
 
-// Le SW de réécriture est servi PRE-AUTH (le SW doit s'enregistrer
-// avant toute session) avec la policy embarquée et les en-têtes qui
-// rendent l'enregistrement possible depuis la racine.
+// The rewrite SW is served PRE-AUTH (the SW must register before any
+// session) with the policy embedded and the headers making
+// registration possible from the root.
 func TestRewriteServiceWorkerServed(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -503,34 +502,33 @@ func TestRewriteServiceWorkerServed(t *testing.T) {
 
 	resp := doGet(t, gw, "public.test", pwa.SwURL)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (SW servi pré-auth)", resp.StatusCode)
+		t.Fatalf("status = %d, want 200 (SW served pre-auth)", resp.StatusCode)
 	}
 	s := body(t, resp)
 	if resp.Header.Get("Content-Type") != "text/javascript; charset=utf-8" {
 		t.Errorf("Content-Type = %q", resp.Header.Get("Content-Type"))
 	}
 	if resp.Header.Get("Cache-Control") != "no-cache" {
-		t.Errorf("Cache-Control = %q, want no-cache (le SW re-check)",
+		t.Errorf("Cache-Control = %q, want no-cache (the SW re-checks)",
 			resp.Header.Get("Cache-Control"))
 	}
 	if resp.Header.Get("Service-Worker-Allowed") != "/" {
 		t.Errorf("Service-Worker-Allowed = %q, want /",
 			resp.Header.Get("Service-Worker-Allowed"))
 	}
-	// la policy est embarquée : target + host d'origine NU (le payload
-	// traverse son propreSW sans autoréécriture)
+	// the policy is embedded: target + BARE origin host (the payload
+	// goes through its own SW without self-rewrite)
 	if !strings.Contains(s, `"target":"https://public.test"`) ||
 		!strings.Contains(s, `127.0.0.1`) {
-		t.Error("policy rewrite absente du SW servi")
+		t.Error("rewrite policy missing from the served SW")
 	}
 }
 
-// rewriteSWRequestCases : cas de parité SW — REQUÊTES (URL absolue
-// pure, la matière d'un service worker). Hors périmètre volontaire :
-// une URL d'origine IMBRIQUÉE dans la query (le SW réécrit l'URL
-// demandée, pas le texte qu'elle porte — c'est la couche serveur qui
-// réécrit le HTML) et l'origine nue sans chemin (une requête a
-// toujours un chemin).
+// rewriteSWRequestCases: SW parity cases — REQUESTS (pure absolute
+// URL, the material of a service worker). Voluntarily out of scope:
+// an origin URL NESTED in the query (the SW rewrites the requested
+// URL, not the text it carries — the server layer rewrites the HTML)
+// and the bare origin without path (a request always has a path).
 func rewriteSWRequestCases() []string {
 	return []string{
 		"https://origin.example/edit/page?x=1",
@@ -546,12 +544,12 @@ func rewriteSWRequestCases() []string {
 	}
 }
 
-// Parité Go↔JS : le SW généré (harnais node) applique la MÊME
-// politique que la référence Go sur les mêmes requêtes absolues.
+// Go↔JS parity: the generated SW (node harness) applies the SAME
+// policy as the Go reference on the same absolute requests.
 func TestRewriteParityWithServiceWorkerJS(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node absent : parité SW ignorée")
+		t.Skip("node absent: SW parity skipped")
 	}
 
 	plan := rewriteTestPlan()
@@ -574,7 +572,7 @@ func TestRewriteParityWithServiceWorkerJS(t *testing.T) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if out, err := cmd.Output(); err != nil {
-		t.Fatalf("harnais node : %v\n%s\n%s", err, out, stderr.String())
+		t.Fatalf("node harness: %v\n%s\n%s", err, out, stderr.String())
 	}
 	raw, err := os.ReadFile(outPath)
 	if err != nil {
@@ -582,24 +580,24 @@ func TestRewriteParityWithServiceWorkerJS(t *testing.T) {
 	}
 	results := strings.Split(strings.TrimSpace(string(raw)), "\n")
 	if len(results) != len(cases) {
-		t.Fatalf("%d résultats pour %d cas :\n%s",
+		t.Fatalf("%d results for %d cases:\n%s",
 			len(results), len(cases), string(raw))
 	}
 	for i, u := range cases {
 		got := results[i]
 		if got == "NO-INTERCEPT" {
-			got = u // non intercepté = la requête passe telle quelle
+			got = u // not intercepted = the request passes as-is
 		}
 		want := rewriteReference([]byte(u), plan)
 		if got != want {
-			t.Errorf("SW %q : got %q want %q", u, got, want)
+			t.Errorf("SW %q: got %q want %q", u, got, want)
 		}
 	}
 }
 
-// DÉMO HTTP DIRECTE (pas d'ingress, pas de X-Forwarded-Proto) : les
-// URLs d'origine sont réécrites en http:// — le schéma suit la
-// requête réelle, rien n'est codé en dur.
+// DIRECT HTTP DEMO (no ingress, no X-Forwarded-Proto): origin URLs
+// are rewritten to http:// — the scheme follows the real request,
+// nothing is hardcoded.
 func TestRewriteBodyGatewayE2EHTTPDemo(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -616,13 +614,13 @@ func TestRewriteBodyGatewayE2EHTTPDemo(t *testing.T) {
 	b := readBody(t, resp)
 
 	if !strings.Contains(b, "http://public.test/edit/page?x=1") {
-		t.Error("réécriture attendue en http:// (démo directe)")
+		t.Error("rewrite expected in http:// (direct demo)")
 	}
-	// les LIENS pointent en http:// ; la DTO du garde (métadonnée
-	// target=https://…) reste documentaire — le SW/patch réécrivent
-	// vers leur origine réelle à l'exécution
+	// the LINKS point to http://; the guard's DTO (target=https://…
+	// metadata) stays documentary — the SW/patch rewrite toward
+	// their real origin at runtime
 	if strings.Contains(b, `href="https://public.test`) ||
 		strings.Contains(b, `url(https://public.test`) {
-		t.Error("les liens ne doivent pas être codés https : schéma de la requête")
+		t.Error("links must not be hardcoded https: request scheme")
 	}
 }

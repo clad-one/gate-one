@@ -6,28 +6,29 @@ import (
 	"net/http"
 )
 
-// decodeGzipBody installe la DÉCOMPRESSION EN FLUX d'un corps gzip
-// (Content-Encoding: gzip). Les injecteurs (garde 401/403, futures
-// balises) opèrent sur du HTML EN CLAIR : un corps compressé manipulé
-// puis servi avec son Content-Encoding supprimé produit une page
-// illisible dans le navigateur (incident 2026-10-17 : Cloudflare
-// répondait brotli au navigateur, l'injecteur préfixait les octets
-// comprimés).
+// decodeGzipBody installs STREAMING DECOMPRESSION of a gzip body
+// (Content-Encoding: gzip). The injectors (401/403 guard, future
+// tags) operate on PLAIN HTML: a compressed body manipulated then
+// served with its Content-Encoding removed produces an unreadable
+// page in the browser (2026-10-17 incident: Cloudflare answered
+// brotli to the browser, the injector prefixed the compressed
+// bytes).
 //
-// Comme l'injection de la garde (2026-10-18), la décompression est en
-// flux : l'o gzip.Reader paresseux traverse le corps au fur et à
-// mesure de l'arrivée — JAMAIS de corps entier résident (la page de
-// 6 Mo du livre traversait il y a peu en mémoire : deux copies
-// compressée + décompressée simultanées). Content-Encoding et
-// Content-Length sont retirés — le corps change de taille,
-// ReverseProxy re-chunke et flusse chaque write (ContentLength -1).
+// Like the guard injection (2026-10-18), decompression is streaming:
+// the lazy gzip.Reader flows the body through as it arrives — NEVER
+// a whole resident body (the book's 6 MB page recently crossed
+// memory: two simultaneous copies, compressed + decompressed).
+// Content-Encoding and Content-Length are removed — the body changes
+// size, ReverseProxy re-chunks and flushes every write
+// (ContentLength -1).
 func decodeGzipBody(resp *http.Response) error {
 
 	src := resp.Body
 	zr, err := gzip.NewReader(src)
 	if err != nil {
-		// pas de gzip (corps vide, en-tête cassé) : 502 par
-		// ModifyResponse — rien n'a encore été écrit au client.
+		// no gzip (empty body, broken header): 502 by
+		// ModifyResponse — nothing has been written to the client
+		// yet.
 		resp.Body.Close()
 		return err
 	}
@@ -40,12 +41,12 @@ func decodeGzipBody(resp *http.Response) error {
 	return nil
 }
 
-// gunzipStream : gzip.Reader paresseux + fermeture de l'origine.
-// gz.Reader lit tous les membres d'un flux multi-membres
-// (mêmes appels que l'ancien ReadAll — comportement identique) ; une
-// corruption en cours de flux surfes pendant la copie (truncation
-// vue du client, version streaming du même scénario) au lieu d'un
-// 502 pré-content : le compromis standard de toute réponse streamée.
+// gunzipStream: lazy gzip.Reader + origin close.
+// gz.Reader reads all members of a multi-member stream (same calls
+// as the old ReadAll — identical behavior); mid-stream corruption
+// surfaces during the copy (truncation as seen by the client,
+// streaming version of the same scenario) instead of a pre-content
+// 502: the standard trade-off of any streamed response.
 type gunzipStream struct {
 	zr  *gzip.Reader
 	src io.ReadCloser

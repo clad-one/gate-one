@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// Fenêtre fixe par clé (route+identité) : au-delà de la limite, 429
-// avec Retry-After. En mémoire (instance unique) — un restart remet
-// les compteurs, acceptable pour ce service.
+// Fixed window per key (route+identity): beyond the limit, 429 with
+// Retry-After. In memory (single instance) — a restart resets the
+// counters, acceptable for this service.
 
 type limitBucket struct {
 	windowStart time.Time
@@ -28,8 +28,8 @@ func newLimiter(period time.Duration) *limiter {
 	return &limiter{buckets: map[string]*limitBucket{}, period: period}
 }
 
-// allow consomme une unité : ok=false quand la fenêtre est pleine
-// (retryAfter = temps restant avant remise à zéro).
+// allow consumes one unit: ok=false when the window is full
+// (retryAfter = time left before reset).
 func (l *limiter) allow(key string, limit int64) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -47,7 +47,7 @@ func (l *limiter) allow(key string, limit int64) (bool, time.Duration) {
 	return true, 0
 }
 
-// parsePeriod : "second"|"minute"|"hour"|"day" (défaut minute).
+// parsePeriod: "second"|"minute"|"hour"|"day" (default minute).
 func parsePeriod(s string) time.Duration {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "second":
@@ -63,18 +63,17 @@ func parsePeriod(s string) time.Duration {
 	}
 }
 
-// limiters par route (construits une fois au chargement de la config)
+// per-route limiters (built once at config load)
 type routeLimiters struct {
 	rate *limiter
-	// quota : même mécanique, fenêtre plus longue en pratique
+	// quota: same mechanics, longer window in practice
 	quota *limiter
 }
 
-// clientIP : la VRAIE adresse du client. Derrière Traefik, RemoteAddr
-// = Traefik lui-même (tout le monde partagerait le même bucket) — le
-// dernier maillon de X-Forwarded-For est le pair vu par Traefik, donc
-// l'IP réelle du client (Traefik l'ajoute, un client ne peut pas la
-// falsifier).
+// clientIP: the client's REAL address. Behind Traefik, RemoteAddr
+// = Traefik itself (everyone would share the same bucket) — the
+// last link of X-Forwarded-For is the peer seen by Traefik, hence
+// the client's real IP (Traefik adds it, a client cannot forge it).
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
@@ -87,8 +86,8 @@ func clientIP(r *http.Request) string {
 	return ip
 }
 
-// limitIdentity : la clé de comptage = l'utilisateur authentifié
-// s'il existe, sinon son IP.
+// limitIdentity: the counting key = the authenticated user if any,
+// otherwise their IP.
 func limitIdentity(r *http.Request, ctx *RequestContext) string {
 	if ctx.UserID != "" {
 		return "u:" + ctx.UserID
@@ -96,9 +95,9 @@ func limitIdentity(r *http.Request, ctx *RequestContext) string {
 	return "ip:" + clientIP(r)
 }
 
-// enforceLimits applique les policies rateLimit/quota d'une route
-// (fenêtre fixe ; 429 + Retry-After). Répond et retourne true si la
-// requête doit être refusée.
+// enforceLimits applies a route's rateLimit/quota policies (fixed
+// window; 429 + Retry-After). Answers and returns true if the
+// request must be rejected.
 func enforceLimits(
 	w http.ResponseWriter,
 	r *http.Request,

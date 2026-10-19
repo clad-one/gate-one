@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-// newMCPProtocolGateway construit une gateway avec une route MCP dont
-// l'auth-bridge est stubbé (200, identité factice) : les requêtes MCP
-// passent l'authentification et atteignent le serveur MCP embarqué.
-// Le backend ne doit jamais être contacté par les méthodes testées
-// (discover / initialize / tools/list).
+// newMCPProtocolGateway builds a gateway with an MCP route whose
+// auth-bridge is stubbed (200, fake identity): MCP requests pass
+// authentication and reach the embedded MCP server. The backend must
+// never be contacted by the tested methods (discover / initialize /
+// tools/list).
 func newMCPProtocolGateway(t *testing.T) *Gateway {
 	t.Helper()
 
@@ -53,9 +53,9 @@ func newMCPProtocolGateway(t *testing.T) *Gateway {
 	return gw
 }
 
-// postMCP envoie une requête JSON-RPC sur la route MCP et retourne la
-// réponse décodée (JSON-RPC générique). headers permet d'ajouter les
-// en-têtes standard du protocole 2026-07-28 (Mcp-Protocol-Version,
+// postMCP sends a JSON-RPC request on the MCP route and returns the
+// decoded (generic JSON-RPC) response. headers allows adding the
+// standard 2026-07-28 protocol headers (Mcp-Protocol-Version,
 // Mcp-Method, Mcp-Name).
 func postMCP(
 	t *testing.T,
@@ -96,9 +96,9 @@ func postMCP(
 	return rec, decoded
 }
 
-// TestMCPLegacyInitialize vérifie la compatibilité avec les clients
-// legacy (handshake initialize, révisions ≤ 2025-11-25) : la gateway
-// négocie au maximum 2025-11-25.
+// TestMCPLegacyInitialize checks compatibility with legacy clients
+// (initialize handshake, revisions ≤ 2025-11-25): the gateway
+// negotiates at most 2025-11-25.
 func TestMCPLegacyInitialize(t *testing.T) {
 	gw := newMCPProtocolGateway(t)
 
@@ -129,14 +129,14 @@ func TestMCPLegacyInitialize(t *testing.T) {
 	}
 }
 
-// TestMCPDiscover20260728 vérifie le RPC server/discover de la
-// révision 2026-07-28 (remplace le handshake initialize) : le client
-// doit découvrir les révisions supportées, dont la sienne.
+// TestMCPDiscover20260728 checks the server/discover RPC of the
+// 2026-07-28 revision (replacing the initialize handshake): the
+// client must discover the supported revisions, including its own.
 func TestMCPDiscover20260728(t *testing.T) {
 	gw := newMCPProtocolGateway(t)
 
-	// La révision 2026-07-28 exige les en-têtes standard :
-	// Mcp-Protocol-Version doit égaler le _meta, Mcp-Method la méthode.
+	// The 2026-07-28 revision requires the standard headers:
+	// Mcp-Protocol-Version must equal the _meta, Mcp-Method the method.
 	rec, decoded := postMCP(t, gw,
 		`{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{
 			"_meta":{
@@ -180,9 +180,9 @@ func TestMCPDiscover20260728(t *testing.T) {
 	}
 }
 
-// TestMCPToolsList20260728 vérifie une opération métier en mode
-// stateless 2026-07-28 (pas de handshake préalable) : la liste des
-// outils expose processStream et annonce ttlMs/cacheScope.
+// TestMCPToolsList20260728 checks a business operation in 2026-07-28
+// stateless mode (no prior handshake): the tool list exposes
+// processStream and advertises ttlMs/cacheScope.
 func TestMCPToolsList20260728(t *testing.T) {
 	gw := newMCPProtocolGateway(t)
 

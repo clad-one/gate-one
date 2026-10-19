@@ -1,7 +1,7 @@
-// Point d'entrée du harnais UI :
-//   node run.mjs            → matrice locale + suite uiGate (garde
-//                             rendue du source, jamais du périmé)
-//   node run.mjs --served   → smoke comportemental contre la page déployée
+// UI harness entry point:
+//   node run.mjs            → local matrix + uiGate suite (guard
+//                             rendered from the source, never stale)
+//   node run.mjs --served   → behavioral smoke against the deployed page
 import { pathToFileURL } from "url";
 import path from "path";
 
@@ -14,8 +14,8 @@ if (served) {
   await import(pathToFileURL(path.join(here, "rules.mjs")).href);
   console.log(
     globalThis.__uiFailures === 0
-      ? "\nHARNAIS UI : tout est OK"
-      : `\nHARNAIS UI : ${globalThis.__uiFailures} échec(s) au total`
+      ? "\nUI HARNESS: all OK"
+      : `\nUI HARNESS: ${globalThis.__uiFailures} failure(s) total`
   );
   process.exit(globalThis.__uiFailures === 0 ? 0 : 1);
 }

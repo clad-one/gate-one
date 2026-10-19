@@ -23,7 +23,7 @@ func testGateway(
 	routesJSON string,
 ) (*Gateway, map[string]string) {
 	t.Helper()
-	clearAuthCache() // cache global : chaque test part neutre
+	clearAuthCache() // global cache: every test starts neutral
 
 	htmlBody := `<!DOCTYPE html>
 <html>
@@ -75,9 +75,9 @@ func doGet(
 
 	req := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
 	req.Host = host
-	// simulate l'ingress de production : TLS terminé en amont,
-	// X-Forwarded-Proto posé par Traefik (les tests de la variante
-	// démo HTTP directe passent par doRequestWithHeaders sans XFP)
+	// simulates the production ingress: TLS terminated upstream,
+	// X-Forwarded-Proto set by Traefik (the direct-HTTP demo variant
+	// tests go through doRequestWithHeaders without XFP)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
@@ -112,8 +112,8 @@ func TestGuardInjectedOnFrontendHTML(t *testing.T) {
 	if !strings.Contains(b, "__cladoneAuthGuard") {
 		t.Error("guard script missing from HTML response")
 	}
-	// l'URL de login vient de la CONFIG (bloc oidc de test) — jamais
-	// d'URL codée en dur
+	// the login URL comes from the CONFIG (test oidc block) — never
+	// a hardcoded URL
 	if !strings.Contains(
 		b,
 		testLoginURL,
@@ -128,11 +128,11 @@ func TestGuardInjectedOnFrontendHTML(t *testing.T) {
 	if !strings.Contains(b, "<body>hello</body>") {
 		t.Errorf("page body altered: %q", b)
 	}
-	// L'injection est EN FLUX : Content-Length retiré (la taille
-	// change au fil de l'eau) — la réponse est servie chunked, le
-	// flush arrive write par write (le TTFB == celui de l'origine).
+	// The injection is STREAMING: Content-Length removed (the size
+	// changes on the fly) — the response is served chunked, the
+	// flush lands write by write (TTFB == the origin's).
 	if resp.Header.Get("Content-Length") != "" || resp.ContentLength >= 0 {
-		t.Errorf("Content-Length %d/%q : une page injectée doit servir chunked",
+		t.Errorf("Content-Length %d/%q: an injected page must be served chunked",
 			resp.ContentLength, resp.Header.Get("Content-Length"))
 	}
 }
@@ -273,11 +273,11 @@ func TestBackendErrorForwardedUnmodified(t *testing.T) {
 	}
 }
 
-// La résolution du login : authGuard.loginUrl (route) gagne sur
-// oidc.loginUrl (plateforme) ; une route à garde active sans aucun
-// des deux REFUSE de démarrer (validation au load).
+// Login resolution: authGuard.loginUrl (route) wins over
+// oidc.loginUrl (platform); an active-guard route with neither
+// REFUSES to start (load-time validation).
 func TestLoginURLResolution(t *testing.T) {
-	t.Run("priorité route > plateforme", func(t *testing.T) {
+	t.Run("route priority > platform", func(t *testing.T) {
 		cfg := loadForTest(t, `{
 			"oidc": {"loginUrl": "https://login.plateforme.test/login"},
 			"routes": [{
@@ -287,11 +287,11 @@ func TestLoginURLResolution(t *testing.T) {
 			}]
 		}`)
 		if got := cfg.LoginURLFor(&cfg.Routes[0]); got != "https://login.route.test/login" {
-			t.Errorf("login = %q, want l'URL de la route", got)
+			t.Errorf("login = %q, want the route's URL", got)
 		}
 	})
 
-	t.Run("défaut plateforme", func(t *testing.T) {
+	t.Run("platform default", func(t *testing.T) {
 		cfg := loadForTest(t, `{
 			"oidc": {"loginUrl": "https://login.plateforme.test/login"},
 			"routes": [{
@@ -300,11 +300,11 @@ func TestLoginURLResolution(t *testing.T) {
 			}]
 		}`)
 		if got := cfg.LoginURLFor(&cfg.Routes[0]); got != "https://login.plateforme.test/login" {
-			t.Errorf("login = %q, want l'URL de la plateforme", got)
+			t.Errorf("login = %q, want the platform's URL", got)
 		}
 	})
 
-	t.Run("garde sans login : refus de démarrer", func(t *testing.T) {
+	t.Run("guard without login: refuses to start", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgPath := filepath.Join(dir, "routes.json")
 		cfgJSON := `{"routes": [{
@@ -315,12 +315,12 @@ func TestLoginURLResolution(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := core.Load(cfgPath); err == nil ||
-			!strings.Contains(err.Error(), "sans URL de login") {
-			t.Errorf("err = %v, want refus « sans URL de login »", err)
+			!strings.Contains(err.Error(), "without login URL") {
+			t.Errorf("err = %v, want refusal \"without login URL\"", err)
 		}
 	})
 
-	t.Run("MCP sans issuer : refus de démarrer", func(t *testing.T) {
+	t.Run("MCP without issuer: refuses to start", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgPath := filepath.Join(dir, "routes.json")
 		cfgJSON := `{"routes": [{
@@ -333,7 +333,7 @@ func TestLoginURLResolution(t *testing.T) {
 		}
 		if _, err := core.Load(cfgPath); err == nil ||
 			!strings.Contains(err.Error(), "oidc.issuer") {
-			t.Errorf("err = %v, want refus « oidc.issuer »", err)
+			t.Errorf("err = %v, want refusal \"oidc.issuer\"", err)
 		}
 	})
 }
@@ -390,7 +390,7 @@ func TestAuthStateEndpointAuthenticated(t *testing.T) {
 		Claims map[string]any `json:"claims"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("JSON invalide: %v", err)
+		t.Fatalf("invalid JSON: %v", err)
 	}
 	if !contains(payload.Roles, "offline_access") {
 		t.Errorf("roles = %v, want offline_access", payload.Roles)
@@ -412,10 +412,10 @@ func contains(list []string, want string) bool {
 	return false
 }
 
-// TestWhenIdentityConditions vérifie le modèle deux-étapes : les
-// conditions d'identité (roles/scopes/claims) sont évaluées APRÈS
-// authentification — anonyme → 401, authentifié insuffisant → 403,
-// authentifié conforme → proxifié (200).
+// TestWhenIdentityConditions checks the two-step model: identity
+// conditions (roles/scopes/claims) are evaluated AFTER
+// authentication — anonymous → 401, authenticated insufficient → 403,
+// authenticated conforming → proxified (200).
 func TestWhenIdentityConditions(t *testing.T) {
 	bridge := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -462,25 +462,25 @@ func TestWhenIdentityConditions(t *testing.T) {
 		return rec.Result()
 	}
 
-	// anonyme → 401
+	// anonymous → 401
 	if resp := do(""); resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("anonyme: status = %d, want 401", resp.StatusCode)
+		t.Errorf("anonymous: status = %d, want 401", resp.StatusCode)
 	} else {
 		resp.Body.Close()
 	}
 
-	// authentifié conforme → 200 (proxifié)
+	// authenticated conforming → 200 (proxified)
 	if resp := do("Bearer ok"); resp.StatusCode != http.StatusOK {
-		t.Errorf("conforme: status = %d, want 200", resp.StatusCode)
+		t.Errorf("conforming: status = %d, want 200", resp.StatusCode)
 	} else {
 		resp.Body.Close()
 	}
 
-	// authentifié mais rôles insuffisants → 403 (pas 401 : pas de
-	// boucle de login possible). Token DIFFÉRENT : le cache d'identité
-	// de la gateway clé sur les credentials du client — même token =
-	// même identité (le cache a raison), il faut une nouvelle
-	// « session » pour reconsulter le bridge.
+	// authenticated but insufficient roles → 403 (not 401: no
+	// possible login loop). DIFFERENT token: the gateway's identity
+	// cache keys on the client's credentials — same token = same
+	// identity (the cache is right); a new "session" is needed to
+	// consult the bridge again.
 	bridgeNoRoles := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-User-Id", "u2")
@@ -491,15 +491,15 @@ func TestWhenIdentityConditions(t *testing.T) {
 	t.Cleanup(bridgeNoRoles.Close)
 	gw.authBridgeBaseURL = bridgeNoRoles.URL
 	if resp := do("Bearer ok2"); resp.StatusCode != http.StatusForbidden {
-		t.Errorf("insuffisant: status = %d, want 403", resp.StatusCode)
+		t.Errorf("insufficient: status = %d, want 403", resp.StatusCode)
 	} else {
 		resp.Body.Close()
 	}
 }
 
-// TestWhenClaimsPresenceAndValue vérifie la sémantique du matcher
-// claims : "*" = présence, sinon comparaison stringifiée (booléen
-// JSON → "true"/"false", nombre → format Go).
+// TestWhenClaimsPresenceAndValue checks the claims matcher
+// semantics: "*" = presence, otherwise stringified comparison
+// (JSON boolean → "true"/"false", number → Go format).
 func TestWhenClaimsPresenceAndValue(t *testing.T) {
 	bridge := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -531,19 +531,19 @@ func TestWhenClaimsPresenceAndValue(t *testing.T) {
 	}
 
 	if got := probe(`{"email":"*"}`); got != http.StatusOK {
-		t.Errorf(`{"email":"*"}: status = %d, want 200 (présence)`, got)
+		t.Errorf(`{"email":"*"}: status = %d, want 200 (presence)`, got)
 	}
 	if got := probe(`{"email_verified":"false"}`); got != http.StatusOK {
-		t.Errorf(`{"email_verified":"false"}: status = %d, want 200 (booléen stringifié)`, got)
+		t.Errorf(`{"email_verified":"false"}: status = %d, want 200 (stringified boolean)`, got)
 	}
 	if got := probe(`{"email_verified":"true"}`); got != http.StatusForbidden {
-		t.Errorf(`{"email_verified":"true"}: status = %d, want 403 (claim faux = authentifié mais insuffisant)`, got)
+		t.Errorf(`{"email_verified":"true"}: status = %d, want 403 (false claim = authenticated but insufficient)`, got)
 	}
 	if got := probe(`{"n":"42"}`); got != http.StatusOK {
-		t.Errorf(`{"n":"42"}: status = %d, want 200 (nombre stringifié)`, got)
+		t.Errorf(`{"n":"42"}: status = %d, want 200 (stringified number)`, got)
 	}
 	if got := probe(`{"absent":"*"}`); got != http.StatusForbidden {
-		t.Errorf(`{"absent":"*"}: status = %d, want 403 (claim absent = insuffisant)`, got)
+		t.Errorf(`{"absent":"*"}: status = %d, want 403 (absent claim = insufficient)`, got)
 	}
 }
 

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// La config réelle utilise "autoHead" : le tag Go doit le lire. Régression
-// pour le bug où le tag était "headFallback" et le flag était ignoré (HEAD
-// partait natif au backend).
+// The real config uses "autoHead": the Go tag must read it. Regression
+// for the bug where the tag was "headFallback" and the flag was ignored
+// (HEAD went raw to the backend).
 func TestAutoHeadDeserialization(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
@@ -34,9 +34,9 @@ func TestAutoHeadDeserialization(t *testing.T) {
 	}
 }
 
-// Le scope MCP exigé doit venir du champ "mcp.scope" de la config
-// (valeur aussi déclarée dans le realm Keycloak : le client scope
-// optionnel du même nom).
+// The required MCP scope must come from the config's "mcp.scope" field
+// (value also declared in the Keycloak realm: the optional client
+// scope of the same name).
 func TestMCPScopeDeserialization(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
@@ -58,7 +58,7 @@ func TestMCPScopeDeserialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := c.OIDC.Issuer; got != "https://auth.plateforme.test/realms/test" {
-		t.Errorf(`"oidc.issuer" désérialisé en %q`, got)
+		t.Errorf(`"oidc.issuer" deserialized as %q`, got)
 	}
 	if got := c.Routes[0].MCP.Scope; got != "custom-scope" {
 		t.Errorf(`"mcp": {"scope": "custom-scope"} deserialized as %q`, got)
@@ -68,12 +68,12 @@ func TestMCPScopeDeserialization(t *testing.T) {
 	}
 }
 
-// La grammaire est STRICTE : tout champ inconnu (faute de frappe dans
-// un nom de policy, champ prévu mais non implémenté) doit casser le
-// load — jamais de policy ignorée en silence (régression du type
-// autoHead/"headFallback"). NB : le décodage Go est insensible à la
-// casse sur les tags ("autohead" matche "autoHead") — la stricte ne
-// rejette que les noms réellement inconnus.
+// The grammar is STRICT: any unknown field (typo in a policy
+// name, planned but unimplemented field) must break the
+// load — never a silently ignored policy (regression of the
+// autoHead/"headFallback" kind). NB: Go decoding is case-insensitive
+// on tags ("autohead" matches "autoHead") — the strictness only
+// rejects actually unknown names.
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
@@ -87,7 +87,7 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {
-		t.Error("headFallback (nom inconnu) doit être rejeté, load accepté")
+		t.Error("headFallback (unknown name) must be rejected, load accepted")
 	}
 }
 
@@ -105,15 +105,15 @@ func TestLoadAllowsSchemaKey(t *testing.T) {
 	}
 	c, err := Load(path)
 	if err != nil {
-		t.Fatalf("$schema doit être accepté: %v", err)
+		t.Fatalf("$schema must be accepted: %v", err)
 	}
 	if len(c.Routes) != 1 {
 		t.Errorf("routes = %d, want 1", len(c.Routes))
 	}
 }
 
-// La policy upstream (site externe proxifié — ex. Cloudflare) doit se
-// désérialiser complètement depuis api-routes.json.
+// The upstream policy (proxified external site — e.g. Cloudflare) must
+// fully deserialize from api-routes.json.
 func TestUpstreamDeserialization(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
@@ -168,7 +168,7 @@ func TestUpstreamDeserialization(t *testing.T) {
 	}
 }
 
-// Une route sans policy upstream ne doit pas en créer une vide.
+// A route without an upstream policy must not get an empty one created.
 func TestUpstreamAbsent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
@@ -187,9 +187,9 @@ func TestUpstreamAbsent(t *testing.T) {
 	}
 }
 
-// Les valeurs d'en-têtes upstream supportent l'interpolation ${VAR}
-// depuis l'environnement du conteneur (les secrets vivent dans .env,
-// jamais committés dans la config).
+// Upstream header values support ${VAR} interpolation
+// from the container environment (secrets live in .env,
+// never committed to the config).
 func TestUpstreamEnvExpansion(t *testing.T) {
 	t.Setenv("UPSTREAM_TEST_TOKEN", "c2VjcmV0")
 
@@ -199,7 +199,7 @@ func TestUpstreamEnvExpansion(t *testing.T) {
 		{"host": "a.local", "path": "/*", "backend": "https://ext.example",
 		 "upstream": {"headers": {
 		   "Authorization": "Basic ${UPSTREAM_TEST_TOKEN}",
-		   "X-Plain": "sans-variable"
+		   "X-Plain": "no-variable"
 		 }}}
 	]}`
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
@@ -214,13 +214,13 @@ func TestUpstreamEnvExpansion(t *testing.T) {
 	if h["Authorization"] != "Basic c2VjcmV0" {
 		t.Errorf("interpolation = %q, want %q", h["Authorization"], "Basic c2VjcmV0")
 	}
-	if h["X-Plain"] != "sans-variable" {
-		t.Errorf("valeur sans variable altérée: %q", h["X-Plain"])
+	if h["X-Plain"] != "no-variable" {
+		t.Errorf("variable-free value altered: %q", h["X-Plain"])
 	}
 }
 
-// Variable d'environnement absente = refus de démarrer (jamais
-// d'identifiant vide silencieux envoyé au backend).
+// Missing environment variable = startup refused (never
+// a silent empty credential sent to the backend).
 func TestUpstreamEnvMissingVarFails(t *testing.T) {
 	const name = "UPSTREAM_TEST_MISSING_VAR"
 	old, had := os.LookupEnv(name)
@@ -243,16 +243,16 @@ func TestUpstreamEnvMissingVarFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {
-		t.Error("variable absente doit faire échouer le load")
+		t.Error("missing variable must fail the load")
 	}
 }
 
-// Variable d'environnement présente mais VIDE (typiquement absente
-// du .env serveur, injectée en "" par compose « ${VAR:-} ») : NON
-// fatal — la valeur est vidée (l'en-tête sera retiré, l'upstream
-// répondra 401) et un warning est journalisé. Incident 2026-10-17 :
-// un deploy sans la variable faisait partir un parasite « Basic »
-// tronqué au lieu d'un signal clair.
+// Environment variable present but EMPTY (typically missing
+// from the server's .env, injected as "" by compose "${VAR:-}"): NOT
+// fatal — the value is emptied (the header will be removed, the
+// upstream will answer 401) and a warning is logged. Incident
+// 2026-10-17: a deploy without the variable sent a truncated stray
+// "Basic" instead of a clear signal.
 func TestUpstreamEnvEmptyVarDropsHeader(t *testing.T) {
 	t.Setenv("UPSTREAM_TEST_EMPTY", "")
 
@@ -268,15 +268,15 @@ func TestUpstreamEnvEmptyVarDropsHeader(t *testing.T) {
 
 	c, err := Load(path)
 	if err != nil {
-		t.Fatalf("variable vide ne doit pas être fatale: %v", err)
+		t.Fatalf("empty variable must not be fatal: %v", err)
 	}
 	if got := c.Routes[0].Upstream.Headers["Authorization"]; got != "" {
-		t.Errorf("valeur = %q, want vide (en-tête retiré par le proxy)", got)
+		t.Errorf("value = %q, want empty (header removed by the proxy)", got)
 	}
 }
 
-// Faute de frappe dans un sous-champ d'upstream = rejet (grammaire
-// stricte, cf. TestLoadRejectsUnknownFields).
+// Typo in an upstream sub-field = rejection (strict
+// grammar, see TestLoadRejectsUnknownFields).
 func TestUpstreamRejectsUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
@@ -288,13 +288,13 @@ func TestUpstreamRejectsUnknownFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {
-		t.Error("upstream.headerz (nom inconnu) doit être rejeté")
+		t.Error("upstream.headerz (unknown name) must be rejected")
 	}
 }
 
-// Le badge userBadge.loginBadge : le champ se désérialise (défaut
-// false — le badge n'apparaît en anonyme qu'après une mort de
-// session détectée).
+// The userBadge.loginBadge badge: the field deserializes (default
+// false — when anonymous the badge only appears after a detected
+// session death).
 func TestUserBadgeLoginBadgeDeserialization(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
@@ -322,12 +322,60 @@ func TestUserBadgeLoginBadgeDeserialization(t *testing.T) {
 	}
 }
 
-// La config RÉELLE de production doit passer la grammaire stricte.
-// Les secrets y sont référencés par interpolation ${VAR} (résolus
-// depuis l'environnement du conteneur en production) : le test
-// pré-positionne chaque variable référencée à une valeur factice —
-// une variable réellement absente doit faire échouer le load (cf.
-// TestUpstreamEnvMissingVarFails), pas ce test.
+// The userBadge.roles / .scopes switches: bool AND list forms
+// deserialize; absent = false (the expanded badge stays claims-only
+// unless asked).
+func TestUserBadgeRolesScopesDeserialization(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"routes": [
+			{"host": "a.local", "path": "/*", "backend": "http://x",
+			 "userBadge": {"claims": ["preferred_username"],
+			               "roles": true, "scopes": true}},
+			{"host": "b.local", "path": "/*", "backend": "http://x",
+			 "userBadge": {"claims": ["preferred_username"]}},
+			{"host": "c.local", "path": "/*", "backend": "http://x",
+			 "userBadge": {"claims": true,
+			               "roles": ["admin", "auditor"]}}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ub := c.Routes[0].UserBadge
+	if !ub.Roles.All || !ub.Scopes.All {
+		t.Error(`"roles"/"scopes": true not deserialized (All)`)
+	}
+	if len(ub.Roles.Items) != 0 || len(ub.Scopes.Items) != 0 {
+		t.Error("bool form must not carry items")
+	}
+	ub = c.Routes[1].UserBadge
+	if ub.Roles.All || ub.Scopes.All ||
+		len(ub.Roles.Items) != 0 || len(ub.Scopes.Items) != 0 {
+		t.Error("absent roles/scopes should default to false")
+	}
+	ub = c.Routes[2].UserBadge
+	if !ub.Claims.All {
+		t.Error(`"claims": true not deserialized (All)`)
+	}
+	if ub.Roles.All || len(ub.Roles.Items) != 2 ||
+		ub.Roles.Items[0] != "admin" || ub.Roles.Items[1] != "auditor" {
+		t.Error("list form not deserialized (items, no All)")
+	}
+}
+
+// The REAL production config must pass the strict grammar.
+// Secrets are referenced there by ${VAR} interpolation (resolved
+// from the container environment in production): the test
+// pre-sets each referenced variable to a dummy value —
+// a genuinely missing variable must fail the load (see
+// TestUpstreamEnvMissingVarFails), not this test.
 func TestLoadRealConfigStrict(t *testing.T) {
 
 	data, err := os.ReadFile("../../api-routes.json")
@@ -341,9 +389,9 @@ func TestLoadRealConfigStrict(t *testing.T) {
 
 	c, err := Load("../../api-routes.json")
 	if err != nil {
-		t.Fatalf("api-routes.json réel invalide: %v", err)
+		t.Fatalf("real api-routes.json invalid: %v", err)
 	}
 	if len(c.Routes) == 0 {
-		t.Error("aucune route chargée")
+		t.Error("no routes loaded")
 	}
 }

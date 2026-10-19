@@ -26,8 +26,8 @@ type RequestContext struct {
 	Claims   map[string]any
 }
 
-// HasRole / HasScope / HasClaim : helpers de matching des conditions
-// d'identité (évaluées APRÈS authentification — cf. matchesIdentity).
+// HasRole / HasScope / HasClaim: helpers matching the identity
+// conditions (evaluated AFTER authentication — see matchesIdentity).
 
 func (ctx *RequestContext) HasScope(scope string) bool {
 	for _, s := range ctx.Scopes {
@@ -38,9 +38,9 @@ func (ctx *RequestContext) HasScope(scope string) bool {
 	return false
 }
 
-// HasClaim vérifie la présence d'un claim ("*" = n'importe quelle
-// valeur) ou l'égalité de sa valeur stringifiée (booléen JSON →
-// "true"/"false", nombres → format Go).
+// HasClaim checks the presence of a claim ("*" = any value) or the
+// equality of its stringified value (JSON boolean → "true"/"false",
+// numbers → Go format).
 func (ctx *RequestContext) HasClaim(key, want string) bool {
 	v, ok := ctx.Claims[key]
 	if !ok {

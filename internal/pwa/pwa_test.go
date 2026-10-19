@@ -93,9 +93,10 @@ func TestServiceWorker(t *testing.T) {
 	if !strings.Contains(body, "modulePathPrefix: '/__gateway_pwa/workbox/'") {
 		t.Error("sw.js must use the self-hosted modulePathPrefix")
 	}
-	// Aucune exclusion d'auth en dur : sans pwa.networkOnly déclaré,
-	// le SW généré ne contient aucune route NetworkOnly (la gateway
-	// supporte tout serveur d'authentification — le choix est déclaratif).
+	// No hard-coded auth exclusions: without a declared
+	// pwa.networkOnly, the generated SW contains no NetworkOnly
+	// route (the gateway supports any authentication server — the
+	// choice is declarative).
 	if strings.Contains(body, "NetworkOnly") {
 		t.Error("sw.js must not hard-code auth exclusions (config-only)")
 	}
@@ -114,7 +115,7 @@ func TestServiceWorkerApiCache(t *testing.T) {
 
 	for _, want := range []string{
 		"url.pathname === '/api/process_stream'",
-		// nom de cache suffixé par la version du SW (hash)
+		// cache name suffixed by the SW version (hash)
 		"caches.open('gateway-pwa-api-api-process_stream-",
 		"storeCompleteResponse",
 		"body.tee()",
@@ -123,16 +124,16 @@ func TestServiceWorkerApiCache(t *testing.T) {
 		"ExpirationPlugin",
 		"maxEntries: 42",
 		"maxAgeSeconds: 3600",
-		"maxEntrySizeBytes", // mention dans le commentaire
-		"1500",              // défaut idleFinalizeMs rendu dans le SW
+		"maxEntrySizeBytes", // mention in the comment
+		"1500",              // idleFinalizeMs default rendered in the SW
 		"purgeOnQuotaError: true",
 	} {
 		if !strings.Contains(sw, want) {
 			t.Errorf("sw.js apiCache missing %s in:\n%s", want, sw)
 		}
 	}
-	// valeurs explicites
-	if !strings.Contains(sw, "42 entrées max") || !strings.Contains(sw, "3600s") {
+	// explicit values
+	if !strings.Contains(sw, "42 entries max") || !strings.Contains(sw, "3600s") {
 		t.Errorf("sw.js apiCache limits not rendered:\n%s", sw)
 	}
 }
@@ -151,17 +152,17 @@ func TestServiceWorkerApiCachesMultiple(t *testing.T) {
 		"maxEntries: 10",
 		"maxEntries: 200",
 		"maxAgeSeconds: 600",
-		"3000", // idleFinalizeMs déclaré explicitement
-		"1500", // défaut pour le bloc qui ne le déclare pas
+		"3000", // idleFinalizeMs declared explicitly
+		"1500", // default for the block that does not declare it
 		"maxAgeSeconds: 604800",
-		// défaut de taille par entrée pour le second bloc
+		// default size per entry for the second block
 		"2097152",
 	} {
 		if !strings.Contains(sw, want) {
 			t.Errorf("sw.js multi-apiCache missing %s", want)
 		}
 	}
-	// chaque endpoint son cache (suffixe version SW)
+	// each endpoint its own cache (SW version suffix)
 	if !strings.Contains(sw, "caches.open('gateway-pwa-api-api-process_stream-") ||
 		!strings.Contains(sw, "caches.open('gateway-pwa-api-api-poems-") {
 		t.Errorf("per-endpoint cache names missing:\n%s", sw)
@@ -173,15 +174,15 @@ func TestServiceWorkerApiCacheDefaults(t *testing.T) {
 	pol.ApiCache = &core.PWAApiCache{Path: "/api/x"}
 	sw := New(pol).swJS()
 
-	if !strings.Contains(sw, "50 entrées max") || !strings.Contains(sw, "86400s") {
+	if !strings.Contains(sw, "50 entries max") || !strings.Contains(sw, "86400s") {
 		t.Errorf("apiCache defaults not applied:\n%s", sw)
 	}
 }
 
 func TestServiceWorkerWithoutApiCache(t *testing.T) {
 	sw := New(emptyPolicy()).swJS()
-	// Le filtre de purge d'activation mentionne le préfixe api, mais
-	// aucune route de cache API ne doit être générée.
+	// The activation purge filter mentions the api prefix, but
+	// no API cache route must be generated.
 	if strings.Contains(sw, "registerRoute(\n    ({url}) => url.pathname === '") {
 		t.Errorf("apiCache route generated without policy:\n%s", sw)
 	}
@@ -191,11 +192,11 @@ func TestServiceWorkerVersioning(t *testing.T) {
 	sw := New(emptyPolicy()).swJS()
 
 	for _, want := range []string{
-		"const CACHE_VERSION = '", // hash injecté
+		"const CACHE_VERSION = '", // injected hash
 		"self.skipWaiting()",
 		"addEventListener('activate'",
 		"caches.delete(k)",
-		// le placeholder ne doit jamais survivre à la génération
+		// the placeholder must never survive generation
 	} {
 		if !strings.Contains(sw, want) {
 			t.Errorf("sw.js versioning missing %s", want)
@@ -206,8 +207,8 @@ func TestServiceWorkerVersioning(t *testing.T) {
 	}
 }
 
-// Tout changement de politique (même un seul champ) doit changer les
-// noms de caches => purge automatique à l'activation.
+// Any policy change (even a single field) must change the
+// cache names => automatic purge at activation.
 func TestServiceWorkerVersionChangesWithPolicy(t *testing.T) {
 	sw1 := New(emptyPolicy()).swJS()
 
@@ -218,22 +219,22 @@ func TestServiceWorkerVersionChangesWithPolicy(t *testing.T) {
 	v1 := extractCacheVersion(sw1)
 	v2 := extractCacheVersion(sw2)
 	if v1 == "" || v2 == "" {
-		t.Fatalf("versions vides: %q / %q", v1, v2)
+		t.Fatalf("empty versions: %q / %q", v1, v2)
 	}
 	if v1 == v2 {
 		t.Errorf("policy change did not change cache version: %q", v1)
 	}
 
-	// même politique => même version (cache préservé entre deploys sans
-	// changement)
+	// same policy => same version (cache preserved across deploys
+	// without change)
 	sw2b := New(pol).swJS()
 	if extractCacheVersion(sw2b) != v2 {
 		t.Errorf("identical policy changed cache version: %q vs %q", v2, extractCacheVersion(sw2b))
 	}
 }
 
-// Le champ version d'un apiCache change le nom du cache de l'endpoint
-// ET la version globale : l'ancienne entrée est purgée à l'activation.
+// An apiCache's version field changes the endpoint's cache name
+// AND the global version: the old entry is purged at activation.
 func TestApiCacheVersionField(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCaches = []*core.PWAApiCache{{

@@ -19,10 +19,10 @@ func newMCPTestGateway(
 	return newMCPTestGatewayWithBridgeStatus(t, scope, http.StatusUnauthorized)
 }
 
-// newMCPTestGatewayWithBridgeStatus est la variante paramétrable :
-// le stub auth-bridge répond toujours bridgeStatus, ce qui permet de
-// tester le relais du 401 (challenge) comme du 403 (insufficient
-// scope).
+// newMCPTestGatewayWithBridgeStatus is the parameterizable variant:
+// the stub auth-bridge always answers bridgeStatus, which allows
+// testing the relay of both the 401 (challenge) and the 403
+// (insufficient scope).
 func newMCPTestGatewayWithBridgeStatus(
 	t *testing.T,
 	scope string,
@@ -110,10 +110,10 @@ func TestMCPChallengeDefaultsToMcpTools(t *testing.T) {
 	}
 }
 
-// TestMCPInsufficientScopeChallenge vérifie le relais du 403
-// auth-bridge (token valide mais scope manquant) : la gateway doit
-// renvoyer error="insufficient_scope", le scope exigé et
-// resource_metadata (MCP 2026-07-28, cohérence avec le 401).
+// TestMCPInsufficientScopeChallenge checks the relay of the
+// auth-bridge 403 (valid token but missing scope): the gateway must
+// answer error="insufficient_scope", the required scope and
+// resource_metadata (MCP 2026-07-28, consistency with the 401).
 func TestMCPInsufficientScopeChallenge(t *testing.T) {
 	gw, _ := newMCPTestGatewayWithBridgeStatus(t, "custom-scope", http.StatusForbidden)
 

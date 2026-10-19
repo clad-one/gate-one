@@ -31,8 +31,8 @@ type compiledRoute struct {
 	// /__gateway_pwa/* and injects PWA tags into HTML responses
 	pwa *pwa.Handler
 
-	// limiteurs rateLimit/quota de la route (fenêtres fixes),
-	// construits paresseusement au premier besoin
+	// route rateLimit/quota limiters (fixed windows), built
+	// lazily on first need
 	limiters *routeLimiters
 }
 
@@ -41,8 +41,8 @@ type Gateway struct {
 	config *core.Config //for policy inspection
 	client *http.Client
 
-	// base URL de auth-bridge, surchargeable en tests pour stubber le
-	// service (défaut : authBridgeBaseURL)
+	// auth-bridge base URL, overridable in tests to stub the
+	// service (default: authBridgeBaseURL)
 	authBridgeBaseURL string
 }
 
@@ -50,12 +50,12 @@ func routeKey(host, path string) string {
 	return host + "|" + path
 }
 
-// defaultMCPScope : le scope exigé quand la policy mcp d'une route ne
-// déclare pas de champ "scope".
+// defaultMCPScope: the required scope when a route's mcp policy
+// does not declare a "scope" field.
 const defaultMCPScope = "mcp-tools"
 
-// authBridgeBaseURLFor retourne l'URL de base de auth-bridge (constante
-// de production ou valeur de test).
+// authBridgeBaseURLFor returns the auth-bridge base URL (production
+// constant or test value).
 func (g *Gateway) authBridgeBaseURLFor() string {
 	if g.authBridgeBaseURL != "" {
 		return g.authBridgeBaseURL
@@ -63,12 +63,12 @@ func (g *Gateway) authBridgeBaseURLFor() string {
 	return "http://auth-bridge:3000"
 }
 
-// Option : modificateur fonctionnel de la Gateway à la construction.
+// Option: functional modifier of the Gateway at construction.
 type Option func(*Gateway)
 
-// WithAuthBridgeURL surcharge la base URL de auth-bridge (défaut :
-// http://auth-bridge:3000, nom de service du réseau Docker). Vide =
-// défaut. Utilisé par le CLI (-authBridge) et les smoke tests.
+// WithAuthBridgeURL overrides the auth-bridge base URL (default:
+// http://auth-bridge:3000, the Docker network service name). Empty =
+// default. Used by the CLI (-authBridge) and smoke tests.
 func WithAuthBridgeURL(u string) Option {
 	return func(g *Gateway) {
 		if u != "" {
@@ -77,33 +77,32 @@ func WithAuthBridgeURL(u string) Option {
 	}
 }
 
-// WithLogBody active le logging verbeux des requêtes (query + body) :
-// debug uniquement — les données peuvent être sensibles.
+// WithLogBody enables verbose request logging (query + body):
+// debug only — data may be sensitive.
 func WithLogBody(v bool) Option {
 	return func(g *Gateway) {
 		logRequestBodies = v
 	}
 }
 
-// logRequestBodies : mode debug (-logBody) — logge aussi query/body
-// des requêtes (données potentiellement sensibles : opt-in).
+// logRequestBodies: debug mode (-logBody) — also logs request
+// query/body (potentially sensitive data: opt-in).
 var logRequestBodies = false
 
-// authBridgeClientTimeout borne chaque appel à auth-bridge : sans
-// lui, un auth-bridge wedgé (busy-loop, incident 2026-10-17) gelait
-// TOUTES les routes authentifiées — chaque checkAuth attendait sans
-// fin. Variable package-level pour les tests.
+// authBridgeClientTimeout bounds every auth-bridge call: without
+// it, a wedged auth-bridge (busy-loop, 2026-10-17 incident) froze
+// ALL authenticated routes — every checkAuth waited forever.
+// Package-level variable for tests.
 var authBridgeClientTimeout = 5 * time.Second
 
-// backendTransport : transport sortant dédié au lieu du défaut.
-//   - pool dimensionné : MaxIdleConnsPerHost = 2 en défaut → pour une
-//     page lourde servie depuis une même origine (le livre proxifié :
-//     878 images chez Cloudflare), chaque requête au-delà de deux
-//     payait un handshake TLS ; 100 idle par host = réutilisation
-//     massive (perf), MaxConnsPerHost non borné (le débit n'est pas
-//     plafonné),
-//   - bornes de sécurité : dial/TLS/ResponseHeader timeouts — un
-//     backend hangé libère la connexion au lieu de la geler à vie.
+// backendTransport: dedicated outbound transport instead of the default.
+//   - sized pool: MaxIdleConnsPerHost = 2 by default → for a heavy page
+//     served from a single origin (the proxified book: 878 images on
+//     Cloudflare), every request beyond the first two paid a TLS
+//     handshake; 100 idle per host = massive reuse (perf),
+//     MaxConnsPerHost unbounded (throughput is not capped),
+//   - safety bounds: dial/TLS/ResponseHeader timeouts — a hung
+//     backend releases the connection instead of freezing it for life.
 var backendTransport = func() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = (&net.Dialer{
@@ -116,10 +115,9 @@ var backendTransport = func() *http.Transport {
 	return t
 }()
 
-// Reloadable : enveloppe de handler qui permet de remplacer la
-// configuration à chaud (SIGHUP) sans reconstruire l'image — le
-// routage bascule atomiquement, les requêtes en vol finissent sur
-// l'ancienne instance.
+// Reloadable: handler wrapper allowing hot config replacement
+// (SIGHUP) without rebuilding the image — routing switches
+// atomically, in-flight requests finish on the old instance.
 type Reloadable struct {
 	current atomic.Pointer[Gateway]
 }
@@ -152,15 +150,15 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 		upstream := route.Upstream
 
-		// Les injections corps (garde 401/403, PWA, réécriture des
-		// URLs d'origine) exigent du HTML EN CLAIR : le stdlib Go ne
-		// décode ni brotli ni zstd — si le navigateur les offre et
-		// que l'origine répond avec, un corps compressé manipulé +
-		// Content-Encoding supprimé = page illisible. On force donc
-		// gzip en amont (décodable) ; la décompression a lieu dans
-		// ModifyResponse, avant la chaîne d'injection. Sans
-		// injection : Accept-Encoding du client traverse tel quel
-		// (passthrough optimal).
+		// Body injections (401/403 guard, PWA, origin URL rewrite)
+		// require PLAIN HTML: the Go stdlib decodes neither brotli
+		// nor zstd — if the browser offers them and the origin
+		// answers with one, a manipulated compressed body +
+		// Content-Encoding removed = unreadable page. We therefore
+		// force gzip upstream (decodable); decompression happens in
+		// ModifyResponse, before the injection chain. Without
+		// injection: the client's Accept-Encoding goes through as-is
+		// (optimal passthrough).
 		rwPlan := rewritePlanFor(route, u)
 
 		injectsBody := guardEnabledFor(route) ||
@@ -170,21 +168,21 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 		rp.Director = func(req *http.Request) {
 			original(req)
-			// fige le schéma CLIENT (X-Forwarded-Proto de l'ingress,
-			// encore intact ici — ReverseProxy l'écrase ensuite avec
-			// le schéma du tronçon gateway→backend) dans le
-			// contexte : les injecteurs de corps le relisent en
+			// freezes the CLIENT scheme (X-Forwarded-Proto from the
+			// ingress, still intact here — ReverseProxy overwrites
+			// it afterwards with the gateway→backend hop's scheme)
+			// into the context: body injectors read it back in
 			// ModifyResponse (resp.Request).
 			*req = *req.WithContext(context.WithValue(
 				req.Context(), clientSchemeKey, clientScheme(req)))
 			if injectsBody {
 				req.Header.Set("Accept-Encoding", "gzip")
 			}
-			// Policy upstream (site externe proxifié) : Host réécrit
-			// vers l'origine backend + en-têtes statiques (basic
-			// auth, service tokens). Sans policy : comportement
-			// historique — le Host public du navigateur est préservé
-			// (backends du réseau interne).
+			// Upstream policy (proxified external site): Host
+			// rewritten to the backend origin + static headers
+			// (basic auth, service tokens). Without policy:
+			// historical behavior — the browser's public Host is
+			// preserved (internal-network backends).
 			if upstream != nil {
 				applyUpstreamDirector(upstream, u, req)
 			}
@@ -235,11 +233,11 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			)
 		}
 
-		// Chaîne d'injection de la route : le registry (injector.go)
-		// porte chaque feature et leur ordre — gzip → garde →
-		// rewriteBody → upstream(headers) → pwa → custom. Le JS de
-		// garde vit dans guard/guard.js.tmpl (go:embed) ; les
-		// injections custom (bundle) sont des données, pas du code.
+		// Route injection chain: the registry (injector.go) carries
+		// each feature and their order — gzip → guard →
+		// rewriteBody → upstream(headers) → pwa → custom. The guard
+		// JS lives in guard/guard.js.tmpl (go:embed); custom
+		// injections (bundle) are data, not code.
 		if injectors := buildInjectors(cfg, route, u, rwPlan, injectsBody); len(injectors) > 0 {
 			rp.ModifyResponse = chainInjectors(injectors)
 		}
@@ -252,9 +250,8 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		routes: routes,
 		config: cfg,
 		client: &http.Client{
-			// Timeout : les appels auth-bridge ne doivent jamais
-			// geler le traitement des requêtes (voir
-			// authBridgeClientTimeout).
+			// Timeout: auth-bridge calls must never freeze request
+			// handling (see authBridgeClientTimeout).
 			Timeout:   authBridgeClientTimeout,
 			Transport: backendTransport,
 			CheckRedirect: func(
@@ -422,8 +419,8 @@ func (g *Gateway) isPubliclyForbidden(
 	return false
 }
 
-// pwaHandlerForHost returns the client-runtime handler (PWA et/ou
-// réécriture client) of the first matching route, or nil.
+// pwaHandlerForHost returns the client-runtime handler (PWA and/or
+// client rewrite) of the first matching route, or nil.
 func (g *Gateway) pwaHandlerForHost(host string) *pwa.Handler {
 	for _, r := range g.routes {
 		if r.pwa == nil {
@@ -438,8 +435,8 @@ func (g *Gateway) pwaHandlerForHost(host string) *pwa.Handler {
 
 // guardRouteForHost returns the first guard-enabled frontend route
 // matching the host. The auth-state probe endpoint exists only there.
-// userBadgeJSON sérialise la policy userBadge de la route pour le
-// script de garde (JSON, ou "null" si absente — pas de badge).
+// userBadgeJSON serializes the route's userBadge policy for the
+// guard script (JSON, or "null" when absent — no badge).
 func userBadgeJSON(route *core.Route) string {
 	if route == nil || route.UserBadge == nil {
 		return "null"
@@ -447,10 +444,10 @@ func userBadgeJSON(route *core.Route) string {
 	return core.AsciiJSON(route.UserBadge, "null")
 }
 
-// uiGateJSON sérialise les règles uiGate de la route pour le script
-// de garde (tableau JSON ; "[]" si aucune). Passé en ARGUMENT de
-// Sprintf : un "%" dans le JSON est sûr (les arguments ne sont pas
-// re-parsés comme format).
+// uiGateJSON serializes the route's uiGate rules for the guard
+// script (JSON array; "[]" when none). Passed as a Sprintf
+// ARGUMENT: a "%" in the JSON is safe (arguments are not re-parsed
+// as format).
 func uiGateJSON(route *core.Route) string {
 	if route == nil || len(route.UIGate) == 0 {
 		return "[]"
@@ -458,10 +455,9 @@ func uiGateJSON(route *core.Route) string {
 	return core.AsciiJSON(route.UIGate, "[]")
 }
 
-// patchJSONFor sérialise les règles patch du bundle de la route pour
-// le script de garde (PATCH=%s ; "[]" sans bundle ni patch). Les
-// valeurs non-ASCII sont échappées (payload ascii-safe, cf. incident
-// mojibake).
+// patchJSONFor serializes the route bundle's patch rules for the
+// guard script (PATCH=%s; "[]" without bundle or patch). Non-ASCII
+// values are escaped (ascii-safe payload, see mojibake incident).
 func patchJSONFor(route *core.Route) string {
 	b := route.InjectionBundle()
 	if b == nil || len(b.Patch) == 0 {
@@ -470,9 +466,9 @@ func patchJSONFor(route *core.Route) string {
 	return core.AsciiJSON(b.Patch, "[]")
 }
 
-// rewriteGuardJSON sérialise la politique rewriteBody pour le script
-// de garde (REWRITE=%s ; "null" si absente). Hosts d'origine en
-// forme NUE (sans scheme) : le payload subit sa propre réécriture.
+// rewriteGuardJSON serializes the rewriteBody policy for the guard
+// script (REWRITE=%s; "null" when absent). Origin hosts in BARE
+// form (no scheme): the payload undergoes its own rewrite.
 func rewriteGuardJSON(route *core.Route, backend *url.URL) string {
 	dto := rewriteGuardDTOFor(route, backend)
 	if dto == nil {
@@ -505,7 +501,7 @@ func (g *Gateway) serveAuthState(
 	r *http.Request,
 	ctx *RequestContext,
 ) {
-	// une sonde de session ne doit jamais être cacheable
+	// a session probe must never be cacheable
 	w.Header().Set("Cache-Control", "no-store")
 	sctx, err := g.checkAuth(w, r, ctx)
 	if err != nil {
@@ -524,7 +520,7 @@ func (g *Gateway) serveAuthState(
 	})
 }
 
-// mcpRouteForHost retourne la route MCP activée d'un host.
+// mcpRouteForHost returns a host's enabled MCP route.
 func (g *Gateway) mcpRouteForHost(host string) (*core.Route, bool) {
 	for _, cr := range g.routes {
 		if cr.route.MCP == nil || !cr.route.MCP.Enabled {
@@ -541,19 +537,19 @@ func (g *Gateway) mcpRouteForHost(host string) (*core.Route, bool) {
 	return nil, false
 }
 
-// clientSchemeKey : le schéma CLIENT (navigateur→ingress) figé dans
-// le contexte de la requête sortante par le Director — ReverseProxy
-// écrase X-Forwarded-Proto avec le schéma du tronçon
-// gateway→backend ; les injecteurs de corps (ModifyResponse) relisent
-// la valeur d'origine ici.
+// clientSchemeKey: the CLIENT scheme (browser→ingress) frozen into
+// the outgoing request's context by the Director — ReverseProxy
+// overwrites X-Forwarded-Proto with the gateway→backend hop's
+// scheme; body injectors (ModifyResponse) read the original value
+// back here.
 type clientSchemeKeyT struct{}
 
 var clientSchemeKey = new(clientSchemeKeyT)
 
-// clientScheme : le schéma de la requête NAVIGATEUR (handlers qui
-// voient la requête entrante) : X-Forwarded-Proto (posé par
-// l'ingress), sinon TLS direct = https, sinon plain http (démo
-// directe).
+// clientScheme: the BROWSER request scheme (handlers seeing the
+// incoming request): X-Forwarded-Proto (set by the ingress),
+// otherwise direct TLS = https, otherwise plain http (direct
+// demo).
 func clientScheme(r *http.Request) string {
 	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
 		return p
@@ -564,10 +560,10 @@ func clientScheme(r *http.Request) string {
 	return "http"
 }
 
-// requestSchemeOut : le schéma client pour les injecteurs en
-// ModifyResponse (resp.Request = requête sortante) : la valeur figée
-// par le Director, sinon ce que ReverseProxy a posé (X-Forwarded-Proto
-// reflète le TLS entrant direct), sinon https.
+// requestSchemeOut: the client scheme for ModifyResponse injectors
+// (resp.Request = outgoing request): the value frozen by the
+// Director, otherwise what ReverseProxy set (X-Forwarded-Proto
+// reflects direct inbound TLS), otherwise https.
 func requestSchemeOut(r *http.Request) string {
 	if r != nil {
 		if v, ok := r.Context().Value(clientSchemeKey).(string); ok && v != "" {
@@ -605,8 +601,8 @@ func (g *Gateway) mcpResourceURLForHost(
 	return scheme + "://" + normalizeHost(route.Host) + path, true
 }
 
-// mcpScopeForHost retourne le scope MCP exigé pour un host (champ
-// "scope" de la policy mcp, défaut defaultMCPScope).
+// mcpScopeForHost returns the MCP scope required for a host (the
+// mcp policy's "scope" field, default defaultMCPScope).
 func (g *Gateway) mcpScopeForHost(host string) string {
 	route, ok := g.mcpRouteForHost(host)
 	if !ok || route.MCP.Scope == "" {
@@ -645,7 +641,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Endpoints d'exploitation (gateway-served, tout host)
+	// Operations endpoints (gateway-served, any host)
 	switch ctx.Path {
 	case "/healthz":
 		w.Header().Set("Content-Type", "application/json")
@@ -716,10 +712,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			)
 
 			if err != nil {
-				// checkMCPAuth a déjà répondu (challenge 401/403)
-				// sauf sur erreur réseau/transport : là, la réponse
-				// est encore vierge — écrire un 502 plutôt que
-				// laisser Go émettre un 200 vide.
+				// checkMCPAuth already answered (401/403 challenge)
+				// except on a network/transport error: there, the
+				// response is still blank — write a 502 rather than
+				// letting Go emit an empty 200.
 				if errors.Is(err, ErrUnauthorized) {
 					return
 				}
@@ -737,7 +733,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		//
-		// Identité disponible pour le handler MCP.
+		// Identity available to the MCP handler.
 		//
 		r.Header.Set(
 			"X-User-Id",
@@ -769,8 +765,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	cr, ok := g.findRoute(ctx)
 
-	// Une seule ligne par requête ; le body (données potentiellement
-	// sensibles) ne passe dans les logs qu'en mode debug (-logBody).
+	// One line per request; the body (potentially sensitive data)
+	// only reaches the logs in debug mode (-logBody).
 	if logRequestBodies {
 		log.Printf(
 			"REQ host=%q method=%q path=%q query=%v body=%v matched=%v",
@@ -799,8 +795,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route := cr.route
 	p := cr.proxy
 
-	// Statistiques : le statut FINAL de la réponse est compté par
-	// route (302 auth, 401, 403, 429, 200 proxifié…).
+	// Statistics: the response's FINAL status is counted per route
+	// (302 auth, 401, 403, 429, 200 proxified…).
 	sw := &statsWriter{ResponseWriter: w}
 	w = sw
 	defer func() {
@@ -860,10 +856,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		//
-		// Conditions d'identité (rôles/scopes/claims/user) :
-		// authentifié mais insuffisant → 403. Le script de garde
-		// n'intercepte QUE le 401 — un refus de droits ne doit pas
-		// déclencher une invitation au login (boucle).
+		// Identity conditions (roles/scopes/claims/user):
+		// authenticated but insufficient → 403. The guard script
+		// only intercepts the 401 — a rights refusal must not
+		// trigger a login invitation (loop).
 		//
 		if route.Auth != nil &&
 			hasIdentityConditions(route.Auth.When) &&
@@ -877,8 +873,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//
-	// Rate limit / quota (fenêtre fixe, clé = identité ou IP) :
-	// 429 + Retry-After quand la fenêtre est pleine.
+	// Rate limit / quota (fixed window, key = identity or IP):
+	// 429 + Retry-After when the window is full.
 	//
 	if enforceLimits(w, r, cr, ctx) {
 		return
@@ -893,9 +889,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Set("X-Email", ctx.Email)
 	r.Header.Set("X-Roles", strings.Join(ctx.Roles, ","))
 
-	// X-Forwarded-* : Traefik les fournit déjà en production ; les
-	// poser ici garantit un comportement identique en accès direct
-	// au gateway (tests, diagnostic) — sans écraser l'amont.
+	// X-Forwarded-*: Traefik already provides them in production;
+	// setting them here guarantees identical behavior on direct
+	// gateway access (tests, diagnostics) — without overwriting the
+	// upstream.
 	if r.Header.Get("X-Forwarded-Proto") == "" {
 		scheme := "http"
 		if r.TLS != nil {
@@ -925,17 +922,17 @@ func matches(m *core.Match, ctx *RequestContext) bool {
 		return true
 	}
 
-	// matches = conditions techniques (évaluables pré-authentification)
-	// + conditions d'identité (rôles/scopes/claims/user, évaluées
-	// après). Utilisé par rateLimit/quota.
+	// matches = technical conditions (evaluable pre-authentication)
+	// + identity conditions (roles/scopes/claims/user, evaluated
+	// after). Used by rateLimit/quota.
 	if !matchesBasic(m, ctx) {
 		return false
 	}
 	return matchesIdentity(m, ctx)
 }
 
-// matchesBasic : conditions évaluables SANS token (avant
-// authentification).
+// matchesBasic: conditions evaluable WITHOUT a token (before
+// authentication).
 func matchesBasic(m *core.Match, ctx *RequestContext) bool {
 
 	if m == nil {
@@ -967,8 +964,8 @@ func matchesBasic(m *core.Match, ctx *RequestContext) bool {
 	return true
 }
 
-// matchesIdentity : conditions nécessitant le token vérifié
-// (rôles/scopes/claims/user) — évaluées APRÈS authentification.
+// matchesIdentity: conditions requiring the verified token
+// (roles/scopes/claims/user) — evaluated AFTER authentication.
 func matchesIdentity(m *core.Match, ctx *RequestContext) bool {
 
 	if m == nil {
@@ -1000,8 +997,8 @@ func matchesIdentity(m *core.Match, ctx *RequestContext) bool {
 	return true
 }
 
-// hasIdentityConditions : le when porte-t-il des conditions
-// d'identité (évaluation post-authentification requise) ?
+// hasIdentityConditions: does the when carry identity conditions
+// (post-authentication evaluation required)?
 func hasIdentityConditions(m *core.Match) bool {
 	return m != nil &&
 		(len(m.Roles) > 0 || len(m.Scopes) > 0 || len(m.Claims) > 0 || m.User != "")
@@ -1018,10 +1015,10 @@ func (g *Gateway) needsAuthentication(route *core.Route, ctx *RequestContext) bo
 		return true
 	}
 
-	// Conditions TECHNIQUES seulement (method/query/header/body) :
-	// les conditions d'identité (roles/scopes/claims/user) ne sont
-	// évaluables qu'après authentification (le token n'existe pas
-	// encore) — cf. matchesIdentity, appliquée post-auth en 403.
+	// Conditions TECHNICAL only (method/query/header/body): identity
+	// conditions (roles/scopes/claims/user) are only evaluable after
+	// authentication (the token does not exist yet) — see
+	// matchesIdentity, applied post-auth as 403.
 	return matchesBasic(route.Auth.When, ctx)
 }
 

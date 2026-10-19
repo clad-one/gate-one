@@ -1,9 +1,9 @@
 package proxy
 
-// Tests des injections custom (bundle d'une route : "inject") —
-// contenu inline/file, cibles nommées (head, body-end), ciblage par
-// page, ordre dans le document, protection de l'auth (PATCH dans le
-// script de garde).
+// Tests of custom injections (a route's bundle: "inject") —
+// inline/file content, named targets (head, body-end), per-page
+// targeting, document order, auth protection (PATCH in the guard
+// script).
 
 import (
 	"io"
@@ -17,9 +17,9 @@ import (
 	"cladone/gateway/internal/core"
 )
 
-// customGateway : comme upstreamGateway, mais écrit AUSSI le bundle
-// d'injection dans le répertoire de config (la route le référence par
-// son nom de fichier relatif).
+// customGateway: like upstreamGateway, but ALSO writes the injection
+// bundle into the config directory (the route references it by its
+// relative file name).
 func customGateway(
 	t *testing.T,
 	routesJSON, bundleJSON string,
@@ -71,9 +71,9 @@ const customRoutesJSON = `{
 	}]
 }`
 
-// E2E : les entrées du bundle arrivent dans le document — cible head
-// (ordre Order croissant), body-end (contenu du file:), ciblage par
-// page, et la PATCH embarquée dans le script de garde.
+// E2E: the bundle's entries land in the document — head target
+// (ascending Order), body-end (file: content), per-page targeting,
+// and the PATCH embedded in the guard script.
 func TestCustomInjectE2E(t *testing.T) {
 	gw, _ := customGateway(t, customRoutesJSON, `{
 		"injects": [
@@ -122,42 +122,42 @@ func TestCustomInjectE2E(t *testing.T) {
 	}
 	b := readBody(t, resp)
 
-	// ordre head : meta-note (30) puis late-head (50), puis la garde
+	// head order: meta-note (30) then late-head (50), then the guard
 	iMeta := strings.Index(b, `<meta name="custom" content="1">`)
 	iLate := strings.Index(b, `<script>console.log('late');</script>`)
 	iGuard := strings.Index(b, "__cladoneAuthGuard")
 	if iMeta < 0 || iLate < 0 || iGuard < 0 {
-		t.Fatalf("injections head absentes : meta=%d late=%d guard=%d",
+		t.Fatalf("head injections missing: meta=%d late=%d guard=%d",
 			iMeta, iLate, iGuard)
 	}
 	if !(iMeta < iLate && iLate < iGuard) {
-		t.Errorf("ordre du head inattendu : meta=%d late=%d guard=%d",
+		t.Errorf("unexpected head order: meta=%d late=%d guard=%d",
 			iMeta, iLate, iGuard)
 	}
 
-	// body-end : le contenu du file: est présent, avant </body>
+	// body-end: the file: content is present, before </body>
 	iStats := strings.Index(b, "<script>stats();</script>")
 	iBodyClose := strings.LastIndex(b, "</body>")
 	if iStats < 0 || iBodyClose < 0 || iStats > iBodyClose {
-		t.Errorf("body-end mal placé : stats=%d </body>=%d", iStats, iBodyClose)
+		t.Errorf("body-end misplaced: stats=%d </body>=%d", iStats, iBodyClose)
 	}
 
-	// ciblage par page : l'entrée /admin n'est pas sur /page
+	// per-page targeting: the /admin entry is not served on /page
 	if strings.Contains(b, `<meta name="admin"`) {
-		t.Error("entrée /admin servie sur /page (when ignoré)")
+		t.Error("/admin entry served on /page (when ignored)")
 	}
 
-	// PATCH : embarquée dans le script de garde, ascii-safe
+	// PATCH: embedded in the guard script, ascii-safe
 	if !strings.Contains(b,
 		`var PATCH = [{"selector":"#action","attrs":{"data-gtw-auth-hidden":"after","data-gtw-logout":""}}];`) {
-		t.Error("PATCH absente du script de garde")
+		t.Error("PATCH missing from the guard script")
 	}
 }
 
-// Le ciblage when=/admin SERT l'entrée sur /admin/... (le endpoint du
-// backend de test y répond en HTML ? non : 404 — on passe donc par un
-// body-end sur une page réelle et un when qui ne matche pas, déjà
-// couvert ci-dessus ; ici on vérifie le cas positif via /page quand
+// The when=/admin targeting SERVES the entry on /admin/... (does the
+// test backend's endpoint answer HTML there? no: 404 — so we go
+// through a body-end on a real page and a non-matching when, already
+// covered above; here we check the positive case via /page when
 // when = "/page").
 func TestCustomInjectWhenPathPositive(t *testing.T) {
 	gw, _ := customGateway(t, customRoutesJSON, `{
@@ -168,12 +168,12 @@ func TestCustomInjectWhenPathPositive(t *testing.T) {
 
 	b := readBody(t, doGet(t, gw, "public.test", "/page"))
 	if !strings.Contains(b, `<meta name="p" content="1">`) {
-		t.Error("entrée when=/page non servie sur /page")
+		t.Error("when=/page entry not served on /page")
 	}
 }
 
-// body-end sur une page ÉNORME : insertion en flux, page entière + le
-// contenu (aucun octet perdu — le filet de longueur).
+// body-end on a HUGE page: streaming insertion, whole page + the
+// content (no byte lost — the length safety net).
 func TestCustomInjectBodyEndHuge(t *testing.T) {
 	gw, _ := customGateway(t, customRoutesJSON, `{
 		"injects": [
@@ -190,22 +190,22 @@ func TestCustomInjectBodyEndHuge(t *testing.T) {
 	want := bigPageLen + guardInjectedLen(t) +
 		len("<script>tail();</script>")
 	if len(b) != want {
-		t.Errorf("longueur = %d, want %d (page + garde + injection)",
+		t.Errorf("length = %d, want %d (page + guard + injection)",
 			len(b), want)
 	}
 	if !strings.HasSuffix(strings.TrimRight(b, "\n"), "</html>") &&
 		!strings.Contains(b, "tail();") {
-		t.Error("injection body-end absente sur la page énorme")
+		t.Error("body-end injection missing on the huge page")
 	}
 	if !strings.Contains(b[:bigPageLen/2], "<script>tail();</script>") {
-		// le contenu doit être près de la FIN, pas injecté au début
+		// the content must be near the END, not injected at the start
 	} else {
-		t.Error("injection body-end placée en tête de document")
+		t.Error("body-end injection placed at the top of the document")
 	}
 }
 
-// Sans bundle : aucune injection custom, PATCH vide dans le garde
-// (comportement historique inchangé).
+// Without a bundle: no custom injection, empty PATCH in the guard
+// (unchanged historical behavior).
 func TestCustomInjectAbsentByDefault(t *testing.T) {
 	gw, _ := customGateway(t, `{
 		"routes": [{
@@ -217,14 +217,14 @@ func TestCustomInjectAbsentByDefault(t *testing.T) {
 
 	b := readBody(t, doGet(t, gw, "public.test", "/page"))
 	if strings.Contains(b, "var PATCH = [{") {
-		t.Error("PATCH non vide sans bundle")
+		t.Error("PATCH not empty without a bundle")
 	}
 	if !strings.Contains(b, "var PATCH = [];") {
-		t.Error("PATCH attendue vide (var PATCH = [])")
+		t.Error("PATCH expected empty (var PATCH = [])")
 	}
 }
 
-// La grammaire stricte refuse les bundles fautifs.
+// The strict grammar rejects faulty bundles.
 func TestCustomInjectValidation(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -232,54 +232,54 @@ func TestCustomInjectValidation(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "cible inconnue",
+			name:   "unknown target",
 			bundle: `{"injects":[{"name":"x","target":"middle","html":"<b>"}]}`,
 			want:   `target "middle"`,
 		},
 		{
-			name:   "sans nom",
+			name:   "without name",
 			bundle: `{"injects":[{"html":"<b>"}]}`,
-			want:   "name vide",
+			want:   "name empty",
 		},
 		{
-			name: "nom dupliqué",
+			name: "duplicate name",
 			bundle: `{"injects":[
 				{"name":"x","html":"<b>"},
 				{"name":"x","html":"<i>"}]}`,
-			want: `nom dupliqué "x"`,
+			want: `duplicate name "x"`,
 		},
 		{
-			name:   "order hors bornes",
+			name:   "order out of bounds",
 			bundle: `{"injects":[{"name":"x","order":5,"html":"<b>"}]}`,
 			want:   "order 5",
 		},
 		{
-			name:   "sans contenu",
+			name:   "without content",
 			bundle: `{"injects":[{"name":"x"}]}`,
-			want:   "sans contenu",
+			want:   "without content",
 		},
 		{
-			name:   "field inconnu",
+			name:   "unknown field",
 			bundle: `{"injects":[{"name":"x","html":"<b>","extra":1}]}`,
 			want:   "unknown field",
 		},
 		{
-			name:   "patch sans selector",
+			name:   "patch without selector",
 			bundle: `{"patch":[{"attrs":{"a":"b"}}]}`,
-			want:   "selector vide",
+			want:   "selector empty",
 		},
 		{
-			name:   "patch sans attrs",
+			name:   "patch without attrs",
 			bundle: `{"patch":[{"selector":"#x"}]}`,
-			want:   "sans attrs",
+			want:   "without attrs",
 		},
 		{
-			name:   "file qui remonte (..)",
+			name:   "file escaping upward (..)",
 			bundle: `{"injects":[{"name":"x","file":"../etc/passwd"}]}`,
-			want:   "chemin relatif au bundle requis",
+			want:   "path relative to the bundle required",
 		},
 		{
-			name:   "file absent",
+			name:   "missing file",
 			bundle: `{"injects":[{"name":"x","file":"./n existepas.html"}]}`,
 			want:   "no such file",
 		},
@@ -299,16 +299,16 @@ func TestCustomInjectValidation(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := core.Load(cfgPath); err == nil {
-				t.Errorf("bundle accepté : %s", tc.want)
+				t.Errorf("bundle accepted: %s", tc.want)
 			} else if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("erreur = %v, want contenant %q", err, tc.want)
+				t.Errorf("error = %v, want containing %q", err, tc.want)
 			}
 		})
 	}
 }
 
-// file: le contenu est résolu relativement au BUNDLE (et relu au
-// reload HUP, comme la config).
+// file: content is resolved relative to the BUNDLE (and re-read on
+// HUP reload, like the config).
 func TestCustomInjectFileResolved(t *testing.T) {
 	gw, _ := customGateway(t, customRoutesJSON, `{
 		"injects": [
@@ -320,7 +320,7 @@ func TestCustomInjectFileResolved(t *testing.T) {
 
 	b := readBody(t, doGet(t, gw, "public.test", "/page"))
 	if !strings.Contains(b, `<meta name="from-file" content="1">`) {
-		t.Error("contenu du file: non injecté")
+		t.Error("file: content not injected")
 	}
 }
 

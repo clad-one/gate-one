@@ -1,18 +1,18 @@
 package proxy
 
-// Flux d'insertion des injections CUSTOM (bundle d'une route) — la
-// mécanique de la garde généralisée aux cibles nommées. Deux machines
-// O(1) :
+// Insertion stream for CUSTOM injections (a route's bundle) — the
+// guard's mechanics generalized to named targets. Two O(1) machines:
 //
-//   - cible "head" (défaut) : après <head> et après le meta charset de
-//     la fenêtre de détection — même décision que la garde, MAIS
-//     fail-open sans <head> : le snippet est sauti (un contenu custom
-//     ne doit jamais précéder <!doctype : pas de fallback « tout en
-//     tête » de la garde, qui est infrastructure) ;
-//   - cible "body-end" : avant </body> — la décision peut arriver
-//     après des Mo (le livre) : rétention d'une queue bornée (jamais
-//     le corps entier), le reste passe sans relecture ; à EOF sans
-//     marqueur le contenu part en toute fin (document sans </body>).
+//   - "head" target (default): after <head> and after the charset
+//     meta of the detection window — same decision as the guard, BUT
+//     fail-open without a <head>: the snippet is skipped (custom
+//     content must never precede <!doctype: none of the guard's
+//     "everything at the top" fallback, which is infrastructure);
+//   - "body-end" target: before </body> — the decision may land
+//     after megabytes (the book): retention of a bounded tail (never
+//     the whole body), the rest passes without re-reading; at EOF
+//     without the marker the content goes out at the very end
+//     (document without </body>).
 
 import (
 	"io"
@@ -25,11 +25,11 @@ import (
 
 var bodyCloseTag = regexp.MustCompile(`(?i)</body`)
 
-// tailHold : octets retenus pour la détection d'un marqueur qui
-// chevauche le bord de lecture (</body> = 7 octets).
+// tailHold: bytes retained to detect a marker straddling the read
+// boundary (</body> = 7 bytes).
 const tailHold = 8
 
-// newInjectStream : le flux d'insertion selon la cible.
+// newInjectStream: the insertion stream according to the target.
 func newInjectStream(src io.ReadCloser, content, target string) io.ReadCloser {
 	if target == "body-end" {
 		return &tailInjectStream{
@@ -38,27 +38,27 @@ func newInjectStream(src io.ReadCloser, content, target string) io.ReadCloser {
 			scratch: make([]byte, 4096),
 		}
 	}
-	// "head" (défaut) : décision précoce, mécanique guardStream —
-	// sans fallback « tout en tête » : pas de head dans la fenêtre =
-	// snippet sauti (fail-open).
+	// "head" (default): early decision, guardStream mechanics —
+	// without the "everything at the top" fallback: no head in the
+	// window = snippet skipped (fail-open).
 	return &guardStream{
 		src:     src,
 		script:  content,
-		skipNF:  true, // no-head : skip, jamais de préfixe forcé
+		skipNF:  true, // no-head: skip, never a forced prefix
 		scratch: make([]byte, 4096),
 	}
 }
 
-// tailInjectStream : insertion avant </body> — chaque chunk est
-// scanné, seul un compact tail est retenu pour les marqueurs qui
-// chevauchent le bord de lecture. O(1) quelle que soit la page.
+// tailInjectStream: insertion before </body> — every chunk is
+// scanned, only a compact tail is retained for markers straddling
+// the read boundary. O(1) regardless of the page size.
 type tailInjectStream struct {
 	src     io.ReadCloser
 	content string
 
 	scratch  []byte
-	tail     []byte // last tailHold bytes (marqueurs à cheval)
-	pend     []byte // sortie en attente d'émision
+	tail     []byte // last tailHold bytes (straddling markers)
+	pend     []byte // output pending emission
 	pendOff  int
 	inserted bool
 	err      error
@@ -93,21 +93,21 @@ func (t *tailInjectStream) Read(p []byte) (int, error) {
 		}
 
 		if idx := bodyCloseTag.FindIndex(data); idx != nil {
-			// avant </body> : le reste du flux suit tel quel
+			// before </body>: the rest of the stream follows as-is
 			t.pend = append(t.pend, data[:idx[0]]...)
 			t.pend = append(t.pend, t.content...)
 			t.pend = append(t.pend, data[idx[0]:]...)
 			t.inserted = true
 			t.tail = nil
-			// la suite du src est relayée sans relecture
+			// the rest of src is relayed without re-reading
 			t.eof = true
 			t.pendOff = 0
 			break
 		}
 
 		if t.eof {
-			// pas de </body> : le contenu part en toute fin (jamais
-			// d'octet perdu ni dupliqué)
+			// no </body>: the content goes out at the very end
+			// (no byte lost or duplicated)
 			t.pend = append(t.pend, data...)
 			if !t.inserted {
 				t.pend = append(t.pend, t.content...)
@@ -117,8 +117,8 @@ func (t *tailInjectStream) Read(p []byte) (int, error) {
 			break
 		}
 
-		// pas de marqueur : tout émettre sauf la queue (un marqueur
-		// à cheval sur le bord de lecture reste détectable)
+		// no marker: emit everything except the tail (a marker
+		// straddling the read boundary stays detectable)
 		keep := tailHold
 		if len(data) < keep {
 			keep = len(data)
@@ -134,10 +134,9 @@ func (t *tailInjectStream) Read(p []byte) (int, error) {
 
 func (t *tailInjectStream) Close() error { return t.src.Close() }
 
-// itemMatchesPath : le ciblage par page du bundle — préfixe de chemin
-// (même grammaire que route.path : "/*" = tout le host). La requête
-// garde son chemin dans resp.Request (le director ne réécrit que le
-// Host).
+// itemMatchesPath: the bundle's per-page targeting — path prefix
+// (same grammar as route.path: "/*" = whole host). The request keeps
+// its path in resp.Request (the director only rewrites the Host).
 func itemMatchesPath(item *core.InjectContent, req *http.Request) bool {
 	if item.WhenPath == "" || item.WhenPath == "/*" || req == nil {
 		return true

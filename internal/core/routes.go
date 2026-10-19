@@ -22,15 +22,15 @@ type Match struct {
 
 	Body map[string]any `json:"body,omitempty"`
 
-	// Conditions d'identité : évaluées APRÈS authentification
-	// (le token n'existe pas avant) — un échec produit un 403.
+	// Identity conditions: evaluated AFTER authentication
+	// (the token does not exist before) — a failure produces a 403.
 	Roles []string `json:"roles,omitempty"`
 
 	Scopes []string `json:"scopes,omitempty"`
 
-	// Claims du token : valeur "*" = simple présence, sinon
-	// comparaison de la valeur stringifiée (booléen JSON →
-	// "true"/"false", nombres → format Go).
+	// Token claims: value "*" = mere presence, otherwise
+	// comparison of the stringified value (JSON boolean →
+	// "true"/"false", numbers → Go format).
 	Claims map[string]string `json:"claims,omitempty"`
 
 	User string `json:"user,omitempty"`
@@ -50,51 +50,101 @@ type QuotaPolicy struct {
 	When *Match `json:"when,omitempty"`
 }
 
-// UIGateRule : règle de gating UI pilotée par la config — pour les
-// fronts dont on ne peut pas modifier le markup (filet de sécurité ;
-// si vous contrôlez le HTML, préférez les attributs data-gtw-*).
-// L'élément sélectionné n'est visible que si la session satisfait les
-// conditions (OU sur roles, OU sur scopes, ET sur claims, "* " =
-// présence). auth/hidden optionnels : mêmes sémantiques que les
-// attributs data-gtw-auth / data-gtw-auth-hidden. PRÉCÉDENCE : un
-// élément portant au moins un attribut data-gtw-* ignore les règles
-// uiGate — la déclaration la plus proche de l'élément gagne.
+// UIGateRule: config-driven UI gating rule — for frontends whose
+// markup cannot be modified (safety net; if you control the HTML,
+// prefer the data-gtw-* attributes). The selected element is only
+// visible if the session satisfies the conditions (OR over roles,
+// OR over scopes, AND over claims, "*" = presence). Optional
+// auth/hidden: same semantics as the data-gtw-auth /
+// data-gtw-auth-hidden attributes. PRECEDENCE: an element carrying
+// at least one data-gtw-* attribute ignores the uiGate rules — the
+// declaration closest to the element wins.
 type UIGateRule struct {
-	// Selector : sélecteur CSS (querySelectorAll) des éléments visés.
+	// Selector: CSS selector (querySelectorAll) of the targeted elements.
 	Selector string `json:"selector"`
-	// Roles : visible si AU MOINS UN de ces rôles est possédé.
+	// Roles: visible if AT LEAST ONE of these roles is held.
 	Roles []string `json:"roles,omitempty"`
-	// Scopes : visible si AU MOINS UN de ces scopes est accordé.
+	// Scopes: visible if AT LEAST ONE of these scopes is granted.
 	Scopes []string `json:"scopes,omitempty"`
-	// Claims : tous doivent matcher ("*" = présence).
+	// Claims: all must match ("*" = presence).
 	Claims map[string]string `json:"claims,omitempty"`
-	// Auth : "after" (action native préservée + onglet d'invitation)
-	// ou "before" (clic neutralisé + onglet direct).
+	// Auth: "after" (native action preserved + invitation tab)
+	// or "before" (click neutralized + direct tab).
 	Auth string `json:"auth,omitempty"`
-	// Hidden : "before" (masqué avant authentification) ou "after"
-	// (masqué une fois authentifié).
+	// Hidden: "before" (hidden before authentication) or "after"
+	// (hidden once authenticated).
 	Hidden string `json:"hidden,omitempty"`
 }
 
-// UserBadgePolicy : onglet utilisateur injecté par le script de garde
-// une fois authentifié — replié au bord supérieur (position
-// left|right), déplié au survol/focus : les claims choisis + un
-// bouton de déconnexion (end_session OIDC). Absent = pas de badge.
+// UserBadgePolicy: user tab injected by the guard script once
+// authenticated — collapsed at the top edge (position
+// left|right), expanded on hover/focus: the chosen claims + a
+// logout button (OIDC end_session). Absent = no badge.
 type UserBadgePolicy struct {
-	// Position : bord supérieur gauche ou droit (défaut "right").
+	// Position: top edge left or right (default "right").
 	Position string `json:"position,omitempty"`
-	// Claims affichés dans l'onglet déplié (les claims absents sont
-	// omis — ex. preferred_username, email).
-	Claims []string `json:"claims,omitempty"`
-	// LogoutLabel : libellé du bouton (défaut "Déconnexion").
+	// Claims / Roles / Scopes: what the expanded tab displays —
+	// each accepts true (everything the session carries), false
+	// (nothing — the default), or a list (only the selected items;
+	// absent ones are omitted, the historical claims form).
+	Claims BadgeList `json:"claims,omitempty"`
+	Roles  BadgeList `json:"roles,omitempty"`
+	Scopes BadgeList `json:"scopes,omitempty"`
+	// LogoutLabel: button label (default "Log out").
 	LogoutLabel string `json:"logoutLabel,omitempty"`
-	// LoginBadge : le badge apparaît AUSSI en anonyme, dès la
-	// première visite, en mode invitation (« 👤 Se connecter ») —
-	// cliqué, il ouvre l'onglet de connexion. Pour proposer la
-	// connexion sans toucher au markup du site. Défaut : false
-	// (badge seulement une fois authentifié ; en anonyme il
-	// n'apparaît qu'après une mort de session détectée).
+	// LoginBadge: the badge ALSO appears when anonymous, from the
+	// first visit, in invitation mode ("👤 Sign in") —
+	// clicked, it opens the login tab. To offer login without
+	// touching the site's markup. Default: false
+	// (badge only once authenticated; when anonymous it
+	// only appears after a detected session death).
 	LoginBadge bool `json:"loginBadge,omitempty"`
+}
+
+// BadgeList: a badge display switch — bool or list of selected
+// items. true = display everything the session carries; false = hide
+// the section; a list = display only these items (a claim, role or
+// scope the session does not hold is simply omitted). Marshals back
+// to the same shapes for the guard script.
+type BadgeList struct {
+	All   bool
+	Items []string
+}
+
+func (b *BadgeList) UnmarshalJSON(raw []byte) error {
+
+	raw = bytes.TrimSpace(raw)
+	if bytes.Equal(raw, []byte("null")) {
+		*b = BadgeList{}
+		return nil
+	}
+
+	if len(raw) > 0 && raw[0] == '[' {
+		var items []string
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return fmt.Errorf(
+				"userBadge: expected a list of strings: %w", err)
+		}
+		*b = BadgeList{Items: items}
+		return nil
+	}
+
+	var v bool
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return fmt.Errorf("userBadge: expected true, false or a list of strings")
+	}
+	*b = BadgeList{All: v}
+	return nil
+}
+
+func (b BadgeList) MarshalJSON() ([]byte, error) {
+	if b.All {
+		return []byte("true"), nil
+	}
+	if len(b.Items) == 0 {
+		return []byte("false"), nil
+	}
+	return json.Marshal(b.Items)
 }
 
 type AuthPolicy struct {
@@ -119,27 +169,26 @@ type AuthGuardPolicy struct {
 	LoginURL string `json:"loginUrl,omitempty"` // default: shared constant
 }
 
-// RewriteExcept : exception de rewriteBody. Deux formes déclarables :
+// RewriteExcept: rewriteBody exception. Two declarable forms:
 //
-//   - une chaîne : "path" — les URLs de l'origine DONT LE CHEMIN
-//     commence par ce préfixe restent pointées vers l'origine (aucune
-//     réécriture) ;
-//   - un objet {"path", "to"} : les mêmes URLs sont réécrites vers le
-//     host public alternatif `to` (schéma https) — le reste du chemin,
-//     query et fragment est préservé.
+//   - a string: "path" — URLs of the origin WHOSE PATH starts with
+//     this prefix remain pointed at the origin (no rewriting);
+//   - an object {"path", "to"}: the same URLs are rewritten to the
+//     alternate public host `to` (https scheme) — the rest of the
+//     path, query and fragment is preserved.
 //
-// Le préfixe le plus long gagne. Les entrées sont triées par longueur
-// décroissante à la compilation, côté gateway comme côté SW client.
+// Longest prefix wins. Entries are sorted by decreasing length at
+// compile time, on the gateway side as well as on the client SW side.
 type RewriteExcept struct {
-	// Path : préfixe de chemin ("/..." — sans '?' ni '#').
+	// Path: path prefix ("/..." — without '?' or '#').
 	Path string `json:"path"`
-	// To : base de remplacement "https://host.alternatif" ; vide =
-	// les URLs de ce préfixe restent à l'origine (forme chaîne).
+	// To: replacement base "https://alternate.host"; empty =
+	// URLs of this prefix remain at the origin (string form).
 	To string `json:"to,omitempty"`
 }
 
-// UnmarshalJSON accepte la forme chaîne ("path") et la forme objet
-// {"path","to"} du tableau except.
+// UnmarshalJSON accepts both the string form ("path") and the object
+// form {"path","to"} of the except array.
 func (e *RewriteExcept) UnmarshalJSON(b []byte) error {
 
 	if len(b) > 0 && b[0] == '"' {
@@ -164,102 +213,103 @@ func (e *RewriteExcept) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// RewriteBodyPolicy : réécriture en flux des URLs absolues de
-// l'origine (upstream.rewriteBody). Pour un site externe proxifié, le
-// HTML d'origine cite ses propres URLs ("https://origine/...",
-// "//origine/...") : sans réécriture le navigateur quitterait le
-// proxy dès le premier lien/asset absolu. La gateway réécrit ces
-// occurrences vers le host PUBLIC de la route (même chemin), en flux,
-// sur les corps HTML 200 — à l'exception des préfixes déclarés dans
-// except : une exception chaîne laisse le lien à l'origine (lien de
-// lecture resté hors proxy, p.ex.), une exception {path,to} pointe
-// vers un autre host public (ex. variante de lecture hébergée avec
-// ses propres fonctionnalités).
+// RewriteBodyPolicy: streaming rewrite of the origin's absolute URLs
+// (upstream.rewriteBody). For a proxified external site, the origin
+// HTML cites its own URLs ("https://origin/...",
+// "//origin/..."): without rewriting the browser would leave the
+// proxy at the first absolute link/asset. The gateway rewrites these
+// occurrences to the route's PUBLIC host (same path), in a streaming
+// fashion, on 200 HTML bodies — except for the prefixes declared in
+// except: a string exception leaves the link at the origin (e.g. a
+// reading link kept outside the proxy), a {path,to} exception points
+// to another public host (e.g. a hosted reading variant with its own
+// features).
 //
-// Le runtime JS/WASM (fetch/XHR, import(), img dynamique…) est couvert
-// par le service worker configuré de la route (même politique) +
-// réécriture au niveau des appels dans le script de garde. Le corps
-// des fichiers JS/CSS n'est pas réécrit (redondant avec le SW).
+// The JS/WASM runtime (fetch/XHR, import(), dynamic img…) is covered
+// by the route's configured service worker (same policy) +
+// rewriting at the call sites in the guard script. JS/CSS file bodies
+// are not rewritten (redundant with the SW).
 type RewriteBodyPolicy struct {
 	Enabled bool `json:"enabled"`
-	// Except : exceptions de préfixe de chemin — forme chaîne (reste
-	// à l'origine) ou objet {path, to} (host public alternatif).
+	// Except: path-prefix exceptions — string form (remains
+	// at the origin) or object {path, to} (alternate public host).
 	Except []RewriteExcept `json:"except,omitempty"`
 }
 
-// UpstreamResponseHeaders : ajustement des en-têtes de RÉPONSE du
-// backend avant envoi au navigateur — typiquement retirer un
-// Content-Security-Policy d'origine qui bloquerait le script de garde
-// injecté, ou poser un en-tête de déploiement.
+// UpstreamResponseHeaders: adjustment of the backend's RESPONSE
+// headers before sending to the browser — typically removing an
+// origin Content-Security-Policy that would block the injected guard
+// script, or setting a deployment header.
 type UpstreamResponseHeaders struct {
-	// Set : en-têtes ajoutés/écrasés sur la réponse ; valeurs avec
-	// interpolation ${VAR} (environnement du conteneur) ; valeur ""
-	// = en-tête supprimé (jamais transmis vide).
+	// Set: headers added/overwritten on the response; values with
+	// ${VAR} interpolation (container environment); value ""
+	// = header removed (never transmitted empty).
 	Set map[string]string `json:"set,omitempty"`
-	// Remove : noms d'en-têtes supprimés de la réponse.
+	// Remove: header names removed from the response.
 	Remove []string `json:"remove,omitempty"`
 }
 
-// UpstreamPolicy : comment la gateway joint le backend quand il
-// n'est pas un service du réseau interne — typiquement un site
-// hébergé derrière Cloudflare (Pages, Access…). Absente =
-// comportement historique inchangé (Host public préservé, en-têtes
-// du client transmis tels quels).
+// UpstreamPolicy: how the gateway reaches the backend when it
+// is not a service of the internal network — typically a site
+// hosted behind Cloudflare (Pages, Access…). Absent =
+// unchanged historical behavior (public Host preserved, client
+// headers passed through as-is).
 type UpstreamPolicy struct {
-	// Host : true = l'en-tête Host envoyé au backend est celui de
-	// l'origine backend (requis pour un site externe qui route par
-	// Host, ex. Cloudflare : sinon la requête arrive avec le host
-	// public et l'origine ne la reconnaît pas). Absent/false = Host
-	// public transmis tel quel (backends internes).
+	// Host: true = the Host header sent to the backend is that of
+	// the backend origin (required for an external site that routes
+	// by Host, e.g. Cloudflare: otherwise the request arrives with
+	// the public host and the origin does not recognize it).
+	// Absent/false = public Host passed through as-is (internal
+	// backends).
 	Host *bool `json:"host,omitempty"`
-	// HostOverride : valeur explicite de l'en-tête Host envoyée au
-	// backend, quand elle doit différer à la fois du host public et
-	// de l'origine backend (rare). Précédence sur Host.
+	// HostOverride: explicit value of the Host header sent to the
+	// backend, when it must differ from both the public host and
+	// the backend origin (rare). Takes precedence over Host.
 	HostOverride string `json:"hostOverride,omitempty"`
-	// Headers : en-têtes de requête statiques posés vers le backend
-	// (Set : écrasent la valeur éventuellement envoyée par le
-	// client). Usage : franchir un basic auth d'origine
-	// ("Authorization": "Basic ${MONSITE_BASIC_AUTH}") ou les service
-	// tokens Cloudflare Access ("CF-Access-Client-Id" /
-	// "CF-Access-Client-Secret"). Valeurs avec interpolation ${VAR}
-	// depuis l'environnement du conteneur (variable absente = erreur
-	// fatale au load — jamais d'identifiant vide silencieux) ;
-	// valeur "" = en-tête supprimé de la requête. Les valeurs ne
-	// sont jamais journalisées.
+	// Headers: static request headers set towards the backend
+	// (Set: overwrite any value the client may have sent).
+	// Usage: passing through an origin basic auth
+	// ("Authorization": "Basic ${MONSITE_BASIC_AUTH}") or the
+	// Cloudflare Access service tokens ("CF-Access-Client-Id" /
+	// "CF-Access-Client-Secret"). Values with ${VAR} interpolation
+	// from the container environment (missing variable = fatal
+	// error at load — never a silent empty credential);
+	// value "" = header removed from the request. The values are
+	// never logged.
 	Headers map[string]string `json:"headers,omitempty"`
-	// RewriteRedirects : true = les Location ABSOLUES visant
-	// l'origine du backend sont réécrites vers le host public
-	// (sinon le navigateur quitterait le proxy dès la première
-	// redirection absolue du site cible). Les Location relatives et
-	// celles visant d'autres origines (ex. domaine d'équipe Cloudflare
-	// Access) passent intactes. Défaut : false.
+	// RewriteRedirects: true = ABSOLUTE Locations targeting
+	// the backend origin are rewritten to the public host
+	// (otherwise the browser would leave the proxy at the first
+	// absolute redirect of the target site). Relative Locations and
+	// those targeting other origins (e.g. the Cloudflare Access team
+	// domain) pass through untouched. Default: false.
 	RewriteRedirects *bool `json:"rewriteRedirects,omitempty"`
-	// ResponseHeaders : ajustement des en-têtes de réponse (cf.
+	// ResponseHeaders: response header adjustment (see
 	// UpstreamResponseHeaders).
 	ResponseHeaders *UpstreamResponseHeaders `json:"responseHeaders,omitempty"`
-	// RewriteBody : réécriture des URLs absolues de l'origine dans les
-	// corps HTML 200 (déclaratif, en flux, avec exceptions de préfixe ;
-	// le SW client configuré couvre les appels runtime). Défaut :
-	// aucune réécriture du corps.
+	// RewriteBody: rewriting of the origin's absolute URLs in 200
+	// HTML bodies (declarative, streaming, with prefix exceptions;
+	// the configured client SW covers runtime calls). Default:
+	// no body rewriting.
 	RewriteBody *RewriteBodyPolicy `json:"rewriteBody,omitempty"`
-	// RewriteCookies : traduction des Set-Cookie posés par l'origine
-	// (leur attribut Domain vise son propre namespace, que le
-	// navigateur rejetterait depuis le host public). Défaut : aucune
-	// réécriture des cookies.
+	// RewriteCookies: translation of the Set-Cookie headers set by
+	// the origin (their Domain attribute targets its own namespace,
+	// which the browser would reject from the public host).
+	// Default: no cookie rewriting.
 	RewriteCookies *RewriteCookiesPolicy `json:"rewriteCookies,omitempty"`
 }
 
-// RewriteCookiesPolicy : traduction des Set-Cookie de l'origine vers
-// le host public (cf. UpstreamPolicy.RewriteCookies).
+// RewriteCookiesPolicy: translation of the origin's Set-Cookie to
+// the public host (see UpstreamPolicy.RewriteCookies).
 type RewriteCookiesPolicy struct {
-	// Domain : "rewrite" = Domain visant l'hôte d'origine (ou un de
-	// ses parents) réécrit vers Domain=<host public> — le périmètre de
-	// partage (hôte + sous-domaines) est transposé tel quel ;
-	// "strip" = attribut Domain retiré (cookie host-only sur le host
-	// public). Dans les deux modes, un Set-Cookie portant un nom
-	// réservé à la session gateway (access_token, refresh_token,
-	// id_token, session) est retiré avec un warning : posé sur le même
-	// host public, il écraserait les cookies d'auth.
+	// Domain: "rewrite" = a Domain targeting the origin host (or one
+	// of its parents) rewritten to Domain=<public host> — the sharing
+	// scope (host + subdomains) is transposed as-is;
+	// "strip" = Domain attribute removed (host-only cookie on the
+	// public host). In both modes, a Set-Cookie carrying a name
+	// reserved for the gateway session (access_token, refresh_token,
+	// id_token, session) is dropped with a warning: set on the same
+	// public host, it would overwrite the auth cookies.
 	Domain string `json:"domain"`
 }
 
@@ -271,12 +321,12 @@ type MCPOperation struct {
 type MCPPolicy struct {
 	Enabled bool   `json:"enabled"`
 	Path    string `json:"path,omitempty"`
-	// Scope: le client scope Keycloak exigé des clients MCP (porté par
-	// le claim `scope` du bearer). Annoncé dans
-	// /.well-known/oauth-protected-resource et vérifié par auth-bridge
-	// (transmis via le header interne X-MCP-Scope). Défaut :
-	// defaultMCPScope. Le realm doit accorder le même scope (client
-	// scope optionnel du même nom dans cladone-realm.json).
+	// Scope: the Keycloak client scope required from MCP clients
+	// (carried by the bearer's `scope` claim). Advertised in
+	// /.well-known/oauth-protected-resource and verified by
+	// auth-bridge (passed via the internal X-MCP-Scope header).
+	// Default: defaultMCPScope. The realm must grant the same scope
+	// (optional client scope of the same name in cladone-realm.json).
 	Scope      string         `json:"scope,omitempty"`
 	Operations []MCPOperation `json:"operations"`
 }
@@ -428,10 +478,10 @@ func (p *PWAPolicy) EffectiveAssets() (strategy string, timeout int) {
 			timeout = p.Assets.NetworkTimeoutSeconds
 		}
 	}
-	// strings.ToLower aplatit aussi les valeurs CamelCase déclarées
-	// (networkFirst -> networkfirst) : les comparaisons sont en
-	// minuscules, seule la classe workbox générée par swJS rétablit la
-	// casse.
+	// strings.ToLower also flattens declared CamelCase values
+	// (networkFirst -> networkfirst): comparisons are done in
+	// lowercase; only the workbox class generated by swJS restores
+	// the casing.
 	switch strategy {
 	case "networkfirst":
 		if timeout <= 0 {
@@ -479,10 +529,10 @@ type Route struct {
 	Frontend bool   `json:"frontend,omitempty"`
 	Backend  string `json:"backend"`
 
-	// Upstream : jointure vers un backend hors réseau interne (site
-	// externe proxifié — ex. Cloudflare) : Host, en-têtes statiques
-	// (basic auth, service tokens), réécriture des redirections et
-	// des en-têtes de réponse. Absente = comportement historique.
+	// Upstream: connection to a backend outside the internal network
+	// (proxified external site — e.g. Cloudflare): Host, static
+	// headers (basic auth, service tokens), rewriting of redirects
+	// and response headers. Absent = historical behavior.
 	Upstream *UpstreamPolicy `json:"upstream,omitempty"`
 
 	AutoHead bool `json:"autoHead,omitempty"`
@@ -495,100 +545,100 @@ type Route struct {
 	MCP     *MCPPolicy     `json:"mcp,omitempty"`
 	PWA     *PWAPolicy     `json:"pwa,omitempty"`
 
-	// UIGate : gating UI par config (sélecteurs CSS + conditions
-	// d'identité) — pour les fronts non modifiables ; embarqué dans
-	// le script de garde injecté. Précédence : le markup data-gtw-*
-	// d'un élément gagne sur les règles uiGate.
+	// UIGate: UI gating by config (CSS selectors + identity
+	// conditions) — for unmodifiable frontends; embedded in
+	// the injected guard script. Precedence: an element's
+	// data-gtw-* markup wins over the uiGate rules.
 	UIGate []*UIGateRule `json:"uiGate,omitempty"`
 
-	// UserBadge : onglet utilisateur injecté (claims + déconnexion).
+	// UserBadge: injected user tab (claims + logout).
 	UserBadge *UserBadgePolicy `json:"userBadge,omitempty"`
 
 	AuthGuard *AuthGuardPolicy `json:"authGuard,omitempty"`
 
-	// Inject : chemin du bundle d'injections custom de la route
-	// (JSON : injects = HTML/JS/CSS par cible nommée, patch = règles
-	// data-* appliquées par le garde), relatif au fichier de config —
-	// le tableau de routage ne grossit jamais du code des sites.
+	// Inject: path of the route's custom injection bundle
+	// (JSON: injects = HTML/JS/CSS per named target, patch = data-*
+	// rules applied by the guard), relative to the config file —
+	// the routing table never grows with the sites' code.
 	Inject string `json:"inject,omitempty"`
 
-	// injection : bundle résolu au load (contenus des file: lus,
-	// validation stricte) — jamais sérialisé.
+	// injection: bundle resolved at load (file: contents read,
+	// strict validation) — never serialized.
 	injection *InjectBundle `json:"-"`
 }
 
-// InjectionBundle : le bundle d'injections résolu de la route ; nil
-// sans bloc "inject".
+// InjectionBundle: the route's resolved injection bundle; nil
+// without an "inject" block.
 func (r *Route) InjectionBundle() *InjectBundle { return r.injection }
 
-// InjectBundle : bundle d'injections custom d'une route, résolu au
-// load (fichiers lus, tout validé — un bundle fautif refuse le
-// démarrage/reload plutôt qu'être ignoré).
+// InjectBundle: a route's custom injection bundle, resolved at
+// load (files read, everything validated — a faulty bundle refuses
+// startup/reload rather than being ignored).
 type InjectBundle struct {
-	// Contents : les injections à insérer dans les pages (triées par
-	// Order croissant = ordre dans le document).
+	// Contents: the injections to insert into the pages (sorted by
+	// increasing Order = order in the document).
 	Contents []InjectContent `json:"injects,omitempty"`
-	// Patch : règles d'attribution data-* par sélecteur, appliquées
-	// côté client par le garde (extension de l'évaluation uiGate —
-	// même sonde, même cycle). Route frontend requise.
+	// Patch: data-* attribution rules per selector, applied
+	// client-side by the guard (extension of the uiGate evaluation —
+	// same probe, same cycle). Frontend route required.
 	Patch []InjectPatch `json:"patch,omitempty"`
 }
 
-// InjectContent : une insertion — contenu assemblé au load (html/
-// style/script inline + contenu des file:), cible nommée dans le
-// document, filtrage par page (préfixe de chemin, même grammaire que
+// InjectContent: a single insertion — content assembled at load
+// (inline html/style/script + file: contents), named target in the
+// document, per-page filtering (path prefix, same grammar as
 // route.path).
 type InjectContent struct {
-	// Name : identifiant du bundle (unique, logs).
+	// Name: bundle identifier (unique, logs).
 	Name string `json:"name"`
-	// Target : "head" (défaut — après <head>/meta charset) ou
-	// "body-end" (avant </body>).
+	// Target: "head" (default — after <head>/meta charset) or
+	// "body-end" (before </body>).
 	Target string `json:"target,omitempty"`
-	// Order : position dans le document au sein d'une même cible
-	// (30+ pour les customs ; la garde vaut 10, la pwa 20).
+	// Order: position in the document within a same target
+	// (30+ for customs; the guard is 10, the pwa 20).
 	Order int `json:"order,omitempty"`
-	// WhenPath : préfixe de chemin des pages visées ("/*" = tout le
-	// site) ; vide = toutes.
+	// WhenPath: path prefix of the targeted pages ("/*" = the whole
+	// site); empty = all.
 	WhenPath string `json:"when,omitempty"`
-	// Content : le snippet ASSEMBLÉ (html + style + script + file),
-	// prêt à insérer tel quel.
+	// Content: the ASSEMBLED snippet (html + style + script + file),
+	// ready to insert as-is.
 	Content string `json:"-"`
 }
 
-// InjectPatch : une règle de patch — les attributs (typiquement des
-// data-gtw-*) sont posés sur les éléments matchés par le sélecteur.
-// S'applique à chaque cycle d'évaluation du garde (éléments dynamiques
-// couverts) ; un attribut markup préexistant est ÉCRASÉ (le patch
-// déclare la cible, le sélecteur la trouve).
+// InjectPatch: a patch rule — the attributes (typically data-gtw-*)
+// are set on the elements matched by the selector. Applies at every
+// evaluation cycle of the guard (dynamic elements
+// covered); a pre-existing markup attribute is OVERWRITTEN (the patch
+// declares the target, the selector finds it).
 type InjectPatch struct {
 	Selector string            `json:"selector"`
 	Attrs    map[string]string `json:"attrs,omitempty"`
 }
 
 type Config struct {
-	// $schema : référence optionnelle vers api-routes.schema.json
-	// (autocomplétion/validation éditeur) — ignorée au runtime.
+	// $schema: optional reference to api-routes.schema.json
+	// (editor autocompletion/validation) — ignored at runtime.
 	Schema string `json:"$schema,omitempty"`
 
-	// OIDC : l'IdP de la plateforme — la gateway est multi-tenant,
-	// aucune URL d'IdP n'est codée en dur (les routes y accèdent via
+	// OIDC: the platform's IdP — the gateway is multi-tenant,
+	// no IdP URL is hard-coded (routes access it via
 	// LoginURLFor / OIDC.Issuer).
 	OIDC *OIDCConfig `json:"oidc,omitempty"`
 
 	Routes []Route `json:"routes"`
 }
 
-// OIDCConfig : l'IdP de la plateforme (bloc top-level). loginUrl =
-// page de login par défaut des routes frontend à garde active
-// (overridable par route via authGuard.loginUrl) ; issuer = émetteur
-// OIDC annoncé dans la metadata OAuth des routes MCP.
+// OIDCConfig: the platform's IdP (top-level block). loginUrl =
+// default login page for frontend routes with an active guard
+// (overridable per route via authGuard.loginUrl); issuer = OIDC
+// issuer advertised in the OAuth metadata of MCP routes.
 type OIDCConfig struct {
 	LoginURL string `json:"loginUrl,omitempty"`
 	Issuer   string `json:"issuer,omitempty"`
 }
 
-// GuardActive : la garde est-elle active sur cette route ? (frontend +
-// authGuard non désactivé) — la même règle que le proxy.
+// GuardActive: is the guard active on this route? (frontend +
+// authGuard not disabled) — the same rule as the proxy.
 func (r *Route) GuardActive() bool {
 	if r.Frontend != true {
 		return false
@@ -602,14 +652,14 @@ func (r *Route) GuardActive() bool {
 	return true
 }
 
-// MCPActive : la route expose-t-elle un serveur MCP ?
+// MCPActive: does the route expose an MCP server?
 func (r *Route) MCPActive() bool {
 	return r.MCP != nil && r.MCP.Enabled
 }
 
-// LoginURLFor : l'URL de login d'une route — authGuard.loginUrl
-// (route) gagne sur oidc.loginUrl (plateforme). Garantie non vide par
-// la validation au load pour toute route à garde active.
+// LoginURLFor: a route's login URL — authGuard.loginUrl
+// (route) wins over oidc.loginUrl (platform). Guaranteed non-empty
+// by load-time validation for any route with an active guard.
 func (c *Config) LoginURLFor(route *Route) string {
 	if route.AuthGuard != nil && route.AuthGuard.LoginURL != "" {
 		return route.AuthGuard.LoginURL
@@ -629,9 +679,9 @@ func Load(path string) (*Config, error) {
 
 	var cfg Config
 
-	// Stricte : tout champ inconnu (typiquement une faute de frappe
-	// dans un nom de policy) est rejeté au load plutôt que
-	// silencieusement ignoré.
+	// Strict: any unknown field (typically a typo
+	// in a policy name) is rejected at load rather than
+	// silently ignored.
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 
@@ -663,14 +713,14 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Secrets upstream (${VAR} dans les en-têtes) résolus AVANT la
-	// validation : variable absente = refus de démarrer.
+	// Upstream secrets (${VAR} in headers) resolved BEFORE the
+	// validation: missing variable = startup refused.
 	if err := cfg.expandUpstreamEnv(); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 
-	// Bundles d'injection résolus (fichiers lus au load : un bundle
-	// fautif refuse le démarrage, jamais ignoré en silence).
+	// Injection bundles resolved (files read at load: a faulty
+	// bundle refuses startup, never silently ignored).
 	if err := cfg.loadInjectBundles(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
@@ -682,32 +732,32 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// envVarPattern : forme d'interpolation supportée dans les valeurs
-// d'en-têtes upstream — ${NOM} uniquement (jamais $NU, pour ne pas
-// dénaturer une valeur qui contiendrait un $ littéral).
+// envVarPattern: interpolation form supported in upstream header
+// values — ${NAME} only (never $NA, to avoid distorting a value
+// containing a literal $).
 var envVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// cibles d'insertion nommées (le "head" = après <head>/meta charset —
-// la mécanique de la garde ; "body-end" = avant </body>).
+// named insertion targets ("head" = after <head>/meta charset —
+// the guard's mechanics; "body-end" = before </body>).
 var validInjectTargets = map[string]bool{
-	"":         true, // défaut = head
+	"":         true, // default = head
 	"head":     true,
 	"body-end": true,
 }
 
-// bornes des injections custom : Order >= 30 (la garde vaut 10, la
-// pwa 20 — un custom ne peut pas se glisser devant l'infrastructure)
-// et contenu borné.
+// bounds of custom injections: Order >= 30 (the guard is 10, the
+// pwa 20 — a custom cannot slip in front of the infrastructure)
+// and bounded content.
 const (
 	minInjectOrder    = 30
 	maxInjectOrder    = 10000
 	maxInjectContents = 64
 	maxInjectPatch    = 64
-	maxInjectSnippet  = 256 << 10 // 256 Kio par entrée (fichier inclus)
+	maxInjectSnippet  = 256 << 10 // 256 KiB per entry (file included)
 )
 
-// rawInjectBundle : forme sérialisée du bundle (avant résolution des
-// file:).
+// rawInjectBundle: serialized form of the bundle (before resolving
+// the file: entries).
 type rawInjectBundle struct {
 	Injects []struct {
 		Name   string `json:"name"`
@@ -722,9 +772,9 @@ type rawInjectBundle struct {
 	Patch []InjectPatch `json:"patch"`
 }
 
-// loadInjectBundles résout le bloc "inject" de chaque route : lit le
-// bundle (JSON strict), assemble les contenus (inline + files) et
-// valide. dir = répertoire du fichier de config.
+// loadInjectBundles resolves each route's "inject" block: reads the
+// bundle (strict JSON), assembles the contents (inline + files) and
+// validates. dir = directory of the config file.
 func (c *Config) loadInjectBundles(dir string) error {
 
 	for i := range c.Routes {
@@ -752,11 +802,11 @@ func (c *Config) loadInjectBundles(dir string) error {
 		}
 
 		if len(raw.Injects) > maxInjectContents {
-			return fmt.Errorf("route %s: inject %q: %d entrées (max %d)",
+			return fmt.Errorf("route %s: inject %q: %d entries (max %d)",
 				host, ref, len(raw.Injects), maxInjectContents)
 		}
 		if len(raw.Patch) > maxInjectPatch {
-			return fmt.Errorf("route %s: inject %q: %d patch (max %d)",
+			return fmt.Errorf("route %s: inject %q: %d patches (max %d)",
 				host, ref, len(raw.Patch), maxInjectPatch)
 		}
 
@@ -768,17 +818,17 @@ func (c *Config) loadInjectBundles(dir string) error {
 			in := &raw.Injects[j]
 			if in.Name == "" {
 				return fmt.Errorf(
-					"route %s: inject %q: injects[%d].name vide", host, ref, j)
+					"route %s: inject %q: injects[%d].name empty", host, ref, j)
 			}
 			if seen[in.Name] {
 				return fmt.Errorf(
-					"route %s: inject %q: nom dupliqué %q", host, ref, in.Name)
+					"route %s: inject %q: duplicate name %q", host, ref, in.Name)
 			}
 			seen[in.Name] = true
 
 			if !validInjectTargets[in.Target] {
 				return fmt.Errorf(
-					"route %s: inject %q: %s.target %q (attendu \"head\" ou \"body-end\")",
+					"route %s: inject %q: %s.target %q (expected \"head\" or \"body-end\")",
 					host, ref, in.Name, in.Target)
 			}
 
@@ -788,12 +838,12 @@ func (c *Config) loadInjectBundles(dir string) error {
 			}
 			if order < minInjectOrder || order > maxInjectOrder {
 				return fmt.Errorf(
-					"route %s: inject %q: %s.order %d (bornes %d-%d)",
+					"route %s: inject %q: %s.order %d (bounds %d-%d)",
 					host, ref, in.Name, order, minInjectOrder, maxInjectOrder)
 			}
 
-			// assemblage : le style et le script sont ENVELOPPÉS
-			// (l'html et le file: sont injectés tels quels)
+			// assembly: style and script are WRAPPED
+			// (html and file: are injected as-is)
 			var parts []string
 			if in.HTML != "" {
 				parts = append(parts, in.HTML)
@@ -808,7 +858,7 @@ func (c *Config) loadInjectBundles(dir string) error {
 			if in.File != "" {
 				if strings.Contains(in.File, "..") || filepath.IsAbs(in.File) {
 					return fmt.Errorf(
-						"route %s: inject %q: %s.file %q (chemin relatif au bundle requis)",
+						"route %s: inject %q: %s.file %q (path relative to the bundle required)",
 						host, ref, in.Name, in.File)
 				}
 				fileData, err := os.ReadFile(
@@ -823,12 +873,12 @@ func (c *Config) loadInjectBundles(dir string) error {
 			}
 			if strings.TrimSpace(content) == "" {
 				return fmt.Errorf(
-					"route %s: inject %q: %s sans contenu (html/style/script/file)",
+					"route %s: inject %q: %s without content (html/style/script/file)",
 					host, ref, in.Name)
 			}
 			if len(content) > maxInjectSnippet {
 				return fmt.Errorf(
-					"route %s: inject %q: %s : %d octets (max %d)",
+					"route %s: inject %q: %s: %d bytes (max %d)",
 					host, ref, in.Name, len(content), maxInjectSnippet)
 			}
 
@@ -841,7 +891,7 @@ func (c *Config) loadInjectBundles(dir string) error {
 			})
 		}
 
-		// ordre du document = Order croissant (tri stable)
+		// document order = increasing Order (stable sort)
 		sort.SliceStable(bundle.Contents, func(a, b int) bool {
 			return bundle.Contents[a].Order < bundle.Contents[b].Order
 		})
@@ -850,12 +900,12 @@ func (c *Config) loadInjectBundles(dir string) error {
 			p := &raw.Patch[k]
 			if p.Selector == "" {
 				return fmt.Errorf(
-					"route %s: inject %q: patch[%d].selector vide",
+					"route %s: inject %q: patch[%d].selector empty",
 					host, ref, k)
 			}
 			if len(p.Attrs) == 0 {
 				return fmt.Errorf(
-					"route %s: inject %q: patch[%d] (%s) sans attrs",
+					"route %s: inject %q: patch[%d] (%s) without attrs",
 					host, ref, k, p.Selector)
 			}
 		}
@@ -865,13 +915,14 @@ func (c *Config) loadInjectBundles(dir string) error {
 	return nil
 }
 
-// expandEnvVars remplace chaque ${VAR} par la variable d'environnement
-// correspondante. Variable absente = erreur nommée (le gateway refuse
-// de démarrer plutôt que d'envoyer un identifiant vide au backend).
-// Variable PRÉSENTE MAIS VIDE = valeur entière vidée, noms signalés
-// dans emptyNames (l'appelant la traitera comme un en-tête retiré et
-// journalisera l'avertissement) — cf. compose « ${VAR:-} » qui
-// injecte une chaîne vide quand la variable manque au .env.
+// expandEnvVars replaces each ${VAR} with the corresponding
+// environment variable. Missing variable = named error (the gateway
+// refuses to start rather than sending an empty credential to the
+// backend). PRESENT BUT EMPTY variable = whole value emptied, names
+// reported in emptyNames (the caller will treat it as a removed
+// header and log the warning) — see the compose "${VAR:-}" idiom,
+// which injects an empty string when the variable is missing from
+// the .env.
 func expandEnvVars(s string) (out string, err error, emptyNames []string) {
 
 	var missing []string
@@ -892,7 +943,7 @@ func expandEnvVars(s string) (out string, err error, emptyNames []string) {
 
 	if len(missing) > 0 {
 		return "", fmt.Errorf(
-			"variable(s) d'environnement absente(s): %s",
+			"missing environment variable(s): %s",
 			strings.Join(missing, ", "),
 		), nil
 	}
@@ -904,11 +955,11 @@ func expandEnvVars(s string) (out string, err error, emptyNames []string) {
 	return out, nil, nil
 }
 
-// expandUpstreamEnv résout l'interpolation ${VAR} des en-têtes
-// upstream. Pass ciblé aux seuls blocs upstream (la config est
-// committée dans git : les secrets y entrent par l'environnement du
-// conteneur, jamais en clair) — un passe-générale risquerait de
-// corrompre des patterns regex PWA contenant un '$'.
+// expandUpstreamEnv resolves the ${VAR} interpolation of the upstream
+// headers. Pass targeted at the upstream blocks only (the config is
+// committed to git: secrets enter it through the container
+// environment, never in clear) — a general-purpose pass could
+// corrupt PWA regex patterns containing a '$'.
 func (c *Config) expandUpstreamEnv() error {
 
 	for i := range c.Routes {
@@ -929,13 +980,13 @@ func (c *Config) expandUpstreamEnv() error {
 				)
 			}
 			if emptyVars != nil {
-				// Variable présente mais vide (typiquement absente
-				// du .env, injectée en "" par compose) : en-tête
-				// retiré plutôt qu'un parasite « Basic » tronqué.
-				// Non fatal — l'upstream répondra 401 et les autres
-				// sites restent en service.
+				// Variable present but empty (typically missing
+				// from the .env, injected as "" by compose): header
+				// removed rather than a truncated stray "Basic".
+				// Non-fatal — the upstream will answer 401 and the
+				// other sites remain in service.
 				log.Printf(
-					"CONFIG WARNING route %s: upstream.headers[%q]: variable(s) vide(s): %s — en-tête retiré (site cible répondra 401)",
+					"CONFIG WARNING route %s: upstream.headers[%q]: empty variable(s): %s — header removed (target site will answer 401)",
 					host, k, strings.Join(emptyVars, ", "),
 				)
 			}
@@ -956,7 +1007,7 @@ func (c *Config) expandUpstreamEnv() error {
 			}
 			if emptyVars != nil {
 				log.Printf(
-					"CONFIG WARNING route %s: upstream.responseHeaders.set[%q]: variable(s) vide(s): %s — en-tête retiré",
+					"CONFIG WARNING route %s: upstream.responseHeaders.set[%q]: empty variable(s): %s — header removed",
 					host, k, strings.Join(emptyVars, ", "),
 				)
 			}
@@ -976,13 +1027,13 @@ func (c *Config) validate() error {
 
 		if route.GuardActive() && c.LoginURLFor(route) == "" {
 			return fmt.Errorf(
-				"route %s: garde active sans URL de login (bloc oidc.loginUrl ou authGuard.loginUrl requis)",
+				"route %s: guard active without login URL (oidc.loginUrl block or authGuard.loginUrl required)",
 				host)
 		}
 
 		if route.MCPActive() && (c.OIDC == nil || c.OIDC.Issuer == "") {
 			return fmt.Errorf(
-				"route %s: MCP actif sans oidc.issuer (metadata OAuth : authorization_servers)",
+				"route %s: MCP active without oidc.issuer (OAuth metadata: authorization_servers)",
 				host)
 		}
 
@@ -990,7 +1041,7 @@ func (c *Config) validate() error {
 			for _, pat := range p.networkOnlyPatterns() {
 				if _, err := regexp.Compile(pat); err != nil {
 					return fmt.Errorf(
-						"route %s: expression invalide dans les exclusions PWA %q: %v",
+						"route %s: invalid expression in the PWA exclusions %q: %v",
 						host, pat, err)
 				}
 			}
@@ -1006,7 +1057,7 @@ func (c *Config) validate() error {
 			if up.RewriteCookies.Domain != "rewrite" &&
 				up.RewriteCookies.Domain != "strip" {
 				return fmt.Errorf(
-					"route %s: rewriteCookies.domain %q (attendu \"rewrite\" ou \"strip\")",
+					"route %s: rewriteCookies.domain %q (expected \"rewrite\" or \"strip\")",
 					host, up.RewriteCookies.Domain)
 			}
 		}
@@ -1014,8 +1065,8 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// UpstreamRewriteBody : accesseur de la policy rewriteBody d'une route
-// (nil si absente ou désactivée).
+// UpstreamRewriteBody: accessor of a route's rewriteBody policy
+// (nil when absent or disabled).
 func (r *Route) UpstreamRewriteBody() *RewriteBodyPolicy {
 	if r.Upstream == nil || r.Upstream.RewriteBody == nil ||
 		!r.Upstream.RewriteBody.Enabled {
@@ -1024,10 +1075,10 @@ func (r *Route) UpstreamRewriteBody() *RewriteBodyPolicy {
 	return r.Upstream.RewriteBody
 }
 
-// bornes d'une configuration except : la fenêtre de réécriture du
-// moteur en flux (et du SW client) est proportionnelle au préfixe
-// d'origine + au préfixe d'exception le plus long — elles restent
-// petites et les configurations déraisonnables sont refusées au load.
+// bounds of an except configuration: the rewrite window of the
+// streaming engine (and of the client SW) is proportional to the
+// origin prefix + the longest exception prefix — they stay
+// small and unreasonable configurations are refused at load.
 const (
 	maxRewriteExcepts = 64
 	maxRewritePathLen = 256
@@ -1036,7 +1087,7 @@ const (
 func validateRewriteBody(rb *RewriteBodyPolicy) error {
 	if len(rb.Except) > maxRewriteExcepts {
 		return fmt.Errorf(
-			"rewriteBody.except: %d entrées (max %d)",
+			"rewriteBody.except: %d entries (max %d)",
 			len(rb.Except), maxRewriteExcepts,
 		)
 	}
@@ -1045,57 +1096,57 @@ func validateRewriteBody(rb *RewriteBodyPolicy) error {
 		e := &rb.Except[i]
 		if e.Path == "" {
 			return fmt.Errorf(
-				"rewriteBody.except[%d]: path vide", i)
+				"rewriteBody.except[%d]: empty path", i)
 		}
 		if !strings.HasPrefix(e.Path, "/") {
 			return fmt.Errorf(
-				"rewriteBody.except[%d]: path %q ne commence pas par '/'", i, e.Path)
+				"rewriteBody.except[%d]: path %q does not start with '/'", i, e.Path)
 		}
 		if strings.ContainsAny(e.Path, "?#") {
 			return fmt.Errorf(
-				"rewriteBody.except[%d]: path %q contient '?' ou '#' (préfixe de chemin uniquement)", i, e.Path)
+				"rewriteBody.except[%d]: path %q contains '?' or '#' (path prefix only)", i, e.Path)
 		}
 		if len(e.Path) > maxRewritePathLen {
 			return fmt.Errorf(
-				"rewriteBody.except[%d]: path %d octets (max %d)",
+				"rewriteBody.except[%d]: path %d bytes (max %d)",
 				i, len(e.Path), maxRewritePathLen)
 		}
 		e.Path = strings.TrimRight(e.Path, "/")
 		if e.Path == "" {
 			return fmt.Errorf(
-				"rewriteBody.except[%d]: path \"/\" (préfixe racine interdit : il excepterait tout)", i)
+				"rewriteBody.except[%d]: path \"/\" (root prefix forbidden: it would except everything)", i)
 		}
 		if seen[e.Path] {
 			return fmt.Errorf(
-				"rewriteBody.except[%d]: path %q déclaré deux fois", i, e.Path)
+				"rewriteBody.except[%d]: path %q declared twice", i, e.Path)
 		}
 		seen[e.Path] = true
 		if e.To == "" {
 			continue
 		}
-		// To : base de réécriture alternative "https://host" — les
-		// slashs finaux sont retirés (le chemin d'origine suit).
+		// To: alternate rewrite base "https://host" — trailing
+		// slashes are removed (the origin path follows).
 		for strings.HasSuffix(e.To, "/") {
 			e.To = strings.TrimSuffix(e.To, "/")
 		}
 		u, err := url.Parse(e.To)
 		if err != nil || u.Scheme == "" || u.Host == "" {
 			return fmt.Errorf(
-				"rewriteBody.except[%d]: to %q n'est pas une URL absolue (https://host, http://host en démo)", i, e.To)
+				"rewriteBody.except[%d]: to %q is not an absolute URL (https://host, http://host in demo)", i, e.To)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
 			return fmt.Errorf(
-				"rewriteBody.except[%d]: to %q doit être en http(s)", i, e.To)
+				"rewriteBody.except[%d]: to %q must be http(s)", i, e.To)
 		}
 	}
 	return nil
 }
 
-// AsciiJSON marshalise v et échappe TOUT caractère non-ASCII en
-// \uXXXX : les payloads injectés (script de garde, service worker)
-// restent décodables quel que soit l'encodage déclaré — ou omis — par
-// le site qui les reçoit. fallback si Marshal échoue (impossible sur
-// ces structs).
+// AsciiJSON marshals v and escapes EVERY non-ASCII character as
+// \uXXXX: the injected payloads (guard script, service worker)
+// remain decodable whatever encoding the receiving site declares —
+// or omits. Fallback if Marshal fails (impossible for
+// these structs).
 func AsciiJSON(v any, fallback string) string {
 	b, err := json.Marshal(v)
 	if err != nil {

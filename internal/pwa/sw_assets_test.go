@@ -10,10 +10,10 @@ import (
 func TestSWAssetsStrategyDefault(t *testing.T) {
 	sw := New(&core.PWAPolicy{Enabled: true}).swJS()
 	if !strings.Contains(sw, "workbox.strategies.StaleWhileRevalidate") {
-		t.Fatalf("défaut attendu staleWhileRevalidate:\n%s", sw[:600])
+		t.Fatalf("expected default staleWhileRevalidate:\n%s", sw[:600])
 	}
 	if strings.Contains(sw, "networkTimeoutSeconds") {
-		t.Fatal("pas de timeout attendu par défaut")
+		t.Fatal("no timeout expected by default")
 	}
 }
 
@@ -23,10 +23,10 @@ func TestSWAssetsStrategyNetworkFirst(t *testing.T) {
 	}}
 	sw := New(pol).swJS()
 	if !strings.Contains(sw, "workbox.strategies.NetworkFirst") {
-		t.Fatalf("networkFirst attendu:\n%s", sw[:600])
+		t.Fatalf("expected networkFirst:\n%s", sw[:600])
 	}
 	if !strings.Contains(sw, "networkTimeoutSeconds: 5") {
-		t.Fatal("timeout 5 attendu")
+		t.Fatal("expected timeout 5")
 	}
 }
 
@@ -34,31 +34,31 @@ func TestSWAssetsStrategyUnknownFallsBack(t *testing.T) {
 	pol := &core.PWAPolicy{Enabled: true, Assets: &core.PWAAssetsPolicy{Strategy: "zzz"}}
 	sw := New(pol).swJS()
 	if !strings.Contains(sw, "workbox.strategies.StaleWhileRevalidate") {
-		t.Fatal("stratégie inconnue doit retomber sur staleWhileRevalidate")
+		t.Fatal("unknown strategy must fall back to staleWhileRevalidate")
 	}
 }
 
-// emptyPolicyWithApiCache retourne une politique PWA active avec un
-// apiCache par défaut (le endpoint utilisé en prod).
+// emptyPolicyWithApiCache returns an active PWA policy with a
+// default apiCache (the endpoint used in prod).
 func emptyPolicyWithApiCache() *core.PWAPolicy {
 	pol := emptyPolicy()
 	pol.ApiCaches = []*core.PWAApiCache{{Path: "/api/process_stream"}}
 	return pol
 }
 
-// Le replay offline ne doit pas subir le timeout TCP complet d'un
-// réseau mort : navigator.onLine=false court-circuite le fetch, et
-// en ligne le fetch est aborté après networkTimeoutSeconds (défaut 3).
+// The offline replay must not suffer the full TCP timeout of a
+// dead network: navigator.onLine=false short-circuits the fetch, and
+// online the fetch is aborted after networkTimeoutSeconds (default 3).
 func TestSWApiCacheOfflineFastPath(t *testing.T) {
 	sw := New(emptyPolicyWithApiCache()).swJS()
 
 	for _, want := range []string{
-		"const OFFLINE_FAST_api_process_stream = true;",                  // fast-path par défaut
-		"if (OFFLINE_FAST_api_process_stream && !self.navigator.onLine)", // court-circuit offline
-		"replay offline (onLine=false)",                                  // log distinct
-		"function fetchNetwork(req, timeoutSec)",                         // helper abort
+		"const OFFLINE_FAST_api_process_stream = true;",                  // default fast-path
+		"if (OFFLINE_FAST_api_process_stream && !self.navigator.onLine)", // offline short-circuit
+		"replay offline (onLine=false)",                                  // distinct log
+		"function fetchNetwork(req, timeoutSec)",                         // abort helper
 		"AbortController()",
-		"await fetchNetwork(req, 3)", // défaut 3 s rendu
+		"await fetchNetwork(req, 3)", // 3 s default rendered
 	} {
 		if !strings.Contains(sw, want) {
 			t.Errorf("sw.js apiCache offline fast path missing %s", want)
@@ -66,38 +66,38 @@ func TestSWApiCacheOfflineFastPath(t *testing.T) {
 	}
 }
 
-// networkTimeoutSeconds déclaré : le timeout généré le reflète.
+// networkTimeoutSeconds declared: the generated timeout reflects it.
 func TestSWApiCacheNetworkTimeoutDeclared(t *testing.T) {
 	pol := emptyPolicyWithApiCache()
 	pol.ApiCaches[0].NetworkTimeoutSeconds = 5
 	sw := New(pol).swJS()
 	if !strings.Contains(sw, "await fetchNetwork(req, 5)") {
-		t.Error("networkTimeoutSeconds=5 non rendu dans le SW")
+		t.Error("networkTimeoutSeconds=5 not rendered in the SW")
 	}
 	if strings.Contains(sw, "await fetchNetwork(req, 3)") {
-		t.Error("le défaut 3 s ne doit pas apparaître avec un timeout déclaré")
+		t.Error("the 3 s default must not appear with a declared timeout")
 	}
 }
 
-// offlineFastPath par endpoint : actif par défaut, désactivable.
+// offlineFastPath per endpoint: active by default, can be disabled.
 func TestSWApiCacheOfflineFastPathConfig(t *testing.T) {
-	// par défaut : fast-path actif
+	// by default: active fast-path
 	sw := New(emptyPolicyWithApiCache()).swJS()
 	if !strings.Contains(sw, "const OFFLINE_FAST_api_process_stream = true;") {
-		t.Error("offlineFastPath devrait être actif par défaut")
+		t.Error("offlineFastPath should be active by default")
 	}
 
-	// désactivé : le check onLine ne doit plus court-circuiter CETTE
-	// endpoint (const false), et la logique réseau reste inchangée
+	// disabled: the onLine check must no longer short-circuit THIS
+	// endpoint (const false), and the network logic stays unchanged
 	falseVal := false
 	pol := emptyPolicyWithApiCache()
 	pol.ApiCaches[0].OfflineFastPath = &falseVal
 	sw2 := New(pol).swJS()
 	if !strings.Contains(sw2, "const OFFLINE_FAST_api_process_stream = false;") {
-		t.Error("offlineFastPath=false non rendu dans le SW")
+		t.Error("offlineFastPath=false not rendered in the SW")
 	}
 
-	// deux endpoints : chacun son flag
+	// two endpoints: each its own flag
 	pol2 := emptyPolicy()
 	pol2.ApiCaches = []*core.PWAApiCache{
 		{Path: "/api/process_stream", OfflineFastPath: &falseVal},
@@ -105,9 +105,9 @@ func TestSWApiCacheOfflineFastPathConfig(t *testing.T) {
 	}
 	sw3 := New(pol2).swJS()
 	if !strings.Contains(sw3, "const OFFLINE_FAST_api_process_stream = false;") {
-		t.Error("endpoint 1: fast-path désactivé non rendu")
+		t.Error("endpoint 1: disabled fast-path not rendered")
 	}
 	if !strings.Contains(sw3, "const OFFLINE_FAST_api_other = true;") {
-		t.Error("endpoint 2: fast-path actif par défaut non rendu")
+		t.Error("endpoint 2: default active fast-path not rendered")
 	}
 }

@@ -23,8 +23,9 @@ func extractApiCacheName(sw string) string {
 	return rest[:j]
 }
 
-// Reconfigurer UN endpoint n'invalide que son cache : l'autre endpoint
-// garde son nom (et donc son contenu), les caches assets aussi.
+// Reconfiguring ONE endpoint only invalidates its own cache: the
+// other endpoint keeps its name (and therefore its content), the
+// assets caches too.
 func TestApiCacheVersioningPerEndpoint(t *testing.T) {
 	pol1 := emptyPolicy()
 	pol1.ApiCaches = []*core.PWAApiCache{
@@ -33,8 +34,8 @@ func TestApiCacheVersioningPerEndpoint(t *testing.T) {
 	}
 	n1 := extractApiCacheName(New(pol1).swJS())
 
-	// changement de config sur un autre endpoint : process_stream conserve
-	// son nom de cache
+	// config change on another endpoint: process_stream keeps its
+	// cache name
 	pol2 := emptyPolicy()
 	pol2.ApiCaches = []*core.PWAApiCache{
 		{Path: "/api/process_stream"},
@@ -42,13 +43,13 @@ func TestApiCacheVersioningPerEndpoint(t *testing.T) {
 	}
 	n2 := extractApiCacheName(New(pol2).swJS())
 	if n1 == "" || n2 == "" {
-		t.Fatalf("noms vides: %q / %q", n1, n2)
+		t.Fatalf("empty names: %q / %q", n1, n2)
 	}
 	if n1 != n2 {
-		t.Errorf("reconfigurer /api/other a invalidé /api/process_stream: %q vs %q", n1, n2)
+		t.Errorf("reconfiguring /api/other invalidated /api/process_stream: %q vs %q", n1, n2)
 	}
 
-	// reconfigurer le endpoint lui-même change son nom de cache
+	// reconfiguring the endpoint itself changes its cache name
 	pol3 := emptyPolicy()
 	pol3.ApiCaches = []*core.PWAApiCache{
 		{Path: "/api/process_stream", MaxEntries: 99},
@@ -56,28 +57,28 @@ func TestApiCacheVersioningPerEndpoint(t *testing.T) {
 	}
 	n3 := extractApiCacheName(New(pol3).swJS())
 	if n3 == n1 {
-		t.Errorf("reconfigurer /api/process_stream n'a pas invalidé son cache: %q", n3)
+		t.Errorf("reconfiguring /api/process_stream did not invalidate its cache: %q", n3)
 	}
 }
 
-// Le nom de cache API ne dépend plus du hash du SW : un commentaire
-// ajouté au SW (sans changement de politique) conserve le nom de cache
-// API => le replay offline survive aux déploiements anodins.
+// The API cache name no longer depends on the SW hash: a comment
+// added to the SW (without a policy change) preserves the API cache
+// name => the offline replay survives innocuous deployments.
 func TestApiCacheNameStableAcrossSWChanges(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCaches = []*core.PWAApiCache{{Path: "/api/process_stream"}}
 	sw1 := New(pol).swJS()
 
-	// changement sans rapport : stratégie assets explicite (modifie le
-	// texte du SW, donc son hash global, mais pas la politique apiCache)
+	// unrelated change: explicit assets strategy (changes the SW
+	// text, hence its global hash, but not the apiCache policy)
 	pol.Assets = &core.PWAAssetsPolicy{Strategy: "networkFirst"}
 	sw2 := New(pol).swJS()
 
 	if extractCacheVersion(sw1) == extractCacheVersion(sw2) {
-		t.Skip("le hash global n'a pas changé — test non discriminant")
+		t.Skip("the global hash did not change — non-discriminating test")
 	}
 	if extractApiCacheName(sw1) != extractApiCacheName(sw2) {
-		t.Errorf("cache API invalidé par un changement sans rapport:\n%q\nvs\n%q",
+		t.Errorf("API cache invalidated by an unrelated change:\n%q\nvs\n%q",
 			extractApiCacheName(sw1), extractApiCacheName(sw2))
 	}
 }

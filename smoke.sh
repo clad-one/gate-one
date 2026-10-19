@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Smoke test gateway : démarre un backend factice + une passerelle avec
-# une route pwa et une route MCP authentifiée, puis vérifie injection
-# HTML, manifest, sw.js, runtime workbox auto-hébergé, et le circuit
-# MCP (scope configuré, header X-MCP-Scope vers auth-bridge factice,
-# challenge 401, metadata). Utilisé par `make smoke` (à la racine).
+# Gateway smoke test: starts a fake backend + a gateway with a pwa
+# route and an authenticated MCP route, then checks HTML injection,
+# manifest, sw.js, self-hosted workbox runtime, and the MCP circuit
+# (configured scope, X-MCP-Scope header to the fake auth-bridge, 401
+# challenge, metadata). Used by `make smoke` (at the root).
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -17,7 +17,7 @@ backend_tmp=$(mktemp /tmp/gw-smoke-backend.XXXX.py)
 bridge_tmp=$(mktemp /tmp/gw-smoke-bridge.XXXX.js)
 scopes_tmp=/tmp/gw-smoke-scopes.$$
 gw_log=$(mktemp /tmp/gw-smoke-gwlog.XXXX)
-# le gw_log est conservé après le run (diagnostic) : /tmp/gw-smoke-gwlog.*
+# gw_log is kept after the run (for diagnostics): /tmp/gw-smoke-gwlog.*
 trap 'kill $GW_PID $BE_PID $AB_PID 2>/dev/null || true; rm -f "$routes_tmp" "$backend_tmp" "$bridge_tmp" "$scopes_tmp"' EXIT
 
 cat > "$routes_tmp" <<EOF
@@ -125,9 +125,9 @@ class H(BaseHTTPRequestHandler):
 HTTPServer(('127.0.0.1', int(__import__('sys').argv[1])), H).serve_forever()
 EOF
 
-# auth-bridge factice : note le header X-MCP-Scope reçu et répond
-# toujours 401 — la gateway doit transformer ça en challenge Bearer
-# portant le scope configuré.
+# Fake auth-bridge: logs the received X-MCP-Scope header and always
+# replies 401 — the gateway must turn that into a Bearer challenge
+# carrying the configured scope.
 cat > "$bridge_tmp" <<'EOF'
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -149,18 +149,18 @@ EOF
 
 python3 "$backend_tmp" "$PORT_BE" & BE_PID=$!
 python3 "$bridge_tmp" "$PORT_AB" "$scopes_tmp" & AB_PID=$!
-# SMOKE_UPSTREAM_TOKEN : lu par la gateway au chargement (interpolation
-# ${...} de la policy upstream) — exactement comme en production.
-# -authBridge : la gateway doit interroger le STUB local (sans flag,
-# elle appellerait le nom de service Docker auth-bridge:3000).
+# SMOKE_UPSTREAM_TOKEN: read by the gateway at load time (${...}
+# interpolation in the upstream policy) — exactly as in production.
+# -authBridge: the gateway must query the local STUB (without the flag,
+# it would call the Docker service name auth-bridge:3000).
 SMOKE_UPSTREAM_TOKEN=YmFzaWMtdG9rZW4= \
   ./bin/gateway -config "$routes_tmp" -addr ":${PORT_GW}" \
     -authBridge "http://127.0.0.1:${PORT_AB}" > "$gw_log" 2>&1 & GW_PID=$!
 
-# debug : les 3 services doivent écouter — attente robuste (un simple
-# `sleep 1` est racy sous charge, et set -e + exec + /dev/tcp dans un
-# if isolé tue le script en silence ; on passe par une fonction avec
-# retry, appelée en || pour désarmer set -e).
+# debug: all 3 services must be listening — robust wait (a plain
+# `sleep 1` is racy under load, and set -e + exec + /dev/tcp inside an
+# isolated if kills the script silently; use a function with retry,
+# invoked with || to disarm set -e).
 wait_port() {
   local port=$1 name=$2 i
   for i in $(seq 1 50); do
@@ -169,7 +169,7 @@ wait_port() {
     fi
     sleep 0.2
   done
-  echo "SMOKE FAIL: ${name} sur :${port} n'écoute pas" >&2
+  echo "SMOKE FAIL: ${name} on :${port} is not listening" >&2
   return 1
 }
 wait_port "$PORT_BE" backend || exit 1
@@ -185,10 +185,10 @@ fail() {
 
 step() { echo "… $1" >&2; }
 
-# grep_body : match dans un corps ENTIÈREMENT lu d'abord. Jamais de
-# `curl | grep -q` en tête de pipe : grep -q sort au premier match →
-# SIGPIPE aléatoire sur curl → pipefail → check floppant selon le
-# scheduling (corps ~28 Ko avec la garde : course fréquente).
+# grep_body: match against a body that is FULLY read first. Never use
+# `curl | grep -q` at the head of a pipe: grep -q exits at the first
+# match → random SIGPIPE on curl → pipefail → flaky check depending on
+# scheduling (~28 KB body with the guard: frequent race).
 grep_body() {
   local pattern=$1; shift
   local body
@@ -196,18 +196,18 @@ grep_body() {
   grep -q "$pattern" <<<"$body"
 }
 
-step "injection HTML"
+step "HTML injection"
 grep_body '<link rel="manifest" href="/__gateway_pwa/manifest.json">' \
     -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/" \
     || fail "manifest link not injected in HTML"
 
-# le meta charset du site doit rester dans la fenêtre de détection
-# navigateur (1024 premiers octets) après injection du garde — sinon
-# le document est décodé windows-1252 ("DÃ©connexion")
+# the site's meta charset must stay within the browser detection
+# window (first 1024 bytes) after the guard is injected — otherwise
+# the document is decoded as windows-1252 ("DÃ©connexion")
 meta_pos=$(curl -sf -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/" \
     | grep -bo 'charset=' | head -1 | cut -d: -f1)
 [ -n "$meta_pos" ] && [ "$meta_pos" -lt 1024 ] \
-    || fail "meta charset hors fenêtre de détection (position: ${meta_pos:-absent})"
+    || fail "meta charset outside browser detection window (position: ${meta_pos:-absent})"
 
 grep_body '"name": "SmokeApp"' \
     -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/manifest.json" \
@@ -225,87 +225,86 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: smoke.local" \
     "http://127.0.0.1:${PORT_GW}/__gateway_pwa/workbox/../pwa.go")
 [ "$code" = "404" ] || fail "path traversal not blocked (got $code)"
 
-# --- Circuit MCP ---
-step "circuit MCP (X-MCP-Scope → auth-bridge)"
-# 1) auth-bridge factice reçoit le scope configuré de la route (pas le
-#    défaut mcp-tools) via le header interne X-MCP-Scope
+# --- MCP circuit ---
+step "MCP circuit (X-MCP-Scope → auth-bridge)"
+# 1) the fake auth-bridge receives the route's configured scope (not
+#    the mcp-tools default) via the internal X-MCP-Scope header
 curl -s -o /dev/null -H "Host: mcp.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/mcp" || true
 grep -q "smoke-scope" "$scopes_tmp" \
     || fail "X-MCP-Scope not sent to auth-bridge / wrong scope"
 
-# 2) sans Authorization, la gateway répond 401 avec un challenge Bearer
-#    portant le scope configuré
+# 2) without Authorization, the gateway replies 401 with a Bearer
+#    challenge carrying the configured scope
 challenge=$(curl -s -D - -o /dev/null -H "Host: mcp.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/mcp")
 grep -i '^www-authenticate:' <<<"$challenge" | grep -q 'scope="smoke-scope"' \
     || fail "401 challenge missing configured scope: $challenge"
 
-# 3) la metadata annonce le scope configuré
+# 3) the metadata advertises the configured scope
 metadata=$(curl -sf -H "Host: mcp.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/.well-known/oauth-protected-resource")
 grep -q '"scopes_supported":\["smoke-scope"\]' <<<"$metadata" \
     || fail "metadata scopes_supported wrong: $metadata"
 
-# --- Policy upstream (site externe proxifié) ---
-step "upstream : Host réécrit, header statique, redirects, responseHeaders"
+# --- Upstream policy (proxied external site) ---
+step "upstream: host rewritten, static header, redirects, responseHeaders"
 
-# 1) Host réécrit vers l'origine backend + Authorization injectée par
-#    la gateway (interpolation ${SMOKE_UPSTREAM_TOKEN}) + X-Strip-Me retiré
+# 1) Host rewritten to the backend origin + Authorization injected by
+#    the gateway (${SMOKE_UPSTREAM_TOKEN} interpolation) + X-Strip-Me removed
 echo_result=$(curl -sf -H "Host: upstream.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/echo")
 grep -q "\"host\": \"127.0.0.1:${PORT_BE}\"" <<<"$echo_result" \
-    || fail "Host upstream non réécrit: $echo_result"
+    || fail "Upstream host not rewritten: $echo_result"
 grep -q '"authorization": "Basic YmFzaWMtdG9rZW4="' <<<"$echo_result" \
-    || fail "Authorization statique non injectée: $echo_result"
+    || fail "Static Authorization not injected: $echo_result"
 grep -q '"strip_present": false' <<<"$echo_result" \
-    || fail "X-Strip-Me (valeur vide) non retiré: $echo_result"
+    || fail "X-Strip-Me (empty value) not removed: $echo_result"
 
-# 2) Location absolue de l'origine backend ramenée au host public
+# 2) absolute Location from the backend origin rewritten back to the public host
 resp_redirect=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/redirect?loc=http%3A%2F%2F127.0.0.1%3A${PORT_BE}%2Fcible%2F%3Fa%3D1")
 loc=$(grep -i '^location:' <<<"$resp_redirect" | tr -d '\r' | awk '{print $2}')
 [ "$loc" = "https://upstream.smoke.local/cible/?a=1" ] \
-    || fail "Location non réécrite: '$loc'"
+    || fail "Location not rewritten: '$loc'"
 
-# 3) CSP du backend retiré + en-tête de réponse posé
+# 3) backend CSP removed + response header set
 resp_page=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/page")
 grep -qi '^content-security-policy:' <<<"$resp_page" \
-    && fail "CSP d'origine non retiré"
+    && fail "Origin CSP not removed"
 grep -qi '^x-gateway-smoke: upstream' <<<"$resp_page" \
-    || fail "X-Gateway-Smoke non posé"
+    || fail "X-Gateway-Smoke not set"
 
-# 4) le script de garde reste injecté sur le HTML proxifié
+# 4) the guard script is still injected into the proxied HTML
 grep_body '__cladoneAuthGuard' \
     -H "Host: upstream.smoke.local" "http://127.0.0.1:${PORT_GW}/page" \
-    || fail "garde non injectée sur le site upstream"
+    || fail "guard not injected into the upstream site"
 
-# 5) HTML servi gzip par l'origine, client qui offre gzip+br (comme
-#    un navigateur) : la réponse doit arriver EN CLAIR avec la garde —
-#    jamais un corps compressé manipulé (incident 2026-10-17 :
-#    Cloudflare répondait brotli → page illisible malgré le 200).
+# 5) HTML served gzip by the origin, client offering gzip+br (like a
+#    browser): the response must arrive UNCOMPRESSED with the guard —
+#    never a mangled compressed body (2026-10-17 incident:
+#    Cloudflare answered brotli → unreadable page despite the 200).
 grep_body 'gzip-ok' \
     -H "Host: upstream.smoke.local" \
     -H "Accept-Encoding: gzip, deflate, br, zstd" \
     "http://127.0.0.1:${PORT_GW}/gz" \
-    || fail "HTML gzip non décompressé (page illisible)"
+    || fail "gzip HTML not decompressed (unreadable page)"
 grep_body '__cladoneAuthGuard' \
     -H "Host: upstream.smoke.local" \
     -H "Accept-Encoding: gzip, deflate, br, zstd" \
     "http://127.0.0.1:${PORT_GW}/gz" \
-    || fail "garde non injectée sur le HTML gzip"
+    || fail "guard not injected into the gzip HTML"
 
-# 6) page > 1 Mio (ancienne limite) : injectée ET servie
-#    intégralement — jamais tronquée (incident 2026-10-17 : livre de
-#    6 Mo coupé à 1 Mio).
+# 6) page > 1 MiB (old limit): injected AND served in full — never
+#    truncated (2026-10-17 incident: a 6 MB book cut off at 1 MiB).
 big_file=/tmp/gw-smoke-big.$$.html
 big_size=$(curl -s -o "$big_file" -w '%{size_download}' \
     -H "Host: upstream.smoke.local" "http://127.0.0.1:${PORT_GW}/big")
 grep -q '__cladoneAuthGuard' "$big_file" \
-    || { rm -f "$big_file"; fail "garde non injectée sur une page de 1,5 Mio"; }
+    || { rm -f "$big_file"; fail "guard not injected into a 1.5 MiB page"; }
 [ "$big_size" -gt 1572864 ] \
-    || { rm -f "$big_file"; fail "page > 1 Mio tronquée ($big_size octets reçus)"; }
+    || { rm -f "$big_file"; fail "page > 1 MiB truncated ($big_size bytes received)"; }
 rm -f "$big_file"
 
 echo "SMOKE OK"

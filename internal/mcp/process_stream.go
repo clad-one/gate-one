@@ -36,7 +36,7 @@ func readStream(body io.Reader, contentType string) (string, error) {
 		return "", err
 	}
 
-	// NDJSON : le backend renvoie directement les lignes JSON.
+	// NDJSON: the backend directly returns the JSON lines.
 	if strings.Contains(contentType, "application/x-ndjson") {
 		return string(data), nil
 	}
@@ -46,7 +46,7 @@ func readStream(body io.Reader, contentType string) (string, error) {
 		return readSSE(bytes.NewReader(data))
 	}
 
-	// Fallback : retourner le corps brut.
+	// Fallback: return the raw body.
 	return string(data), nil
 }
 
@@ -116,12 +116,12 @@ func (s *ProcessStreamServer) Tool(
 		"text/event-stream",
 	)
 
-	// On transmettra l'identité établie par la gateway.
+	// The identity established by the gateway will be forwarded.
 	if req.Session != nil {
-		// Rien ici pour le moment.
+		// Nothing here for now.
 		//
-		// L'identité sera ajoutée dans une étape suivante
-		// via le contexte HTTP de la gateway.
+		// The identity will be added in a subsequent step
+		// via the gateway's HTTP context.
 	}
 
 	resp, err := s.Client.Do(httpReq)
@@ -164,7 +164,7 @@ func readSSE(r io.Reader) (string, error) {
 
 	scanner := bufio.NewScanner(r)
 
-	// Les événements peuvent contenir des lignes relativement longues.
+	// Events can contain relatively long lines.
 	scanner.Buffer(
 		make([]byte, 64*1024),
 		1024*1024,
@@ -176,7 +176,7 @@ func readSSE(r io.Reader) (string, error) {
 
 		line := scanner.Text()
 
-		// On conserve uniquement les données SSE.
+		// Only the SSE data is kept.
 		if strings.HasPrefix(line, "data:") {
 			data := strings.TrimSpace(
 				strings.TrimPrefix(line, "data:"),

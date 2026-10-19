@@ -26,7 +26,7 @@ const AuthStatePath = "/__gateway/auth"
 //   - every fetch is cloned before being sent (a Request body can
 //     only be read once), keeping a replayable copy ;
 //   - on 401 the failed request is queued and a DISMISSABLE
-//     banner ("Se connecter" / ×) is shown: mid-flow 401s never open
+//     banner ("Sign in" / ×) is shown: mid-flow 401s never open
 //     a tab automatically (a background 401 must not steal focus).
 //     The tab opens only on an explicit click: a
 //     data-gtw-auth="before" element or the banner button. Dismissing resolves the pending requests with
@@ -42,9 +42,9 @@ const AuthStatePath = "/__gateway/auth"
 //     promises resolve with the replayed responses: the application
 //     code never sees the authentication happen ;
 //   - if the tab is closed without completing (user, blocker):
-//     explicit login() promises resolve false silently (« not now ») ;
+//     explicit login() promises resolve false silently ("not now");
 //     the banner reappears only when real requests are frozen — it is
-//     their exit surface (Se connecter or ×) ;
+//     their exit surface (Sign in or ×) ;
 //   - the banner is closable without any login action: ×, click
 //     anywhere outside it, or Escape. Closing it closes the linked
 //     login tab (if open) at the same time, resolves pending
@@ -85,10 +85,10 @@ const AuthStatePath = "/__gateway/auth"
 //     want to trigger authentication from their own UI (opt-in; the
 //     zero-code-change contract holds for everyone else)
 //
-// guardScript : le script de garde, VÉRROUILLÉ par les tests
-// (guardInjectedLen, parité node). Le JS vit hors du Go :
-// guard/guard.js.tmpl (go:embed) ; les %[n]s sont substitués au
-// Sprintf du buildInjectors (login, sonde, uiGate, badge, rewrite).
+// guardScript: the guard script, LOCKED by tests (guardInjectedLen,
+// node parity). The JS lives outside the Go code:
+// guard/guard.js.tmpl (go:embed); the %[n]s are substituted by the
+// buildInjectors Sprintf (login, probe, uiGate, badge, rewrite).
 //
 //go:embed guard/guard.js.tmpl
 var guardScriptFS embed.FS
@@ -103,21 +103,21 @@ var guardScript = func() string {
 
 var headOpen = regexp.MustCompile(`(?i)<head[^>]*>`)
 
-// charsetMeta : déclaration d'encodage du site servie dans le <head>.
-// Le navigateur ne scanne que les 1024 PREMIERS octets pour la
-// détecter — le script de garde (~28 Ko) inséré AVANT elle la
-// poussait hors fenêtre : le navigateur retombait sur windows-1252
-// et affichait "DÃ©connexion" (incident 2026-10-17). L'injection se
-// fait donc APRÈS ce meta quand il est dans la fenêtre.
+// charsetMeta: encoding declaration of the served site inside the
+// <head>. The browser only scans the FIRST 1024 bytes to detect it —
+// the guard script (~28 KB) inserted BEFORE it pushed it out of the
+// window: the browser fell back to windows-1252 and displayed
+// "DÃ©connexion" (2026-10-17 incident). Injection therefore happens
+// AFTER that meta when it is within the window.
 var charsetMeta = regexp.MustCompile(`(?i)<meta[^>]*charset[^>]*>`)
 
-// encodingSniffWindow : la fenêtre de détection d'encodage des
-// navigateurs (méta charset cherchée dans les 1024 premiers octets).
+// encodingSniffWindow: the browsers' encoding detection window
+// (charset meta looked for in the first 1024 bytes).
 const encodingSniffWindow = 1024
 
-// maxGuardBody (32 Mio de budget de buffering) a DISPARU avec
-// l'injection en flux (2026-10-18) : le corps n'est plus lu, il
-// traverse. Voir guardStream.
+// maxGuardBody (32 MiB buffering budget) DISAPPEARED with streaming
+// injection (2026-10-18): the body is no longer read, it flows
+// through. See guardStream.
 
 // guardEnabledFor resolves the route's authGuard policy: active by
 // default on frontend routes, opt-out via {"enabled": false}, no-op on
@@ -136,64 +136,65 @@ func guardEnabledFor(route *core.Route) bool {
 }
 
 // guardLoginURL returns the login URL configured for the guard, if any.
-// (l'URL de login d'une route se résout par core.Config.LoginURLFor :
-// authGuard.loginUrl gagne sur oidc.loginUrl — la validation au load
-// garantit qu'une route à garde active en a une).
+// (a route's login URL resolves via core.Config.LoginURLFor:
+// authGuard.loginUrl wins over oidc.loginUrl — load-time validation
+// guarantees an active-guard route has one).
 
-// injectGuardScript installe l'injection de la garde en FLUX : le
-// corps n'est plus bufferisé (l'algorithme d'avant 2026-10-18 lisait
-// jusqu'à 32 Mio en mémoire) — l'octet qui arrive de l'origine ressort
-// vers le client, la mémoire reste O(1) et le navigateur entame son
-// rendu dès le premier chunk (TTFB == celui de l'origine, le livre
-// proxifié de 6 Mo se rend page par page pendant le téléchargement).
+// injectGuardScript installs the guard injection IN STREAMING mode: the
+// body is no longer buffered (the pre-2026-10-18 algorithm read up to
+// 32 MiB into memory) — the byte arriving from the origin goes out
+// toward the client, memory stays O(1) and the browser starts
+// rendering from the first chunk (TTFB == the origin's; the 6 MB
+// proxified book renders page by page during download).
 //
-// Échanges de taille changeant (script inséré), Content-Length est
-// retiré : la réponse part en chunked, et ReverseProxy flusse après
-// chaque écriture dès que ContentLength vaut -1 (il lit la décision
-// sur resp.ContentLength). Pages PLUS GRANDES que toute limite :
-// servies intégralement ET injectées — la troncature de l'incident
-// 2026-10-17 est structurellement impossible (plus aucun ReadAll).
+// With a size-changing exchange (script inserted), Content-Length is
+// removed: the response goes out chunked, and ReverseProxy flushes
+// after every write as soon as ContentLength is -1 (it reads the
+// decision from resp.ContentLength). Pages LARGER than any limit:
+// served IN FULL and injected — the 2026-10-17 truncation incident
+// is structurally impossible (no ReadAll anymore).
 func injectGuardScript(resp *http.Response, script string) {
 
-	// Le corps change de taille (script ~28 Ko inséré) : la réponse
-	// est servie chunked. En clair dans le pipeline : la décompression
-	// gzip est aussi en flux, Content-Encoding a déjà disparu (cette
-	// suppression reste un filet, jamais un déclencheur).
+	// The body changes size (~28 KB script inserted): the response is
+	// served chunked. Clear in the pipeline: gzip decompression is
+	// also streaming, Content-Encoding is already gone (that removal
+	// remains a safety net, never a trigger).
 	resp.Header.Del("Content-Length")
 	resp.Header.Del("Content-Encoding")
 	resp.ContentLength = -1
 	resp.Body = newGuardStream(resp.Body, script)
 }
 
-// injectScanWindow : maximum d'octets retenus pour décider du point
-// d'insertion. Concrètement la décision tombe vers l'octet 1024 (fin
-// de la fenêtre de détection d'encodage) — <head> est dans les
-// premiers octets de tout vrai document ; au-delà de la fenêtre sans
-// <head> (fragment HTML d'app framework), fallback historique : le
-// script est inséré en tout début de document, puis le reste du corps
-// passe en flux.
+// injectScanWindow: maximum bytes retained to decide the insertion
+// point. Concretely the decision lands around byte 1024 (end of the
+// encoding detection window) — <head> is within the first bytes of
+// any real document; beyond the window without a <head> (framework
+// app HTML fragment), historical fallback: the script is inserted at
+// the very start of the document, then the rest of the body flows
+// through.
 const injectScanWindow = 64 << 10
 
-// decideInjection : PARITÉ EXACTE avec l'algorithme bufferisé
-// historique (avant le streaming, 2026-10-18) :
-//   - <head> trouvé : insertion APRÈS lui, mais APRÈS le meta charset
-//     quand celui-ci est DANS LA FENÊTRE DE DÉTECTION (< 1024 octets
-//     du document original) — sinon le navigateur décode en
-//     windows-1252 et affiche "DÃ©connexion" (incident 2026-10-17) ;
-//   - pas de <head> dans la fenêtre : ok=false — l'appelant décide du
-//     fallback : la GARDE insère en tout début (fallback historique
-//     des pages sans head, elle DOIT passer) ; un contenu custom est
-//     SAUTI (fail-open : jamais de snippet avant <!doctype).
+// decideInjection: EXACT PARITY with the historical buffered
+// algorithm (before streaming, 2026-10-18):
+//   - <head> found: insertion AFTER it, but AFTER the charset meta
+//     when the latter is WITHIN THE DETECTION WINDOW (< 1024 bytes of
+//     the original document) — otherwise the browser decodes as
+//     windows-1252 and displays "DÃ©connexion" (2026-10-17 incident);
+//   - no <head> within the window: ok=false — the caller decides the
+//     fallback: the GUARD inserts at the very start (historical
+//     fallback of headless pages, it MUST get through); custom
+//     content is SKIPPED (fail-open: never a snippet before
+//     <!doctype).
 //
-// Retourne (indice d'insertion dans buf, ok) ; ok=false pour « pas
-// d'insertion possible » (head absent à la fenêtre/EOF) ; indice -1 =
-// « pas encore décidé — lire davantage » ; eof=true force la décision
-// finale (fin de corps, erreur transport incluse).
+// Returns (insertion index in buf, ok); ok=false means "no
+// insertion possible" (head absent at window/EOF); index -1 means
+// "not yet decided — read more"; eof=true forces the final decision
+// (end of body, transport error included).
 func decideInjection(buf []byte, eof bool) (int, bool) {
 
 	if idx := headOpen.FindIndex(buf); idx != nil {
 		if len(buf) < encodingSniffWindow && !eof {
-			return -1, true // la meta charset peut encore apparaître jusqu'à 1024
+			return -1, true // the charset meta may still appear up to 1024
 		}
 		injectAt := idx[1]
 		sniff := buf
@@ -206,34 +207,34 @@ func decideInjection(buf []byte, eof bool) (int, bool) {
 		return injectAt, true
 	}
 
-	// pas de <head> : chercher jusqu'à la fenêtre, puis fail-open.
+	// no <head>: search up to the window, then fail-open.
 	if len(buf) < injectScanWindow && !eof {
 		return -1, true
 	}
 	return 0, false
 }
 
-// guardStream traverse le corps en flux et insère le script une fois,
-// au point choisi parmi les premiers octets. Tout ce qui suit
-// l'injection passe SANS copie de re-lecture : les 6 Mo du livre
-// proxifié ne résident jamais en mémoire gateway.
+// guardStream flows the body through and inserts the script once,
+// at the point chosen from the first bytes. Everything following the
+// injection passes WITHOUT a re-read copy: the 6 MB of the proxified
+// book never reside in gateway memory.
 //
-// skipNF (contenu custom) : sans <head> dans la fenêtre, le contenu
-// est SAUTI (fail-open, jamais de snippet avant <!doctype) — la garde,
-// elle, conserve son fallback historique (insertion en tête : elle
-// DOIT passer).
+// skipNF (custom content): without a <head> in the window, the
+// content is SKIPPED (fail-open, never a snippet before <!doctype) —
+// the guard keeps its historical fallback (insertion at the top: it
+// MUST get through).
 type guardStream struct {
 	src    io.ReadCloser
 	script string
 	skipNF bool
 
-	scratch  []byte // buffer de lecture recyclé
-	buf      []byte // octets retenus en attente de décision (≤ fenêtre)
-	pend     []byte // octets à émettre (préfixe + script + reste du buf)
+	scratch  []byte // recycled read buffer
+	buf      []byte // bytes held pending decision (≤ window)
+	pend     []byte // bytes to emit (prefix + script + rest of buf)
 	pendOff  int
 	decided  bool
-	streamed bool  // pend épuisé : passthrough direct
-	err      error // erreur transport (servie après le pend, jamais avalée)
+	streamed bool  // pend exhausted: direct passthrough
+	err      error // transport error (served after pend, never swallowed)
 }
 
 func newGuardStream(src io.ReadCloser, script string) *guardStream {
@@ -250,7 +251,7 @@ func (g *guardStream) Read(p []byte) (int, error) {
 
 		if g.streamed {
 			if g.err != nil {
-				return 0, g.err // propagée, jamais silencieuse
+				return 0, g.err // propagated, never silent
 			}
 			return g.src.Read(p)
 		}
@@ -264,17 +265,17 @@ func (g *guardStream) Read(p []byte) (int, error) {
 			if g.err == nil {
 				g.err = rerr
 			}
-			// décision immédiate sur les octets déjà arrivés
-			// (l'erreur du dessous fera tiquer le copyResponse)
+			// immediate decision on the bytes already arrived
+			// (the underlying error will tick the copyResponse)
 			eof = true
 		}
 		injectAt, ok := decideInjection(g.buf, eof)
 		if injectAt < 0 {
-			continue // tampon borné par injectScanWindow
+			continue // buffer bounded by injectScanWindow
 		}
 		if !ok {
-			// pas de <head> (fragment d'app framework) : la garde
-			// préfixe (comportement historique), un custom saute.
+			// no <head> (framework app fragment): the guard
+			// prefixes (historical behavior), custom content skips.
 			if g.skipNF {
 				g.pend = append(g.pend[:0], g.buf...)
 				g.buf = nil

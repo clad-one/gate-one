@@ -10,70 +10,70 @@ import (
 )
 
 //
-// Réécriture du corps HTML (upstream.rewriteBody) — moteur EN FLUX.
+// HTML body rewrite (upstream.rewriteBody) — STREAMING engine.
 //
-// Le site externe proxifié cite ses propres URLs dans ses pages
-// ("https://origine/…", "//origine/…") : sans réécriture, le
-// navigateur quitte le proxy dès la première occurrence (session,
-// instrumentations perdues). La gateway réécrit ces occurrences vers
-// le host PUBLIC de la route sans bufferiser le corps (comme
-// guardStream : l'octet d'entrée ressort vite, mémoire O(1) quelle
-// que soit la taille de la page).
+// The proxified external site cites its own URLs in its pages
+// ("https://origin/…", "//origin/…"): without rewriting, the
+// browser leaves the proxy at the first occurrence (session,
+// instrumentation lost). The gateway rewrites those occurrences
+// toward the route's PUBLIC host without buffering the body (like
+// guardStream: the incoming byte goes out quickly, O(1) memory
+// regardless of the page size).
 //
-// Sémantique partagée avec le SW client (pwa.Handler) et la couche
-// patch du script de garde : les trois couches implémentent la MÊME
-// politique (origins × except × target) — la parité est testée dans
-// rewrite_test.go sur la même liste de cas.
+// Semantics shared with the client SW (pwa.Handler) and the guard
+// script's patch layer: the three layers implement the SAME policy
+// (origins × except × target) — parity is tested in rewrite_test.go
+// over the same case list.
 //
-// Formes réécrites : "https://HOST…", "http://HOST…", "//HOST…" (HOST
-// = hostname d'origine de la route, sans port ; un port explicite
-// ":digits" fait partie du préfixe réécrit et est PERDU — la cible
-// publique est servie en port standard). Chemin, query et fragment
-// suivent tels quels. Exceptions : préfixe de chemin le plus long
-// gagne (tri décroissant) ; entrée chaîne = rester à l'origine,
-// entrée {path,to} = base de remplacement "to".
+// Rewritten forms: "https://HOST…", "http://HOST…", "//HOST…" (HOST
+// = the route's origin hostname, without port; an explicit
+// ":digits" port is part of the rewritten prefix and is LOST — the
+// public target is served on the standard port). Path, query and
+// fragment follow as-is. Exceptions: longest path prefix wins
+// (descending sort); string entry = stay at the origin,
+// {path,to} entry = "to" replacement base.
 //
-// Fenêtre glissante bornée : le moteur n'attend jamais plus que
-// "https://" + host le plus long + préfixe d'exception le plus long
-// (config : ≤ 256 octets par préfixe) ; plus le port explicite
-// éventuel, résolu en attente aux bords de fenêtre. Une URL n'est
-// JAMAIS réécrite partiellement : si une décision manque de contexte,
-// les octets concernés sont retenus jusqu'à résolution ; faute de
-// candidat, tout s'émet sauf les derniers `hold` octets (un motif plus
-// petit que ça ne peut jamais chevaucher le bord de fenêtre). Fin de
-// flux : tout est résolu/émis ; erreur transport : buf part brut puis
-// l'erreur se propage (jamais silencieuse), conformément à
-// guardStream.
+// Bounded sliding window: the engine never waits for more than
+// "https://" + longest host + longest exception prefix (config:
+// ≤ 256 bytes per prefix); plus the optional explicit port, left
+// pending at window edges. A URL is NEVER rewritten partially: if a
+// decision lacks context, the relevant bytes are held until
+// resolution; absent a candidate, everything is emitted except the
+// last `hold` bytes (a pattern smaller than that can never straddle
+// the window edge). End of stream: everything is resolved/emitted;
+// transport error: buf goes out raw then the error propagates (never
+// swallowed), per guardStream.
 //
 
-// rewritePlan : politique de réécriture compilée d'une route,
-// partagée entre le moteur en flux (Go) et le SW client (pwa).
+// rewritePlan: a route's compiled rewrite policy, shared between
+// the streaming engine (Go) and the client SW (pwa).
 type rewritePlan struct {
-	// hosts d'origine dont les URLs absolues sont réécrits — hostname
-	// sans port, minuscules (self-référencements plausibles du HTML
-	// d'origine : host du backend + hostOverride éventuel).
+	// origin hosts whose absolute URLs are rewritten — hostname
+	// without port, lowercased (plausible self-references of the
+	// origin HTML: backend host + optional hostOverride).
 	origins []string
-	// pub : base de remplacement par défaut en https ("https://host.public")
-	// — la forme servie au SW client (qui s'en sert comme documentation ;
-	// à l'exécution il réécrit vers SON origine) et à l'oracle de test.
+	// pub: default replacement base in https ("https://host.public")
+	// — the form handed to the client SW (which uses it as
+	// documentation; at runtime it rewrites toward ITS origin) and
+	// to the test oracle.
 	pub string
-	// pubHost : host public sans schéma — la réécriture SERVEUR y
-	// préfixe le schéma réel de la requête (https en prod, http en
-	// démo : X-Forwarded-Proto / TLS direct).
+	// pubHost: public host without scheme — the SERVER rewrite
+	// prefixes the request's real scheme onto it (https in prod,
+	// http in demo: X-Forwarded-Proto / direct TLS).
 	pubHost string
-	// except : exceptions triées par longueur décroissante (préfixe
-	// le plus long gagne) ; To vide = rester à l'origine.
+	// except: exceptions sorted by descending length (longest
+	// prefix wins); empty To = stay at the origin.
 	except []core.RewriteExcept
-	// hold : fragments max retenus en fin de fenêtre — "https://" +
-	// host le plus long (aucun motif ne peut chevaucher au-delà).
+	// hold: max fragments held at the end of the window —
+	// "https://" + longest host (no pattern can straddle beyond).
 	hold int
-	// maxExcept : préfixe d'exception le plus long (contexte droit
-	// nécessaire à une décision).
+	// maxExcept: longest exception prefix (right context needed
+	// for a decision).
 	maxExcept int
 }
 
-// rewritePlanFor compile la politique rewriteBody de la route ; nil
-// quand la route n'en a pas (absente ou désactivée).
+// rewritePlanFor compiles the route's rewriteBody policy; nil when
+// the route has none (absent or disabled).
 func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 	rb := route.UpstreamRewriteBody()
 	if rb == nil {
@@ -103,8 +103,8 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 		}
 	}
 
-	// exceptions : préfixe le plus long d'abord (le premier match
-	// gagne, côté Go comme côté SW client).
+	// exceptions: longest prefix first (the first match wins, on
+	// the Go side as on the client SW side).
 	except := make([]core.RewriteExcept, len(rb.Except))
 	copy(except, rb.Except)
 	for i := 1; i < len(except); i++ {
@@ -130,7 +130,7 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 	}
 }
 
-// clientSpec : adapté pour le SW client (pwa.RewriteSpec).
+// clientSpec: adapter for the client SW (pwa.RewriteSpec).
 func (p *rewritePlan) clientSpec() *pwa.RewriteSpec {
 	return &pwa.RewriteSpec{
 		Origins: p.origins,
@@ -139,12 +139,12 @@ func (p *rewritePlan) clientSpec() *pwa.RewriteSpec {
 	}
 }
 
-// rewriteGuardDTO : sérialisé dans le script de garde, pour
-// l'enregistrement du SW (paramétré comme le SW ci-dessus) et le
-// patch des appels runtime (fetch/XHR/…). Le payload traverse le
-// moteur de réécriture : les hosts d'origine y figurent SANS scheme —
-// jamais sous une forme "scheme://origin" qui serait réécrite dans
-// son propre transport.
+// rewriteGuardDTO: serialized into the guard script, for SW
+// registration (parameterized like the SW above) and the patching
+// of runtime calls (fetch/XHR/…). The payload goes through the
+// rewrite engine: origin hosts appear there WITHOUT a scheme —
+// never in a "scheme://origin" form that would be rewritten in its
+// own transport.
 type rewriteGuardDTO struct {
 	Sw      string               `json:"sw"`
 	Target  string               `json:"target"`
@@ -152,8 +152,8 @@ type rewriteGuardDTO struct {
 	Except  []core.RewriteExcept `json:"except"`
 }
 
-// rewriteGuardDTOFor : version pour le script de garde ; nil quand la
-// route n'a pas de rewriteBody.
+// rewriteGuardDTOFor: version for the guard script; nil when the
+// route has no rewriteBody.
 func rewriteGuardDTOFor(route *core.Route, backend *url.URL) *rewriteGuardDTO {
 	plan := rewritePlanFor(route, backend)
 	if plan == nil {
@@ -168,25 +168,25 @@ func rewriteGuardDTOFor(route *core.Route, backend *url.URL) *rewriteGuardDTO {
 }
 
 //
-// Moteur en flux.
+// Streaming engine.
 //
-//	buf : octets reçus, pas encore émis (borné par hold, plus le
-//	      besoin droit éventuel d'un candidat en attente de contexte).
-//	out : octets résolus, prêts à ressortir.
+//	buf: bytes received, not yet emitted (bounded by hold, plus the
+//	     optional right context of a candidate pending context).
+//	out: resolved bytes, ready to go out.
 //
 
 type rewriteStream struct {
 	src io.ReadCloser
 	cfg *rewritePlan
-	// scheme : le schéma des URLs réécrites (schéma réel de la
-	// requête) ; "" = https (défaut).
+	// scheme: the rewritten URLs' scheme (request's real scheme);
+	// "" = https (default).
 	scheme string
 
 	scratch  []byte
 	buf      []byte
 	out      []byte
 	outOff   int
-	lastByte byte // dernier octet déjà émis (contexte gauche d'un candidat en tête de buf)
+	lastByte byte // last byte already emitted (left context of a candidate at the start of buf)
 	emitted  bool
 	done     bool
 	err      error
@@ -236,9 +236,9 @@ func (s *rewriteStream) step() {
 		s.buf = append(s.buf, s.scratch[:n]...)
 	}
 	if rerr != nil && rerr != io.EOF {
-		// erreur transport : buf part BRUT (un corps coupé ne doit
-		// pas être semi-réécrit), l'erreur surfacera après — comme
-		// guardStream, jamais avalée.
+		// transport error: buf goes out RAW (a cut-off body must
+		// not be half-rewritten), the error will surface
+		// afterwards — like guardStream, never swallowed.
 		if s.err == nil {
 			s.err = rerr
 		}
@@ -252,22 +252,23 @@ func (s *rewriteStream) step() {
 	s.resolve()
 }
 
-// resolve applique les décisions de réécriture sur buf et déplace ce
-// qui est tranché vers out.
+// resolve applies the rewrite decisions to buf and moves what is
+// settled to out.
 func (s *rewriteStream) resolve() {
 
 	scan := 0
 	for {
 		h, hostLen := s.findHost(scan)
 		if h < 0 {
-			// plus aucune occurrence entière (= également au-delà) :
+			// no more whole occurrence (= also beyond):
 			if s.done {
-				// fin de flux → tout partir (les candidats tranchés
-				// ci-dessus ont déjà épuisé leurs remplacements)
+				// end of stream → everything leaves (the
+				// candidates settled above already exhausted
+				// their replacements)
 				s.emit(len(s.buf))
 			} else {
-				// émettre jusqu'au point sûr : les derniers hold
-				// octets peuvent chevaucher un futur motif
+				// emit up to the safe point: the last hold
+				// bytes may straddle a future pattern
 				safe := len(s.buf) - s.cfg.hold
 				if safe > 0 {
 					s.emit(safe)
@@ -279,13 +280,13 @@ func (s *rewriteStream) resolve() {
 		m := s.evaluate(h, hostLen)
 		switch m.state {
 		case candInvalid:
-			// pas une URL de l'origine (frontières) : chercher la
-			// suivante — un autre host peut coïncider ici, la plus
-			// longue ayant déjà été retenue par findHost
+			// not an origin URL (boundaries): look for the
+			// next one — another host may coincide here, the
+			// longest one was already picked by findHost
 			scan = h + 1
 		case candPending:
-			// contexte (gauche/droit) insuffisant : attendre des
-			// octets. Ce qui précède le motif est résolu.
+			// insufficient (left/right) context: wait for
+			// bytes. What precedes the pattern is settled.
 			if s.done {
 				replacement, keep := s.decision(m)
 				s.applyCandidate(m, replacement, keep)
@@ -297,18 +298,19 @@ func (s *rewriteStream) resolve() {
 		default:
 			replacement, keep := s.decision(m)
 			s.applyCandidate(m, replacement, keep)
-			// buf a été tronqué de buf[:portEnd] : les index du scan
-			// se décalent d'autant (les skips invalides antérieurs,
-			// sous portEnd, sont partis en émission — terminés).
+			// buf was truncated of buf[:portEnd]: the scan
+			// indexes shift by that amount (earlier invalid
+			// skips, below portEnd, already left in emission —
+			// finished).
 			scan = rescan(scan, m.portEnd)
 		}
 	}
 }
 
-// rescan : index de reprise du scan après une troncature de
-// buf[:cut] — un scan stale pointerait dans le mauvais buf et rate
-// toute occurrence retenue en aval (bug découvert par la trace E2E :
-// un skip invalide suivi d'un candidat tranché gelait le moteur).
+// rescan: scan resume index after a truncation of buf[:cut] — a
+// stale scan would point into the wrong buf and miss any occurrence
+// held downstream (bug discovered by the E2E trace: an invalid skip
+// followed by a settled candidate froze the engine).
 func rescan(scan, cut int) int {
 	if scan > cut {
 		return scan - cut
@@ -316,13 +318,12 @@ func rescan(scan, cut int) int {
 	return 0
 }
 
-// findHost : première occurrence (index min) d'un host d'origine dans
-// buf[from:] ; à index égal, le host le plus long gagne (ex. deux
-// origins dont l'une est suffixe de l'autre). Retourne (index, len).
-// Une occurrence PLUS LONGUE que buf (host coupé au bord) n'existe
-// pas pour Index : elle sera vue quand plus d'octets arriveront —
-// les derniers `hold` octets de buf ne sont donc jamais émis hors
-// "done".
+// findHost: first occurrence (lowest index) of an origin host in
+// buf[from:]; at equal index the longest host wins (e.g. two
+// origins, one a suffix of the other). Returns (index, len). An
+// occurrence LONGER than buf (host cut at the edge) does not exist
+// for Index: it will be seen when more bytes arrive — the last
+// `hold` bytes of buf are therefore never emitted outside "done".
 func (s *rewriteStream) findHost(from int) (int, int) {
 	best, blen := -1, 0
 	for _, host := range s.cfg.origins {
@@ -351,9 +352,9 @@ const (
 
 type cand struct {
 	state     candKind
-	formStart int // début du motif (https:// … ou //)
-	formEnd   int // fin d'host (exclusive) = début du chemin
-	portEnd   int // après le port optionnel (:digits) — sinon formEnd
+	formStart int // pattern start (https:// … or //)
+	formEnd   int // host end (exclusive) = path start
+	portEnd   int // after the optional port (:digits) — otherwise formEnd
 }
 
 var (
@@ -362,10 +363,9 @@ var (
 	slashPrefix = []byte("//")
 )
 
-// evaluate détermine le candidat à l'index h (host) : forme URL
-// (https:// | http:// | //) avec frontières gauche + droite
-// vérifiées, puis disponibilité du contexte droit (chemin pour les
-// exceptions).
+// evaluate determines the candidate at index h (host): URL form
+// (https:// | http:// | //) with left + right boundaries verified,
+// then right context availability (path for the exceptions).
 func (s *rewriteStream) evaluate(h, hostLen int) cand {
 
 	formLen := 0
@@ -382,12 +382,12 @@ func (s *rewriteStream) evaluate(h, hostLen int) cand {
 
 	formStart := h - formLen
 
-	// frontière gauche : le caractère avant le motif ne fait pas
-	// partie d'un token plus long (wss://, xhttps://, mail@…).
+	// left boundary: the character before the pattern is not part
+	// of a longer token (wss://, xhttps://, mail@…).
 	bound := byte(0)
 	switch {
 	case formStart == 0 && !s.emitted:
-		// début du document : frontière de fait
+		// start of document: de facto boundary
 	case formStart == 0:
 		bound = s.lastByte
 	default:
@@ -395,13 +395,13 @@ func (s *rewriteStream) evaluate(h, hostLen int) cand {
 	}
 	if formStart > 0 || s.emitted {
 		if formLen == len(slashPrefix) {
-			// //host : après une quote, parenthèse, espace… — pas
-			// après ':' (exclusion des autres schemes, wss://…)
+			// //host: after a quote, parenthesis, space… — not
+			// after ':' (excluding other schemes, wss://…)
 			if !isRelBoundary(bound) {
 				return cand{state: candInvalid}
 			}
 		} else {
-			// http(s):// : pas collé à un caractère d'host
+			// http(s)://: not glued to a host character
 			if isHostChar(bound) {
 				return cand{state: candInvalid}
 			}
@@ -410,11 +410,11 @@ func (s *rewriteStream) evaluate(h, hostLen int) cand {
 
 	formEnd := h + hostLen
 
-	// port optionnel ":digits" — l'URL d'origine peut citer un port
-	// explicite (origin en port non standard, tests). Le port
-	// qualifie l'host : il appartient au préfixe réécrit et est
-	// ABSENT des remplacements (la cible publique est servie en
-	// standard).
+	// optional ":digits" port — the origin URL may cite an explicit
+	// port (origin on a non-standard port, tests). The port
+	// qualifies the host: it belongs to the rewritten prefix and is
+	// ABSENT from the replacements (the public target is served on
+	// the standard port).
 	portEnd := formEnd
 	if portEnd < len(s.buf) && s.buf[portEnd] == ':' {
 		k := portEnd + 1
@@ -423,31 +423,31 @@ func (s *rewriteStream) evaluate(h, hostLen int) cand {
 		}
 		switch {
 		case k == portEnd+1 && !s.done:
-			// ':' sans chiffre encore : un port peut suivre
+			// ':' without a digit yet: a port may follow
 			return cand{state: candPending, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 		case k == portEnd+1:
-			// ':' suivi de non-chiffre (":/x") : pas une forme cible
+			// ':' followed by a non-digit (":/x"): not a target form
 			return cand{state: candInvalid}
 		case k >= len(s.buf) && !s.done:
-			// port tronqué au bord de fenêtre : attendre
+			// port truncated at the window edge: wait
 			return cand{state: candPending, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 		}
 		portEnd = k
 	}
 
-	// frontière droite : le host ne se poursuit pas (a.b au sein
-	// d'un a.b.c plus long).
+	// right boundary: the host does not continue (a.b within a
+	// longer a.b.c).
 	if portEnd < len(s.buf) {
 		if isHostChar(s.buf[portEnd]) {
 			return cand{state: candInvalid}
 		}
 	} else if !s.done {
-		// au moins un octet après l'host est requis pour trancher la
-		// frontière droite ; rien ici : attendre.
+		// at least one byte after the host is required to settle
+		// the right boundary; nothing here: wait.
 		return cand{state: candPending, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 	}
 
-	// contexte droit : chemin (pour les exceptions)
+	// right context: path (for the exceptions)
 	pathStart := portEnd
 	stop := -1
 	for i := pathStart; i < len(s.buf) && i < pathStart+s.cfg.maxExcept; i++ {
@@ -463,16 +463,16 @@ func (s *rewriteStream) evaluate(h, hostLen int) cand {
 	return cand{state: candDecided, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 }
 
-// decision : verdict du candidat m — selon les exceptions (préfixe
-// le plus long gagne, tri décroissant). keep=true : le texte original
-// (port inclus) passe tel quel. replacement : texte qui remplace
-// scheme://host[:port] (le chemin, qui commence à portEnd, suit).
+// decision: verdict for candidate m — according to the exceptions
+// (longest prefix wins, descending sort). keep=true: the original
+// text (port included) goes out as-is. replacement: text replacing
+// scheme://host[:port] (the path, starting at portEnd, follows).
 func (s *rewriteStream) decision(m cand) (replacement string, keep bool) {
 
 	pathStart := m.portEnd
 	end := len(s.buf)
 	if end > pathStart {
-		// au premier terminateur (fin du chemin)
+		// at the first terminator (end of the path)
 		for i := pathStart; i < end; i++ {
 			if isPathStop(s.buf[i]) {
 				end = i
@@ -488,22 +488,22 @@ func (s *rewriteStream) decision(m cand) (replacement string, keep bool) {
 		if len(e.Path) <= end-pathStart &&
 			bytes.HasPrefix(s.buf[pathStart:], []byte(e.Path)) {
 			if e.To != "" {
-				return e.To, false // host public alternatif
+				return e.To, false // alternative public host
 			}
-			return "", true // exception : rester à l'origine
+			return "", true // exception: stay at the origin
 		}
 	}
-	// réécriture standard : le schéma suit la requête (https en
-	// production, http en démo)
+	// standard rewrite: the scheme follows the request (https in
+	// production, http in demo)
 	if s.scheme == "" || s.scheme == "https" {
 		return s.cfg.pub, false
 	}
 	return s.scheme + "://" + s.cfg.pubHost, false
 }
 
-// applyCandidate émet buf[:formStart] puis (original inchangé ou
-// remplacement), et retire le préfixe (jusqu'au port inclus) de la
-// fenêtre ; le chemin reste, rescané ensuite normalement.
+// applyCandidate emits buf[:formStart] then (unchanged original or
+// replacement), and removes the prefix (through the port) from the
+// window; the path remains, rescanned normally afterwards.
 func (s *rewriteStream) applyCandidate(m cand, replacement string, keep bool) {
 	s.out = append(s.out, s.buf[:m.formStart]...)
 	if keep {
@@ -515,7 +515,7 @@ func (s *rewriteStream) applyCandidate(m cand, replacement string, keep bool) {
 	s.buf = append([]byte(nil), s.buf[m.portEnd:]...)
 }
 
-// emit : buf[:n] part vers out (retenir rien de plus).
+// emit: buf[:n] moves to out (nothing more retained).
 func (s *rewriteStream) emit(n int) {
 	if n <= 0 {
 		return
@@ -532,9 +532,9 @@ func (s *rewriteStream) rememberLast() {
 	}
 }
 
-// isHostChar : lettres/chiffres + '.' '-' '_' — caractères d'host ;
-// vrai de part et d'autre du motif, l'occurrence ne fait pas partie
-// d'un token voisin (wss://, sous-domaine plus long…).
+// isHostChar: letters/digits + '.' '-' '_' — host characters; true
+// on either side of the pattern, the occurrence is not part of a
+// neighboring token (wss://, longer subdomain…).
 func isHostChar(b byte) bool {
 	switch {
 	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':
@@ -545,8 +545,8 @@ func isHostChar(b byte) bool {
 	return false
 }
 
-// isRelBoundary : frontière valide avant un "//host" relatif au
-// protocole (':' exclus — tous les autres schemes, wss://…).
+// isRelBoundary: valid boundary before a protocol-relative "//host"
+// (':' excluded — all other schemes, wss://…).
 func isRelBoundary(b byte) bool {
 	switch b {
 	case ' ', '\t', '\n', '\r', '"', '\'', '(', '=', '<', ',', ';', '{', '[':
@@ -555,8 +555,8 @@ func isRelBoundary(b byte) bool {
 	return false
 }
 
-// isPathStop : fin de chemin (juridique : avant ce terminateur on
-// compare les préfixes d'exception ; les octets passent tel quel).
+// isPathStop: end of path (guarantee: before this terminator the
+// exception prefixes are compared; the bytes go out as-is).
 func isPathStop(b byte) bool {
 	switch b {
 	case '"', '\'', '<', '>', ' ', '\t', '\n', '\r', '?', '#', '&',

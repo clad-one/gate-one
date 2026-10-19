@@ -15,13 +15,13 @@ import (
 	"time"
 )
 
-// upstreamTestServer : backend d'écho qui simule l'essentiel d'un
-// worker Cloudflare protégé par basic auth — expose ce qu'il a reçu
-// (Host, Authorization, en-têtes custom), sait rediriger (Location
-// absolue/relative via ?loc=) et sert du HTML avec un CSP.
+// upstreamTestServer: echo backend simulating the essentials of a
+// basic-auth-protected Cloudflare worker — exposes what it received
+// (Host, Authorization, custom headers), knows how to redirect
+// (absolute/relative Location via ?loc=) and serves HTML with a CSP.
 //
-// bigPageLen / hugePageLen / hugeGzPageLen : tailles exactes de /big,
-// /huge et /hugegz (renseignées par le constructeur pour les
+// bigPageLen / hugePageLen / hugeGzPageLen: exact sizes of /big,
+// /huge and /hugegz (filled in by the constructor for the
 // assertions).
 var (
 	bigPageLen    int
@@ -55,8 +55,8 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte("<html><head></head><body>x</body></html>"))
 	})
 
-	// HTML servi gzip (Content-Encoding: gzip) — simule une origine
-	// qui compresse (Cloudflare le fait systématiquement).
+	// HTML served gzip (Content-Encoding: gzip) — simulates an
+	// origin that compresses (Cloudflare does it systematically).
 	mux.HandleFunc("/gz", func(w http.ResponseWriter, r *http.Request) {
 		var buf bytes.Buffer
 		zw := gzip.NewWriter(&buf)
@@ -68,16 +68,16 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		_, _ = w.Write(buf.Bytes())
 	})
 
-	// « brotli » (octets quelconques) : JAMAIS décodable en stdlib —
-	// la réponse doit traverser intacte, sans injection.
+	// "brotli" (arbitrary bytes): NEVER decodable by the stdlib —
+	// the response must pass through intact, without injection.
 	mux.HandleFunc("/br", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Encoding", "br")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte{0x1b, 0x02, 0x00, 0x00, 0x00})
 	})
 
-	// Asset JS servi gzip : non-HTML, jamais touché par la
-	// décompression (passthrough compressé jusqu'au navigateur).
+	// JS asset served gzip: non-HTML, never touched by
+	// decompression (compressed passthrough up to the browser).
 	mux.HandleFunc("/app.gz.js", func(w http.ResponseWriter, r *http.Request) {
 		var buf bytes.Buffer
 		zw := gzip.NewWriter(&buf)
@@ -88,9 +88,9 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		_, _ = w.Write(buf.Bytes())
 	})
 
-	// Page au-dessus de l'ancienne limite (1 Mio) : doit être
-	// injectée ET servie intégralement (livre jacquelot : ~6 Mo —
-	// son instrumentation est le cas d'usage).
+	// Page above the old limit (1 MiB): must be injected AND served
+	// in full (jacquelot book: ~6 MB — its instrumentation is the
+	// use case).
 	bigBody := "<html><head><title>big</title></head><body>" +
 		strings.Repeat("x", (3<<20)/2) + "</body></html>"
 	bigPageLen = len(bigBody)
@@ -99,10 +99,10 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte(bigBody))
 	})
 
-	// Page avec déclaration d'encodage précoce : le meta charset doit
-	// rester dans la fenêtre de détection du navigateur (1024 premiers
-	// octets) APRÈS injection — le garde s'insère après lui, pas
-	// avant (sinon le navigateur décode en windows-1252 :
+	// Page with an early encoding declaration: the charset meta must
+	// stay within the browser's detection window (first 1024
+	// bytes) AFTER injection — the guard inserts itself after it,
+	// not before (otherwise the browser decodes as windows-1252:
 	// "DÃ©connexion").
 	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -111,8 +111,8 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 			"<body>meta-ok</body></html>"))
 	})
 
-	// Page dépassant maxGuardBody (32 Mio) : servie INTÉGRALEMENT,
-	// sans injection ni troncature (filet fail-open).
+	// Page exceeding maxGuardBody (32 MiB): served IN FULL, without
+	// injection or truncation (fail-open net).
 	hugeBody := "<html><head><title>huge</title></head><body>" +
 		strings.Repeat("y", (68<<20)/2) + "</body></html>"
 	hugePageLen = len(hugeBody)
@@ -121,10 +121,10 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte(hugeBody))
 	})
 
-	// Page gzip ÉNORME (2 Mo décomprimés), servie en morceaux du
-	// gzip.Writer : le gunzip paresseux + l'injection en flux doivent
-	// la livrer intègre, injectée, sans buffering (la PIPE du pipe
-	// gzip→guard→client reste bornée).
+	// HUGE gzip page (2 MB decompressed), served in chunks of the
+	// gzip.Writer: the lazy gunzip + the streaming injection must
+	// deliver it intact, injected, without buffering (the
+	// gzip→guard→client PIPE stays bounded).
 	plainHugeGz := "<html><head><title>huge-gz-title</title></head><body>" +
 		strings.Repeat("g", 2<<20) + "</body></html>"
 	hugeGzPageLen = len(plainHugeGz)
@@ -138,9 +138,9 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		zw.Close()
 	})
 
-	// Page de réécriture (rewriteBody) : HTML clair + version gzip.
-	// L'host d'origine cité dans la page = r.Host (l'host que la
-	// gateway impose au backend, host:port du serveur de test).
+	// Rewrite page (rewriteBody): plain HTML + gzip version.
+	// The origin host cited in the page = r.Host (the host the
+	// gateway imposes on the backend, host:port of the test server).
 	mux.HandleFunc("/rwpage", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(rwPageHTML(r.Host)))
@@ -154,7 +154,7 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 	})
 
 	mux.HandleFunc("/setcookie", func(w http.ResponseWriter, r *http.Request) {
-		// un Set-Cookie brut par paramètre ?set= (tests rewriteCookies)
+		// one raw Set-Cookie per ?set= parameter (rewriteCookies tests)
 		for _, raw := range r.URL.Query()["set"] {
 			w.Header().Add("Set-Cookie", raw)
 		}
@@ -166,38 +166,38 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// rwPageHTML : page de réécriture (rewriteBody) servie par /rwpage —
-// URLs ABSOLUES du site d'origine (reconstruites avec l'host reçu,
-// celui que la gateway impose via upstream.host : host:port de l'
-// origin de test), exceptions de lecture, cible alternative, num
-// contre-exemples (autres hosts, bordures).
+// rwPageHTML: rewrite page (rewriteBody) served by /rwpage —
+// ABSOLUTE URLs of the origin site (rebuilt with the received host,
+// the one the gateway imposes via upstream.host: host:port of the
+// test origin), reading exceptions, alternative target, counter-
+// examples (other hosts, boundaries).
 func rwPageHTML(originHost string) string {
 	return fmt.Sprintf(`<html><head><title>rw</title></head><body>
 <a href="https://%[1]s/edit/page?x=1">edit</a>
-<a href="https://%[1]s/lecture/bonpapa/">une exception chaîne</a>
-<a href="https://%[1]s/alt/chemin">host alternatif</a>
-<a href="https://%[1]s/l1/detail/ou">alternative longue</a>
-<a href="https://%[1]s/l1/autre">exception longue conservée</a>
-<a href="//%[1]s/img.png">schéma-relatif</a>
-<a href="https://%[1]s/port">port explicite</a>
-<a href="https://autre.example/x">autre origine</a>
-<a href="https://%[1]s.more/interieur">host plus long</a>
+<a href="https://%[1]s/lecture/bonpapa/">a string exception</a>
+<a href="https://%[1]s/alt/chemin">alternative host</a>
+<a href="https://%[1]s/l1/detail/ou">long alternative</a>
+<a href="https://%[1]s/l1/autre">long exception kept</a>
+<a href="//%[1]s/img.png">scheme-relative</a>
+<a href="https://%[1]s/port">explicit port</a>
+<a href="https://autre.example/x">other origin</a>
+<a href="https://%[1]s.more/interieur">longer host</a>
 <a href="wss://%[1]s/ws">websocket</a>
 <img srcset="https://%[1]s/a.jpg 2x, //%[1]s/b.jpg 1x">
 <style>body{background:url(https://%[1]s/fond.css)}</style>
-<p>texte brut : https://%[1]s/txt/fin — fin du texte</p>
+<p>plain text: https://%[1]s/txt/fin — end of text</p>
 </body></html>`, originHost)
 }
 
-// upstreamGateway : gateway construite depuis un JSON de routes
-// (BACKEND remplacé par l'URL du backend d'écho), chargée via la
-// grammaire stricte de core.Load — comme en production.
+// upstreamGateway: gateway built from a routes JSON (BACKEND
+// replaced by the echo backend's URL), loaded via core.Load's strict
+// grammar — as in production.
 func upstreamGateway(
 	t *testing.T,
 	routesJSON string,
 ) (*Gateway, *url.URL) {
 	t.Helper()
-	clearAuthCache() // cache global : chaque test part neutre
+	clearAuthCache() // global cache: every test starts neutral
 
 	srv := upstreamTestServer(t)
 
@@ -217,7 +217,7 @@ func upstreamGateway(
 	return gw, u
 }
 
-// doRequestWithHeaders : GET avec en-têtes du client simulé.
+// doRequestWithHeaders: GET with the simulated client's headers.
 func doRequestWithHeaders(
 	t *testing.T,
 	gw http.Handler,
@@ -244,13 +244,13 @@ func echoOf(t *testing.T, resp *http.Response) map[string]any {
 	}
 	var out map[string]any
 	if err := json.Unmarshal(b, &out); err != nil {
-		t.Fatalf("echo non-JSON: %s", string(b))
+		t.Fatalf("non-JSON echo: %s", string(b))
 	}
 	return out
 }
 
-// Défaut historique : sans policy upstream, le Host public du
-// navigateur est préservé vers le backend (réseau interne).
+// Historical default: without an upstream policy, the browser's
+// public Host is preserved toward the backend (internal network).
 func TestUpstreamDefaultPreservesPublicHost(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -265,8 +265,8 @@ func TestUpstreamDefaultPreservesPublicHost(t *testing.T) {
 	}
 }
 
-// upstream.host: true → le Host envoyé au backend est celui de son
-// origine (requis pour un site externe qui route par Host).
+// upstream.host: true → the Host sent to the backend is the one of
+// its origin (required for an external site that routes by Host).
 func TestUpstreamHostRewrite(t *testing.T) {
 	gw, backend := upstreamGateway(t, `{
 		"routes": [{
@@ -282,8 +282,8 @@ func TestUpstreamHostRewrite(t *testing.T) {
 	}
 }
 
-// hostOverride : Host explicite différent du backend et du host
-// public (précédence sur host).
+// hostOverride: explicit Host different from the backend and the
+// public host (precedence over host).
 func TestUpstreamHostOverride(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -299,9 +299,9 @@ func TestUpstreamHostOverride(t *testing.T) {
 	}
 }
 
-// En-têtes statiques : posés en Set (écrasent le client — mode
-// machine-to-machine), interpolation ${VAR} résolue au load, valeur
-// vide = en-tête retiré de la requête.
+// Static headers: set with Set (overwrite the client — machine-to-
+// machine mode), ${VAR} interpolation resolved at load, empty value
+// = header removed from the request.
 func TestUpstreamHeaders(t *testing.T) {
 	t.Setenv("UPSTREAM_TEST_TOKEN", "c2VjcmV0")
 
@@ -311,31 +311,31 @@ func TestUpstreamHeaders(t *testing.T) {
 			"backend": "BACKEND",
 			"upstream": {"headers": {
 			  "Authorization": "Basic ${UPSTREAM_TEST_TOKEN}",
-			  "X-Custom": "posé-par-gateway",
+			  "X-Custom": "set-by-gateway",
 			  "X-Strip-Me": ""
 			}}
 		}]
 	}`)
 
 	resp := doRequestWithHeaders(t, gw, "public.test", "/echo", map[string]string{
-		"Authorization": "Bearer token-du-client",
-		"X-Strip-Me":    "valeur-client",
+		"Authorization": "Bearer client-token",
+		"X-Strip-Me":    "client-value",
 	})
 	echo := echoOf(t, resp)
 
 	if got := echo["authorization"]; got != "Basic c2VjcmV0" {
-		t.Errorf("Authorization upstream = %v, want Basic c2VjcmV0 (écrase le client)", got)
+		t.Errorf("Authorization upstream = %v, want Basic c2VjcmV0 (overwrites the client)", got)
 	}
-	if got := echo["custom"]; got != "posé-par-gateway" {
+	if got := echo["custom"]; got != "set-by-gateway" {
 		t.Errorf("X-Custom upstream = %v", got)
 	}
 	if got := echo["strip_present"]; got != false {
-		t.Errorf("X-Strip-Me transmis malgré valeur vide: %v", got)
+		t.Errorf("X-Strip-Me transmitted despite empty value: %v", got)
 	}
 }
 
-// Sans upstream.headers, l'Authorization du client traverse telle
-// quelle (mode « forward de l'auth du site source »).
+// Without upstream.headers, the client's Authorization goes through
+// as-is ("forward the source site's auth" mode).
 func TestUpstreamForwardsClientAuthorization(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -349,12 +349,13 @@ func TestUpstreamForwardsClientAuthorization(t *testing.T) {
 		"Authorization": "Basic base64-client",
 	})
 	if got := echoOf(t, resp)["authorization"]; got != "Basic base64-client" {
-		t.Errorf("Authorization client non transmise: %v", got)
+		t.Errorf("client Authorization not forwarded: %v", got)
 	}
 }
 
-// rewriteRedirects: les Location absolues visant l'ORIGINE du backend
-// sont ramenées au host public (schéma https, chemin/query préservés).
+// rewriteRedirects: absolute Locations targeting the backend's
+// ORIGIN are brought back to the public host (https scheme,
+// path/query preserved).
 func TestUpstreamRewriteRedirects(t *testing.T) {
 	gw, backend := upstreamGateway(t, `{
 		"routes": [{
@@ -370,22 +371,22 @@ func TestUpstreamRewriteRedirects(t *testing.T) {
 		t.Errorf("Location = %q, want https://public.test/Correspondances/?a=1", got)
 	}
 
-	// Location relative : traverse telle quelle.
+	// Relative Location: goes through as-is.
 	resp = doGet(t, gw, "public.test", "/redirect?loc="+url.QueryEscape("/relatif"))
 	if got := resp.Header.Get("Location"); got != "/relatif" {
-		t.Errorf("Location relative altérée: %q", got)
+		t.Errorf("relative Location altered: %q", got)
 	}
 
-	// Location d'une AUTRE origine (ex. domaine d'équipe Cloudflare
-	// Access) : traverse intacte.
+	// Location of ANOTHER origin (e.g. a Cloudflare Access team
+	// domain): passes intact.
 	resp = doGet(t, gw, "public.test", "/redirect?loc="+url.QueryEscape("https://equipe.cloudflareaccess.com/x"))
 	if got := resp.Header.Get("Location"); got != "https://equipe.cloudflareaccess.com/x" {
-		t.Errorf("Location d'une autre origine altérée: %q", got)
+		t.Errorf("Location of another origin altered: %q", got)
 	}
 }
 
-// Sans rewriteRedirects (défaut) : Location absolue traverse telle
-// quelle — comportement historique inchangé.
+// Without rewriteRedirects (default): an absolute Location goes
+// through as-is — unchanged historical behavior.
 func TestUpstreamRedirectsUntouchedByDefault(t *testing.T) {
 	gw, backend := upstreamGateway(t, `{
 		"routes": [{
@@ -398,12 +399,12 @@ func TestUpstreamRedirectsUntouchedByDefault(t *testing.T) {
 	absolu := backend.Scheme + "://" + backend.Host + "/ailleurs"
 	resp := doGet(t, gw, "public.test", "/redirect?loc="+url.QueryEscape(absolu))
 	if got := resp.Header.Get("Location"); got != absolu {
-		t.Errorf("Location = %q, want %q (non réécrite)", got, absolu)
+		t.Errorf("Location = %q, want %q (not rewritten)", got, absolu)
 	}
 }
 
-// responseHeaders: remove (CSP d'origine qui bloquerait les balises
-// injectées) et set (en-tête ajouté/écrasé).
+// responseHeaders: remove (an origin CSP that would block the
+// injected tags) and set (added/overwritten header).
 func TestUpstreamResponseHeaders(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -418,16 +419,15 @@ func TestUpstreamResponseHeaders(t *testing.T) {
 
 	resp := doGet(t, gw, "public.test", "/page")
 	if got := resp.Header.Get("Content-Security-Policy"); got != "" {
-		t.Errorf("CSP non retiré: %q", got)
+		t.Errorf("CSP not removed: %q", got)
 	}
 	if got := resp.Header.Get("X-Gateway-Note"); got != "instrumented" {
 		t.Errorf("X-Gateway-Note = %q", got)
 	}
 }
 
-// Parité « site local » : l'injection du script de garde continue de
-// s'appliquer aux HTML proxifiés d'un site externe (chaînage
-// upstream → garde).
+// "Local site" parity: the guard script injection keeps applying to
+// proxified HTML of an external site (upstream → guard chaining).
 func TestUpstreamGuardStillInjected(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -442,12 +442,12 @@ func TestUpstreamGuardStillInjected(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	if b := body(t, resp); !strings.Contains(b, "__cladoneAuthGuard") {
-		t.Error("script de garde absent du HTML proxifié")
+		t.Error("guard script missing from the proxified HTML")
 	}
 }
 
-// Pages multi-mégaoctets (l'ancienne limite 1 Mio, puis le livre de
-// 6 Mo) : injectées ET servies intégralement.
+// Multi-megabyte pages (the old 1 MiB limit, then the 6 MB book):
+// injected AND served in full.
 func TestGuardInjectsMidsizePageCompletely(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -466,20 +466,20 @@ func TestGuardInjectsMidsizePageCompletely(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw[:2048]), "__cladoneAuthGuard") {
-		t.Error("garde non injectée sur une page de 1,5 Mio")
+		t.Error("guard not injected on a 1.5 MiB page")
 	}
 	if len(raw) != bigPageLen+guardInjectedLen(t) {
-		t.Errorf("body = %d octets, want %d (injection + page intégrale)",
+		t.Errorf("body = %d bytes, want %d (injection + full page)",
 			len(raw), bigPageLen+guardInjectedLen(t))
 	}
-	// inchangé : la fin du document est exactement celle du site
+	// unchanged: the end of the document is exactly the site's
 	if !strings.HasSuffix(string(raw), "</body></html>") {
-		t.Error("queue du document altérée")
+		t.Error("document tail altered")
 	}
 }
 
-// guardInjectedLen : taille exacte du script que la route injecte
-// (même Sprintf que buildInjectors).
+// guardInjectedLen: exact size of the script the route injects
+// (same Sprintf as buildInjectors).
 func guardInjectedLen(t *testing.T) int {
 	t.Helper()
 	gw, _ := upstreamGateway(t, `{
@@ -505,11 +505,11 @@ func guardInjectedLen(t *testing.T) int {
 	return len(script)
 }
 
-// Page ÉNORME (34 Mio, au-delà de l'ancien budget de buffering de
-// 32 Mio) : servie INTÉGRALEMENT et INJECTÉE — l'injection est en
-// flux, la troncature est structurellement impossible (plus aucun
-// ReadAll). Le len(stream) == page + script est LE filet : un octet
-// manquant ou dupliqué le casse.
+// HUGE page (34 MiB, beyond the old 32 MiB buffering budget): served
+// IN FULL and INJECTED — the injection is streaming, truncation is
+// structurally impossible (no ReadAll anymore).
+// len(stream) == page + script is THE net: one missing or duplicated
+// byte breaks it.
 func TestGuardStreamsHugePageWithoutTruncation(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -528,20 +528,20 @@ func TestGuardStreamsHugePageWithoutTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(raw) != hugePageLen+guardInjectedLen(t) {
-		t.Errorf("body = %d octets, want %d (page 34 Mio : injection + page intégrale)",
+		t.Errorf("body = %d bytes, want %d (34 MiB page: injection + full page)",
 			len(raw), hugePageLen+guardInjectedLen(t))
 	}
 	if !strings.Contains(string(raw[:2048]), "__cladoneAuthGuard") {
-		t.Error("garde non injectée sur la page de 34 Mio")
+		t.Error("guard not injected on the 34 MiB page")
 	}
 	if !strings.HasSuffix(string(raw), "</body></html>") {
-		t.Error("queue du document altérée (troncature ?)")
+		t.Error("document tail altered (truncation?)")
 	}
 }
 
-// Le meta charset du site reste dans la fenêtre de détection (1024
-// premiers octets) APRÈS injection : le garde s'insère APRÈS lui —
-// le navigateur décode le document avec le bon encodage.
+// The site's charset meta stays within the detection window (first
+// 1024 bytes) AFTER injection: the guard inserts itself AFTER it —
+// the browser decodes the document with the right encoding.
 func TestGuardInjectsAfterCharsetMeta(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -557,24 +557,24 @@ func TestGuardInjectsAfterCharsetMeta(t *testing.T) {
 	metaPos := strings.Index(b, "charset=")
 	guardPos := strings.Index(b, "__cladoneAuthGuard")
 	if metaPos < 0 || metaPos >= 1024 {
-		t.Errorf("meta charset à %d, doit rester < 1024", metaPos)
+		t.Errorf("charset meta at %d, must stay < 1024", metaPos)
 	}
 	if guardPos < 0 {
-		t.Fatal("garde absente")
+		t.Fatal("guard missing")
 	}
 	if guardPos < metaPos {
-		t.Errorf("garde (%d) injectée AVANT le meta charset (%d)",
+		t.Errorf("guard (%d) injected BEFORE the charset meta (%d)",
 			guardPos, metaPos)
 	}
 	if !strings.Contains(b, "meta-ok") {
-		t.Error("corps du site altéré")
+		t.Error("site body altered")
 	}
 }
 
-// La payload JSON du garde est 100 % ASCII (non-ASCII échappé
-// \uXXXX, paires de substitution au-delà du BMP) : un label accentué
-// de la config ne devient jamais un mojibake, quel que soit
-// l'encodage déclaré par le site tiers.
+// The guard's JSON payload is 100 % ASCII (non-ASCII escaped
+// \uXXXX, surrogate pairs beyond the BMP): an accented label from
+// the config never becomes mojibake, whatever the encoding declared
+// by the third-party site.
 func TestGuardPayloadIsPureASCII(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -582,7 +582,7 @@ func TestGuardPayloadIsPureASCII(t *testing.T) {
 			"backend": "BACKEND",
 			"userBadge": {
 			  "claims": ["preferred_username", "prénom"],
-			  "logoutLabel": "Déconnexion ☺"
+			  "logoutLabel": "Log out ☺"
 			}
 		}]
 	}`)
@@ -592,24 +592,24 @@ func TestGuardPayloadIsPureASCII(t *testing.T) {
 
 	i := strings.Index(b, "var USERBADGE = ")
 	if i < 0 {
-		t.Fatal("payload USERBADGE absente")
+		t.Fatal("USERBADGE payload missing")
 	}
 	j := strings.Index(b[i:], ";")
 	payload := b[i : i+j]
 	for k, r := range payload {
 		if r > 0x7F {
-			t.Errorf("payload non-ASCII à %d: %q", k, payload[k:])
+			t.Errorf("non-ASCII payload at %d: %q", k, payload[k:])
 		}
 	}
-	if !strings.Contains(payload, `D\u00e9connexion`) {
-		t.Errorf("é non échappé: %.120s", payload)
+	if !strings.Contains(payload, `\u263a`) {
+		t.Errorf("☺ not escaped: %.120s", payload)
 	}
 }
 
-// Cache d'auth côté gateway : N requêtes avec les mêmes cookies =
-// UN SEUL aller-retour auth-bridge (les images d'une page lourde ne
-// doivent pas payer l'auth à chaque appel). Les échecs ne se cachent
-// pas (une reconnexion doit marcher immédiatement).
+// Gateway-side auth cache: N requests with the same cookies = ONE
+// auth-bridge round-trip (the images of a heavy page must not pay
+// auth on every call). Failures are not cached (a re-sign-in must
+// work immediately).
 func TestAuthCacheCollapsesBridgeCalls(t *testing.T) {
 	oldTTL := authCacheTTL
 	authCacheTTL = 5 * time.Second
@@ -647,16 +647,16 @@ func TestAuthCacheCollapsesBridgeCalls(t *testing.T) {
 		resp := doRequestWithHeaders(t, gw, "public.test", "/echo",
 			map[string]string{"Cookie": "access_token=tok"})
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("appel %d: status = %d, want 200", i, resp.StatusCode)
+			t.Fatalf("call %d: status = %d, want 200", i, resp.StatusCode)
 		}
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Errorf("auth-bridge appelé %d fois, want 1 (cache inefficace)", got)
+		t.Errorf("auth-bridge called %d times, want 1 (cache ineffective)", got)
 	}
 
-	// un échec ne se cache pas : une NOUVELLE session (cookie
-	// différent — un refresh/relogin change les cookies, donc la
-	// clé) doit re-consulter le bridge qui refuse
+	// a failure is not cached: a NEW session (different cookie — a
+	// refresh/relogin changes cookies, hence the key) must
+	// re-consult the bridge, which refuses
 	atomic.StoreInt32(&calls, 0)
 	deny := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -673,18 +673,18 @@ func TestAuthCacheCollapsesBridgeCalls(t *testing.T) {
 		resp := doRequestWithHeaders(t, gw2, "public.test", "/echo",
 			map[string]string{"Cookie": "access_token=tok2"})
 		if resp.StatusCode != http.StatusFound {
-			t.Fatalf("échec %d: status = %d, want 302", i, resp.StatusCode)
+			t.Fatalf("failure %d: status = %d, want 302", i, resp.StatusCode)
 		}
 	}
 	if got := atomic.LoadInt32(&calls); got != 3 {
-		t.Errorf("échecs appelés %d fois, want 3 (un échec s'est caché)", got)
+		t.Errorf("failures called %d times, want 3 (a failure got cached)", got)
 	}
 }
 
-// rateLimit / quota : fenêtre fixe par identité (utilisateur sinon
-// IP) — la 3e requête d'une fenêtre de 2 est refusée 429 + Retry-
-// After ; une AUTRE identité garde son propre bucket ; le When
-// scinde (les requêtes hors conditions ne consomment rien).
+// rateLimit / quota: fixed window per identity (user otherwise IP)
+// — the 3rd request of a window of 2 is refused 429 + Retry-After;
+// ANOTHER identity keeps its own bucket; the When splits (requests
+// outside the conditions consume nothing).
 func TestRateLimitAndQuota(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -695,7 +695,7 @@ func TestRateLimitAndQuota(t *testing.T) {
 		}]
 	}`)
 
-	// 2 premières : passent (200 proxifié), la 3e : 429
+	// first 2: pass (200 proxified), the 3rd: 429
 	for i := 0; i < 2; i++ {
 		resp := doRequestWithHeaders(t, gw, "public.test", "/echo",
 			map[string]string{"X-Forwarded-For": "1.2.3.4"})
@@ -709,18 +709,18 @@ func TestRateLimitAndQuota(t *testing.T) {
 		t.Fatalf("req 3: status = %d, want 429", resp.StatusCode)
 	}
 	if ra := resp.Header.Get("Retry-After"); ra == "" {
-		t.Error("429 sans Retry-After")
+		t.Error("429 without Retry-After")
 	}
 
-	// une AUTRE identité : son propre bucket
+	// ANOTHER identity: its own bucket
 	resp = doRequestWithHeaders(t, gw, "public.test", "/echo",
 		map[string]string{"X-Forwarded-For": "5.6.7.8"})
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("autre IP: status = %d, want 200", resp.StatusCode)
+		t.Fatalf("other IP: status = %d, want 200", resp.StatusCode)
 	}
 }
 
-// healthz + stats : endpoints d'exploitation gateway-servés.
+// healthz + stats: gateway-served operations endpoints.
 func TestHealthzAndStats(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -729,7 +729,7 @@ func TestHealthzAndStats(t *testing.T) {
 		}]
 	}`)
 
-	resp := doGet(t, gw, "nimporte.quel.host", "/healthz")
+	resp := doGet(t, gw, "any.host.at.all", "/healthz")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("healthz: status = %d, want 200", resp.StatusCode)
 	}
@@ -738,21 +738,21 @@ func TestHealthzAndStats(t *testing.T) {
 	}
 
 	doGet(t, gw, "public.test", "/echo")
-	resp = doGet(t, gw, "nimporte.quel.host", "/__gateway/stats")
+	resp = doGet(t, gw, "any.host.at.all", "/__gateway/stats")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stats: status = %d, want 200", resp.StatusCode)
 	}
 	b := body(t, resp)
 	if !strings.Contains(b, "authBridgeCalls") ||
 		!strings.Contains(b, "public.test") {
-		t.Errorf("stats incomplètes: %s", b)
+		t.Errorf("incomplete stats: %s", b)
 	}
 }
 
-// auth-bridge WEDGÉ (ne répond jamais) : la gateway ne doit pas gelée
-// — le checkAuth part en timeout (authBridgeClientTimeout) et la
-// route page répond 302 login (incident 2026-10-17 : auth-bridge en
-// busy-loop CPU = toutes les routes authentifiées mortes).
+// WEDGED auth-bridge (never answers): the gateway must not freeze
+// — checkAuth times out (authBridgeClientTimeout) and the page route
+// answers 302 login (2026-10-17 incident: auth-bridge in CPU
+// busy-loop = all authenticated routes dead).
 func TestHangingAuthBridgeTimesOut(t *testing.T) {
 	old := authBridgeClientTimeout
 	authBridgeClientTimeout = 300 * time.Millisecond
@@ -761,10 +761,10 @@ func TestHangingAuthBridgeTimesOut(t *testing.T) {
 	release := make(chan struct{})
 	hang := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			<-release // ne répond jamais… sauf au cleanup
+			<-release // never answers… except at cleanup
 		},
 	))
-	// Server.Close attend les handlers en cours : relâche-les avant.
+	// Server.Close waits for in-flight handlers: release them first.
 	t.Cleanup(func() {
 		close(release)
 		hang.Close()
@@ -778,8 +778,8 @@ func TestHangingAuthBridgeTimesOut(t *testing.T) {
 		}]
 	}`
 
-	// gateway avec auth-bridge pointant sur le serveur qui hangue :
-	// construction manuelle (le helper pointe vers son propre stub).
+	// gateway with auth-bridge pointing at the hanging server:
+	// manual construction (the helper points at its own stub).
 	srv := upstreamTestServer(t)
 	routesJSON = strings.ReplaceAll(routesJSON, "BACKEND", srv.URL)
 	cfg := loadForTest(t, routesJSON)
@@ -794,16 +794,16 @@ func TestHangingAuthBridgeTimesOut(t *testing.T) {
 	elapsed := time.Since(start)
 
 	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("status = %d, want 302 (login) après timeout", resp.StatusCode)
+		t.Fatalf("status = %d, want 302 (login) after timeout", resp.StatusCode)
 	}
 	if elapsed > 3*time.Second {
-		t.Errorf("réponse en %v, want < 3s (timeout non appliqué)", elapsed)
+		t.Errorf("response in %v, want < 3s (timeout not applied)", elapsed)
 	}
 }
 
-// L'auth gateway (auth: {}) reste orthogonal à l'upstream : sans
-// identité, la requête est refusée AVANT d'atteindre le backend
-// (route page → 302 login, backend jamais contacté).
+// The gateway auth (auth: {}) stays orthogonal to the upstream:
+// without identity, the request is refused BEFORE reaching the
+// backend (page route → 302 login, backend never contacted).
 func TestUpstreamAuthStillEnforced(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -814,24 +814,24 @@ func TestUpstreamAuthStillEnforced(t *testing.T) {
 		}]
 	}`)
 
-	// auth-bridge stub injoignable → échec d'auth → la route page
-	// (frontend) répond 302 vers le login.
+	// unreachable auth-bridge stub → auth failure → the page route
+	// (frontend) answers 302 toward the login.
 	resp := doGet(t, gw, "public.test", "/echo")
 	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("status = %d, want 302 (redirection login)", resp.StatusCode)
+		t.Fatalf("status = %d, want 302 (login redirect)", resp.StatusCode)
 	}
 	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, testLoginURL) {
-		t.Errorf("Location = %q, want préfixe %q", loc, testLoginURL)
+		t.Errorf("Location = %q, want prefix %q", loc, testLoginURL)
 	}
 }
 
-// --- Compression (incident 2026-10-17 : Cloudflare répondait brotli
-// au navigateur, l'injecteur manipulait le corps compressé → page
-// illisible malgré un 200). ---
+// --- Compression (2026-10-17 incident: Cloudflare answered brotli
+// to the browser, the injector manipulated the compressed body →
+// unreadable page despite a 200). ---
 
-// Route injectable + origine qui répond gzip : le navigateur reçoit
-// du HTML EN CLAIR (décompressé), garde injectée, Content-Encoding
-// retiré — quoi qu'offre le navigateur.
+// Injectable route + gzip-answering origin: the browser receives
+// PLAIN (decompressed) HTML, guard injected, Content-Encoding
+// removed — whatever the browser offers.
 func TestInjectableRouteServesPlainHTMLFromGzip(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -848,20 +848,20 @@ func TestInjectableRouteServesPlainHTMLFromGzip(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	if got := resp.Header.Get("Content-Encoding"); got != "" {
-		t.Errorf("Content-Encoding survit: %q (page illisible)", got)
+		t.Errorf("Content-Encoding survives: %q (unreadable page)", got)
 	}
 	b := body(t, resp)
 	if !strings.Contains(b, "gzip-ok") {
-		t.Errorf("HTML non décompressé: %.80q", b)
+		t.Errorf("HTML not decompressed: %.80q", b)
 	}
 	if !strings.Contains(b, "__cladoneAuthGuard") {
-		t.Error("garde non injectée sur le HTML gzip décompressé")
+		t.Error("guard not injected on the decompressed gzip HTML")
 	}
 }
 
-// Route injectable : l'Accept-Encoding sortant est FORCÉ à gzip
-// (décodable en stdlib — brotli/zstd ne le sont pas), quel que soit
-// l'offre du navigateur.
+// Injectable route: the outgoing Accept-Encoding is FORCED to gzip
+// (decodable by the stdlib — brotli/zstd are not), whatever the
+// browser's offer.
 func TestInjectableRouteForcesAcceptEncodingGzip(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -879,8 +879,9 @@ func TestInjectableRouteForcesAcceptEncodingGzip(t *testing.T) {
 	}
 }
 
-// Route NON injectable (API sans garde/PWA) : l'Accept-Encoding du
-// client traverse tel quel (passthrough optimal inchangé).
+// NON-injectable route (API without guard/PWA): the client's
+// Accept-Encoding goes through as-is (unchanged optimal
+// passthrough).
 func TestNonInjectedRouteKeepsClientAcceptEncoding(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -897,9 +898,9 @@ func TestNonInjectedRouteKeepsClientAcceptEncoding(t *testing.T) {
 	}
 }
 
-// Contenu indécodable (brotli qui aurait franchi le forçage) : la
-// réponse passe INTACTE — jamais d'octets compressés manipulés, pas
-// de garde injectée dedans.
+// Undecodable content (brotli that got past the forcing): the
+// response passes INTACT — never manipulated compressed bytes, no
+// guard injected into them.
 func TestIndecodableEncodingPassthrough(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -915,12 +916,12 @@ func TestIndecodableEncodingPassthrough(t *testing.T) {
 	}
 	b := body(t, resp)
 	if !strings.Contains(b, "__cladoneAuthGuard") {
-		t.Logf("corps brotli servi tel quel (garde absente, attendu)")
+		t.Logf("brotli body served as-is (guard absent, expected)")
 	}
 }
 
-// Asset non-HTML servi gzip : jamais décompressé — passthrough
-// compressé jusqu'au navigateur (Content-Encoding préservé).
+// Non-HTML asset served gzip: never decompressed — compressed
+// passthrough up to the browser (Content-Encoding preserved).
 func TestGzippedAssetPassthrough(t *testing.T) {
 	gw, _ := upstreamGateway(t, `{
 		"routes": [{
@@ -943,13 +944,13 @@ func TestGzippedAssetPassthrough(t *testing.T) {
 	}
 	zr, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
-		t.Fatalf("corps asset n'est plus du gzip valide: %v", err)
+		t.Fatalf("asset body is no longer valid gzip: %v", err)
 	}
 	dec, err := io.ReadAll(zr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(dec), "console.log('gz');") {
-		t.Errorf("contenu asset corrompu: %.60q", dec)
+		t.Errorf("asset content corrupted: %.60q", dec)
 	}
 }

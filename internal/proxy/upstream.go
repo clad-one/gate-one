@@ -9,20 +9,19 @@ import (
 	"cladone/gateway/internal/core"
 )
 
-// applyUpstreamDirector finalise la requête sortante selon la policy
-// upstream d'une route. L'en-tête Host suit la policy : défaut
-// historique = host public préservé (backends du réseau interne,
-// ligne req.Host = u.Host longtemps laissée commentée dans le
-// Director) ; upstream.host/hostOverride = origine backend — requis
-// pour un site externe qui route par Host (ex. Cloudflare). La
-// négociation TLS/SNI, elle, vise toujours l'origine du backend
-// (transport standard de Go, dérivé de req.URL).
+// applyUpstreamDirector finalizes the outgoing request according to
+// a route's upstream policy. The Host header follows the policy:
+// historical default = public host preserved (internal-network
+// backends, the req.Host = u.Host line left commented out for a
+// long time in the Director); upstream.host/hostOverride = backend
+// origin — required for an external site that routes by Host (e.g.
+// Cloudflare). TLS/SNI negotiation, however, always targets the
+// backend origin (Go's standard transport, derived from req.URL).
 //
-// Les en-têtes statiques sont posés en Set (écrasent la valeur
-// éventuellement envoyée par le client) ; valeur "" = en-tête
-// supprimé de la requête (jamais transmis vide). Jamais de
-// journalisation de ces valeurs (secrets : basic auth, service
-// tokens).
+// Static headers are set with Set (overwriting any value sent by
+// the client); value "" = header removed from the request (never
+// transmitted empty). These values are never logged (secrets:
+// basic auth, service tokens).
 func applyUpstreamDirector(
 	up *core.UpstreamPolicy,
 	backend *url.URL,
@@ -45,15 +44,15 @@ func applyUpstreamDirector(
 	}
 }
 
-// upstreamResponseModifier retourne le modificateur de réponse de la
-// policy upstream : réécriture des Location absolues visant l'origine
-// backend vers le host public (sinon le navigateur quitterait le
-// proxy dès la première redirection absolue du site cible), puis
-// ajustement des en-têtes de réponse (set/remove — ex. retirer un
-// Content-Security-Policy d'origine qui bloquerait les balises
-// injectées). Installé EN AMONT des injections garde/PWA dans la
-// chaîne ModifyResponse (celles-ci ne touchent que le corps des 200
-// HTML — l'ordre reste sans effet sur elles).
+// upstreamResponseModifier returns the upstream policy's response
+// modifier: rewriting of absolute Locations targeting the backend
+// origin toward the public host (otherwise the browser would leave
+// the proxy at the target site's first absolute redirect), then
+// adjustment of response headers (set/remove — e.g. removing an
+// origin Content-Security-Policy that would block the injected
+// tags). Installed UPSTREAM of the guard/PWA injections in the
+// ModifyResponse chain (those only touch 200 HTML bodies — the
+// order has no effect on them).
 func upstreamResponseModifier(
 	route *core.Route,
 	backend *url.URL,
@@ -89,12 +88,12 @@ func upstreamResponseModifier(
 	}
 }
 
-// rewriteUpstreamLocation réécrit sur place l'en-tête Location de la
-// réponse quand il vise l'origine du backend en absolu
-// (schéma://backend.host/...) : schéma public https, host public,
-// chemin/query/fragment préservés. Les Location relatives et celles
-// visant une autre origine (ex. domaine d'équipe Cloudflare Access)
-// passent intactes.
+// rewriteUpstreamLocation rewrites the response's Location header
+// in place when it targets the backend origin in absolute form
+// (scheme://backend.host/...): public https scheme, public host,
+// path/query/fragment preserved. Relative Locations and those
+// targeting another origin (e.g. a Cloudflare Access team domain)
+// pass untouched.
 func rewriteUpstreamLocation(
 	backend *url.URL,
 	publicHost string,
@@ -108,12 +107,12 @@ func rewriteUpstreamLocation(
 
 	ru, err := url.Parse(loc)
 	if err != nil || ru.Host == "" {
-		return // relative (ou imparsable) : rien à réécrire
+		return // relative (or unparseable): nothing to rewrite
 	}
 
-	// Seules les redirections vers la propre origine du backend sont
-	// ramenées au host public — une autre origine ne nous appartient
-	// pas (ex. login Cloudflare Access sur le domaine d'équipe).
+	// Only redirects toward the backend's own origin are brought
+	// back to the public host — another origin does not belong to
+	// us (e.g. Cloudflare Access login on the team domain).
 	if ru.Host != backend.Host ||
 		(ru.Scheme != "" && ru.Scheme != backend.Scheme) {
 		return
@@ -125,9 +124,10 @@ func rewriteUpstreamLocation(
 	resp.Header.Set("Location", ru.String())
 }
 
-// noms de cookies réservés à la session gateway (posés par auth-bridge
-// sur le même host public que tout site proxifié) : un Set-Cookie de
-// l'origine portant l'un d'eux écraserait l'auth du navigateur.
+// cookie names reserved for the gateway session (set by auth-bridge
+// on the same public host as every proxified site): a Set-Cookie
+// from the origin carrying one of them would overwrite the
+// browser's auth.
 var reservedCookieNames = map[string]bool{
 	"access_token":  true,
 	"refresh_token": true,
@@ -135,16 +135,16 @@ var reservedCookieNames = map[string]bool{
 	"session":       true,
 }
 
-// rewriteUpstreamCookies traduit les Set-Cookie posés par l'origine
-// vers le host public (policy upstream.rewriteCookies). Un attribut
-// Domain visant l'hôte d'origine (ou un parent) est rejeté par le
-// navigateur depuis le host public : mode "rewrite" = transposé vers
-// le host public (le périmètre de partage — hôte + sous-domaines —
-// est fidèlement traduit), mode "strip" = attribut retiré (host-only
-// sur le host public). Les autres cookies passent intacts — chirurgie
-// textuelle sur la ligne d'origine : les autres attributs (Path,
-// Secure, HttpOnly, SameSite, Expires…) sortent à l'octet près.
-// En-têtes uniquement : aucun impact corps/flux.
+// rewriteUpstreamCookies translates Set-Cookies set by the origin
+// toward the public host (upstream.rewriteCookies policy). A Domain
+// attribute targeting the origin host (or a parent) is rejected by
+// the browser from the public host: "rewrite" mode = transposed to
+// the public host (the sharing scope — host + subdomains — is
+// faithfully translated), "strip" mode = attribute removed
+// (host-only on the public host). Other cookies pass intact —
+// textual surgery on the original line: the other attributes (Path,
+// Secure, HttpOnly, SameSite, Expires…) come out byte-exact.
+// Headers only: no body/stream impact.
 func rewriteUpstreamCookies(
 	route *core.Route,
 	backend *url.URL,
@@ -163,9 +163,9 @@ func rewriteUpstreamCookies(
 		name, _, _ := strings.Cut(line, "=")
 		name = strings.TrimSpace(name)
 		if reservedCookieNames[name] {
-			// le nom jamais la valeur
+			// the name, never the value
 			log.Printf(
-				"COOKIE dropped host=%s: nom réservé %q — un Set-Cookie de l'origine écraserait la session gateway",
+				"COOKIE dropped host=%s: reserved name %q — an origin Set-Cookie would overwrite the gateway session",
 				route.Host, name)
 			continue
 		}
@@ -175,14 +175,14 @@ func rewriteUpstreamCookies(
 	resp.Header["Set-Cookie"] = out
 }
 
-// rewriteCookieDomain applique la règle Domain d'un Set-Cookie :
-// Domain visant l'hôte d'origine (égal ou parent) → réécrit vers le
-// host public ("rewrite") ou retiré ("strip") ; tout le reste sort à
-// l'octet près.
+// rewriteCookieDomain applies a Set-Cookie's Domain rule: a Domain
+// targeting the origin host (equal or parent) → rewritten to the
+// public host ("rewrite") or removed ("strip"); everything else
+// comes out byte-exact.
 func rewriteCookieDomain(line, originHost, publicHost, mode string) string {
 
-	// attributs : à partir du premier ';' hors guillemets (une valeur
-	// citée peut en contenir)
+	// attributes: from the first ';' outside quotes (a quoted value
+	// may contain one)
 	domainStart, domainEnd := -1, -1
 	off := nextUnquotedSemicolon(line)
 	for off >= 0 {
@@ -199,36 +199,36 @@ func rewriteCookieDomain(line, originHost, publicHost, mode string) string {
 		key, val, _ := strings.Cut(attr, "=")
 		if strings.EqualFold(strings.TrimSpace(key), "domain") {
 			dv := strings.Trim(strings.TrimSpace(val), `"`)
-			dv = strings.TrimPrefix(dv, ".") // forme RFC historique .host
+			dv = strings.TrimPrefix(dv, ".") // historical RFC .host form
 			dv = strings.ToLower(dv)
 			if dv == originHost || strings.HasSuffix(originHost, "."+dv) {
 				domainStart, domainEnd = off, attrEnd
 			}
-			break // premier attribut Domain : les suivants sont illégaux
+			break // first Domain attribute: subsequent ones are illegal
 		}
 		if attrEnd >= len(line) {
-			break // dernier attribut traité
+			break // last attribute processed
 		}
-		// attrEnd = index du ';' ouvrant l'attribut suivant — l'itération
-		// suivante examine celui qui le suit (off+1)
+		// attrEnd = index of the ';' opening the next attribute — the
+		// next iteration examines the one following it (off+1)
 		off = attrEnd
 	}
 	if domainStart < 0 {
-		return line // pas de Domain visant l'origine : intact
+		return line // no Domain targeting the origin: untouched
 	}
 
 	if mode == "strip" {
-		// l'attribut ET son séparateur partent ensemble
+		// the attribute AND its separator leave together
 		return line[:domainStart] + line[domainEnd:]
 	}
-	// la VALEUR seule est remplacée : la clé "Domain=" d'origine
-	// (casse, espacement) sort telle quelle
+	// only the VALUE is replaced: the original "Domain=" key (case,
+	// spacing) comes out as-is
 	eq := domainStart + strings.Index(line[domainStart:domainEnd], "=")
 	return line[:eq+1] + publicHost + line[domainEnd:]
 }
 
-// nextUnquotedSemicolon : index du premier ';' hors valeur citée, -1
-// si aucun.
+// nextUnquotedSemicolon: index of the first ';' outside a quoted
+// value, -1 if none.
 func nextUnquotedSemicolon(s string) int {
 	inQuote := false
 	for i := 0; i < len(s); i++ {

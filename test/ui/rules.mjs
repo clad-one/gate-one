@@ -1,14 +1,14 @@
-// Suite uiGate : règles config (sélecteur + identité + auth/hidden),
-// précédence markup > config, ET entre règles, invalid-safe.
+// uiGate suite: config rules (selector + identity + auth/hidden),
+// markup precedence > config, AND across rules, invalid-safe.
 import { renderGuard, mkWindow, tick } from "./harness.mjs";
 
 let failures = 0;
 const ok = (label) => console.log("OK  " + label);
-const fail = (m) => { console.error("ÉCHEC " + m); failures++; };
+const fail = (m) => { console.error("FAIL " + m); failures++; };
 
 const html = `<!DOCTYPE html><html><head></head><body>
 <div>
-  <span id="legend">Légende</span>
+  <span id="legend">Legend</span>
   <span id="both" data-gtw-roles="admin">Both</span>
   <input type="checkbox" id="rule_before">
   <input type="checkbox" id="rule_hidden">
@@ -19,8 +19,8 @@ const html = `<!DOCTYPE html><html><head></head><body>
 
 const RULES = [
   { selector: "#legend", roles: ["offline_access"] },
-  { selector: "#legend", scopes: ["profile"] },          // 2e règle → ET
-  { selector: "#both", roles: ["gold"] },                // précédence markup
+  { selector: "#legend", scopes: ["profile"] },          // 2nd rule → AND
+  { selector: "#both", roles: ["gold"] },                // markup precedence
   { selector: "#rule_before", auth: "before" },
   { selector: "#rule_hidden", hidden: "before" },
   { selector: "#rule_hidden_box", hidden: "before" },
@@ -29,69 +29,69 @@ const RULES = [
 
 const GUARD = renderGuard({ uiGate: JSON.stringify(RULES) });
 
-// ── 1. conforme : legend visible (rôle ✓ ET scope ✓) ; précédence ; invalid-safe ──
+// ── 1. conforming: legend visible (role ✓ AND scope ✓); precedence; invalid-safe ──
 {
   const x = await mkWindow(GUARD, html, {
     roles: ["offline_access"], scopes: ["profile"], claims: {},
   });
   x.doc.getElementById("legend").style.display !== "none"
-    ? ok("uiGate conforme → visible (règles en ET)")
-    : fail("legend devrait être visible (offline_access ✓ + profile ✓)");
+    ? ok("uiGate conforming → visible (rules in AND)")
+    : fail("legend should be visible (offline_access ✓ + profile ✓)");
   x.doc.getElementById("both").style.display !== "none"
-    ? fail("both visible sans admin (le markup data-gtw-roles doit gagner sur la règle gold)")
-    : ok("précédence markup : data-gtw-roles gagne sur la règle uiGate");
+    ? fail("both visible without admin (the data-gtw-roles markup must win over the gold rule)")
+    : ok("markup precedence: data-gtw-roles wins over the uiGate rule");
   x.doc.getElementById("bystander").style.display !== "none"
-    ? ok("élément non visé inchangé")
-    : fail("bystander masqué à tort");
+    ? ok("untargeted element unchanged")
+    : fail("bystander wrongly hidden");
   x.doc.documentElement.classList.contains("cladone-evaluated")
-    ? ok("évaluation posée (cladone-evaluated)")
-    : fail("cladone-evaluated absent");
+    ? ok("evaluation set (cladone-evaluated)")
+    : fail("cladone-evaluated missing");
 }
 
-// ── 2. non conforme : legend masquée ──
+// ── 2. non-conforming: legend hidden ──
 {
   const x = await mkWindow(GUARD, html, { roles: [], scopes: [], claims: {} });
   x.doc.getElementById("legend").style.display !== "none"
-    ? fail("legend visible sans les conditions")
-    : ok("uiGate non conforme → masqué");
+    ? fail("legend visible without the conditions")
+    : ok("uiGate non-conforming → hidden");
 }
 
-// ── 3. règle auth=before : clic neutralisé + onglet (anonyme) ──
+// ── 3. auth=before rule: click neutralized + tab (anonymous) ──
 {
   const x = await mkWindow(GUARD, html, null);
   x.click(x.doc.getElementById("rule_before"));
   await tick();
   x.st.openCalls === 1
-    ? ok("règle auth=before → onglet direct")
-    : fail(`règle auth=before: openCalls=${x.st.openCalls} (want 1)`);
+    ? ok("auth=before rule → direct tab")
+    : fail(`auth=before rule: openCalls=${x.st.openCalls} (want 1)`);
   x.doc.getElementById("rule_before").checked
-    ? fail("règle auth=before: la case a été cochée (clic non neutralisé)")
-    : ok("règle auth=before → clic neutralisé");
+    ? fail("auth=before rule: the box was ticked (click not neutralized)")
+    : ok("auth=before rule → click neutralized");
 }
 
-// ── 4. règle hidden=before : neutralisation + bannière, jamais d'onglet ──
+// ── 4. hidden=before rule: neutralization + banner, never a tab ──
 {
   const x = await mkWindow(GUARD, html, null);
   x.click(x.doc.getElementById("rule_hidden"));
   await tick();
   x.doc.getElementById("rule_hidden").checked
-    ? fail("hidden=before: pré-cochage du contrôle masqué !")
-    : ok("hidden=before : pas de pré-cochage");
+    ? fail("hidden=before: pre-ticking of the hidden control!")
+    : ok("hidden=before: no pre-tick");
   x.banner()
-    ? ok("hidden=before → bannière")
-    : fail("hidden=before: bannière attendue");
+    ? ok("hidden=before → banner")
+    : fail("hidden=before: banner expected");
   x.st.openCalls === 0
-    ? ok("hidden=before : jamais d'onglet")
+    ? ok("hidden=before: never a tab")
     : fail(`hidden=before: openCalls=${x.st.openCalls} (want 0)`);
-  // via label (activation synthétique) → même neutralisation
+  // via label (synthetic activation) → same neutralization
   x.click(x.doc.getElementById("rule_hidden_label"));
   await tick();
   x.doc.getElementById("rule_hidden_box").checked
-    ? fail("hidden=before: la box du label a été cochée via activation label")
-    : ok("hidden=before via label → neutralisé aussi");
+    ? fail("hidden=before: the label's box was ticked via label activation")
+    : ok("hidden=before via label → neutralized too");
 }
 
-// ── 5. authentifié : les règles passent en passthrough natif ──
+// ── 5. authenticated: rules go into native passthrough ──
 {
   const x = await mkWindow(GUARD, html, {
     roles: ["offline_access"], scopes: ["profile"], claims: {},
@@ -100,14 +100,14 @@ const GUARD = renderGuard({ uiGate: JSON.stringify(RULES) });
   x.click(x.doc.getElementById("rule_before"));
   await tick();
   x.st.openCalls === before
-    ? ok("authentifié : les règles ne déclenchent plus rien (passthrough)")
-    : fail("authentifié: une règle a ouvert un onglet");
+    ? ok("authenticated: rules no longer trigger anything (passthrough)")
+    : fail("authenticated: a rule opened a tab");
   x.doc.getElementById("rule_before").checked
-    ? ok("authentifié : clics natifs")
-    : fail("authentifié: le clic natif n'a pas eu lieu");
+    ? ok("authenticated: native clicks")
+    : fail("authenticated: the native click did not happen");
 }
 
 console.log(
-  failures === 0 ? "SUITE UIGATE OK" : `SUITE UIGATE : ${failures} échec(s)`
+  failures === 0 ? "UIGATE SUITE OK" : `UIGATE SUITE: ${failures} failure(s)`
 );
 globalThis.__uiFailures = (globalThis.__uiFailures || 0) + failures;

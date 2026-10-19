@@ -20,13 +20,13 @@ import (
 // Virtual prefix served by the gateway itself, before any route proxying.
 const PathPrefix = "/__gateway_pwa/"
 
-// SwURL : URL du service worker unifié (PWA et/ou réécriture client),
-// servi par la gateway en pré-authentification, pass-through no-cache,
-// scope demandé '/'. Partagé par l'injection PWA et le script de
-// garde.
+// SwURL: URL of the unified service worker (PWA and/or client-side
+// rewriting), served by the gateway pre-authentication,
+// pass-through no-cache, requested scope '/'. Shared by the PWA
+// injection and the guard script.
 const SwURL = PathPrefix + "sw.js"
 
-// SwFile : composant du chemin du SW sous le préfixe virtuel.
+// SwFile: path component of the SW under the virtual prefix.
 const SwFile = "sw.js"
 
 //go:embed workbox
@@ -35,28 +35,29 @@ var workboxFS embed.FS
 // workboxVersion must match the vendored build in workbox/.
 const workboxVersion = "7.4.1"
 
-// apiCacheLogicVersion versionne le FORMAT des entrées du cache API
-// (forme de la clé, en-têtes stockés, logique de storeCompleteResponse).
-// L'incrémenter quand la logique de stockage change : les caches
-// existants seront purgés à l'activation du nouveau SW. Il est
-// volontairement indépendant du hash du SW, pour qu'un déploiement qui
-// ne touche pas ce format ne vide pas le replay offline.
+// apiCacheLogicVersion versions the FORMAT of the API cache entries
+// (key shape, stored headers, storeCompleteResponse logic).
+// Increment it when the storage logic changes: the existing caches
+// will be purged at the new SW's activation. It is deliberately
+// independent of the SW hash, so that a deployment that does not
+// touch this format does not wipe the offline replay.
 const apiCacheLogicVersion = "1"
 
-// apiCachePolicyJSON sérialise la politique déclarative d'un endpoint
-// apiCache pour le hash de son cache : toute reconfiguration du bloc
-// dans api-routes.json change le hash, donc le nom du cache.
+// apiCachePolicyJSON serializes the declarative policy of an apiCache
+// endpoint for its cache's hash: any reconfiguration of the block
+// in api-routes.json changes the hash, hence the cache name.
 func apiCachePolicyJSON(c any) []byte {
 	data, _ := json.Marshal(c)
 	return data
 }
 
-// RewriteSpec : données de réécriture client (upstream.rewriteBody de
-// la route), sérialisées dans le service worker généré. Origins sont
-// les hosts d'origine dont les URLs absolues sont interceptées ;
-// Target la base de remplacement par défaut ("https://host.public") ;
-// Except les exceptions de préfixe de chemin (triées : préfixe le plus
-// long d'abord), dont les entrées sans To restent à l'origine.
+// RewriteSpec: client-side rewriting data (the route's
+// upstream.rewriteBody), serialized into the generated service
+// worker. Origins are the origin hosts whose absolute URLs are
+// intercepted; Target the default replacement base
+// ("https://public.host"); Except the path-prefix exceptions
+// (sorted: longest prefix first), whose entries without To remain
+// at the origin.
 type RewriteSpec struct {
 	Origins []string             `json:"origins"`
 	Target  string               `json:"target"`
@@ -68,11 +69,11 @@ type Handler struct {
 	rw     *RewriteSpec
 }
 
-// New construit le handler client-runtime d'une route. policy=nil (ou
-// désactivée) avec rw non nil = SW purement pass-through de réécriture
-// (aucun cache) ; policy active = SW workbox complet, avec la
-// réécriture branchée au-dessus quand rw est fourni (paramètre
-// optionnel — les routes non rewritées ne le passent pas).
+// New builds a route's client-runtime handler. policy=nil (or
+// disabled) with non-nil rw = purely rewriting pass-through SW
+// (no cache); active policy = full workbox SW, with the rewriting
+// wired on top when rw is provided (optional parameter —
+// non-rewritten routes do not pass it).
 func New(policy *core.PWAPolicy, rw ...*RewriteSpec) *Handler {
 	h := &Handler{policy: policy}
 	if len(rw) > 0 {
@@ -81,7 +82,7 @@ func New(policy *core.PWAPolicy, rw ...*RewriteSpec) *Handler {
 	return h
 }
 
-// rwEnabled : la route porte-t-elle la réécriture client ?
+// rwEnabled: does the route carry client-side rewriting?
 func (h *Handler) rwEnabled() bool { return h.rw != nil }
 
 func (h *Handler) manifest() []byte {
@@ -139,32 +140,33 @@ func (h *Handler) manifest() []byte {
 // are cached keyed by request and replayed offline.
 func (h *Handler) swJS() string {
 
-	// SW pass-through de réécriture (rewriteBody sans PWA) : aucune
-	// mise en cache, aucune interception hors cibles ; seule la
-	// politique de réécriture de la route pilote les fetch.
+	// Rewriting pass-through SW (rewriteBody without PWA): no
+	// caching, no interception outside targets; only the route's
+	// rewriting policy drives the fetches.
 	if h.rwEnabled() && (h.policy == nil || !h.policy.Enabled) {
 		return h.plainRewriteSW()
 	}
 
-	// Passe 1 : générer le corps avec le placeholder CACHE_VERSION.
-	// Ce hash ne versionne que ASSETS_CACHE (pages/scripts/styles).
-	// Les caches API sont versionnés indépendamment, par endpoint :
-	// cf. apiCacheRouteJS (hash du bloc de config + apiCacheLogicVersion)
-	// pour que le replay offline survive aux déploiements sans rapport.
+	// Pass 1: generate the body with the CACHE_VERSION placeholder.
+	// This hash only versions ASSETS_CACHE (pages/scripts/styles).
+	// API caches are versioned independently, per endpoint:
+	// see apiCacheRouteJS (hash of the config block +
+	// apiCacheLogicVersion) so that the offline replay survives
+	// unrelated deployments.
 	body := `importScripts('` + PathPrefix + `workbox/workbox-sw.js');
 
 workbox.setConfig({ modulePathPrefix: '` + PathPrefix + `workbox/' });
 
-// Version de l'ensemble des caches = hash du contenu même de ce SW :
-// tout changement (config, générateur, champ version d'un apiCache)
-// change le hash => nouveaux noms de caches => purge des anciens à
-// l'activation. Aucun changement => mêmes caches, le replay offline
-// survit aux fermetures d'onglets.
+// Version of the whole cache set = hash of this SW's very content:
+// any change (config, generator, an apiCache's version field)
+// changes the hash => new cache names => purge of the old ones at
+// activation. No change => same caches, the offline replay
+// survives tab closures.
 const CACHE_VERSION = '@@CACHE_VERSION@@';
 const ASSETS_CACHE = 'gateway-pwa-assets-' + CACHE_VERSION;
 
-// prend la main dès l'installation : la mise à jour est effective au
-// chargement suivant, sans attendre la fermeture de tous les onglets
+// takes control as soon as installed: the update takes effect at
+// the next load, without waiting for all tabs to close
 self.skipWaiting();
 
 self.addEventListener('activate', (event) => {
@@ -174,11 +176,11 @@ self.addEventListener('activate', (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            // Purger uniquement les caches dont on connaît le régime de
-            // version : assets = hash du SW (CACHE_VERSION) ; api = la
-            // version est encodée dans le nom (v<logique>-<hash>) et la
-            // purge par CACHE_VERSION ne doit PAS les toucher — seuls
-            // les caches API au format périmé sont supprimés.
+            // Purge only the caches whose versioning scheme we
+            // know: assets = SW hash (CACHE_VERSION); api = the
+            // version is encoded in the name (v<logic>-<hash>) and
+            // the CACHE_VERSION purge must NOT touch them — only
+            // API caches with the outdated format are deleted.
             .filter((k) =>
               (k.startsWith('gateway-pwa-assets-') && !k.includes(CACHE_VERSION)) ||
               (k.startsWith('gateway-pwa-api-') &&
@@ -191,11 +193,11 @@ self.addEventListener('activate', (event) => {
 });
 
 if (workbox) {
-  // Stratégie pour les pages et les assets, déclarée dans la politique
-  // pwa.assets de la route (défaut : staleWhileRevalidate — le cache
-  // répond instantanément, le réseau rafraîchit en arrière-plan ; le
-  // CACHE_VERSION purgé à l'activation garantit la fraîcheur après
-  // déploiement).
+  // Strategy for pages and assets, declared in the route's
+  // pwa.assets policy (default: staleWhileRevalidate — the cache
+  // answers instantly, the network refreshes in the background; the
+  // CACHE_VERSION purged at activation guarantees freshness after
+  // deployment).
 @@NETWORK_ONLY@@
   workbox.routing.registerRoute(
     ({request}) => request.destination === 'document' || request.destination === 'script' || request.destination === 'style',
@@ -203,38 +205,40 @@ if (workbox) {
       cacheName: ASSETS_CACHE@@ASSETS_OPTIONS@@
     })
   );
-  // marqueur diagnostic étape 1: routes networkOnly + assets enregistrées
+  // diagnostic marker step 1: networkOnly + assets routes registered
   caches.open('gateway-pwa-debug').then((c) => c.put('/step1-assets-route', new Response('ok')));
-  // marqueur diagnostic étape 2: apiCache va démarrer
+  // diagnostic marker step 2: apiCache about to start
   caches.open('gateway-pwa-debug').then((c) => c.put('/step2-before-apicache', new Response('ok')));
 ` + h.apiCacheJS() + `
-  // marqueur de diagnostic: le SW a chargé toutes ses routes
+  // diagnostic marker: the SW has loaded all its routes
   caches.open('gateway-pwa-debug').then((c) => c.put('/__routes_loaded', new Response('ok')));
   }
-self.addEventListener('fetch', () => {}); // no-op: forcer l'attachement du listener
+self.addEventListener('fetch', () => {}); // no-op: force listener attachment
 `
 
-	// Stratégie des assets, déclarative (pwa.assets).
+	// Assets strategy, declarative (pwa.assets).
 	strategy, timeout := h.policy.EffectiveAssets()
 	opts := ""
 	if timeout > 0 {
 		opts = ",\n      networkTimeoutSeconds: " + fmtInt(timeout)
 	}
-	// La politique résolue donne déjà le nom exact de la classe
-	// workbox (cf. EffectiveAssets).
+	// The resolved policy already gives the exact workbox class
+	// name (see EffectiveAssets).
 	body = strings.ReplaceAll(body, "ASSETS_STRATEGY", strategy)
 	body = strings.ReplaceAll(body, "@@ASSETS_OPTIONS@@", opts)
 
-	// Exclusions réseau-seul, déclaratives (pwa.networkOnly) — rien
-	// n'est en dur : quelles URLs ne jamais cacher est un choix de
-	// déploiement (la gateway supporte tout serveur d'authentification).
+	// Network-only exclusions, declarative (pwa.networkOnly) —
+	// nothing is hard-coded: which URLs to never cache is a
+	// deployment choice (the gateway supports any authentication
+	// server).
 	body = strings.ReplaceAll(body, "@@NETWORK_ONLY@@", h.networkOnlyJS())
 
-	// Réécriture client (upstream.rewriteBody) : données + interception
-	// raw, insérées AVANT routes workbox. Celles-ci excluent les cibles
-	// de réécriture — sinon double respondWith (listener raw + router)
-	// et cache cross-origin erroné. Le JSON de config fait partie du
-	// hash du SW : reconfigurer rewriteBody renouvelle les caches.
+	// Client-side rewriting (upstream.rewriteBody): data + raw
+	// interception, inserted BEFORE the workbox routes. The latter
+	// exclude the rewrite targets — otherwise double respondWith
+	// (raw listener + router) and wrong cross-origin caching. The
+	// config JSON is part of the SW hash: reconfiguring rewriteBody
+	// renews the caches.
 	if h.rwEnabled() {
 		body = strings.ReplaceAll(
 			body,
@@ -248,40 +252,40 @@ self.addEventListener('fetch', () => {}); // no-op: forcer l'attachement du list
 		)
 	}
 
-	// Passe 2 : hash du corps (placeholder inclus), puis substitution.
+	// Pass 2: hash of the body (placeholder included), then substitution.
 	version := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))[:8]
 	body = strings.ReplaceAll(body, "@@CACHE_VERSION@@", version)
 
-	js := `// Généré par la gateway — workbox ` + workboxVersion + ` auto-hébergé
-// version caches: ` + version + "\n" + body
+	js := `// Generated by the gateway — workbox ` + workboxVersion + ` self-hosted
+// caches version: ` + version + "\n" + body
 	return js
 }
 
-// SwJS : le service worker généré, exposé aux tests externes (la
-// commande interne reste swJS).
+// SwJS: the generated service worker, exposed to external tests (the
+// internal name remains swJS).
 func (h *Handler) SwJS() string { return h.swJS() }
 
-// rwData marshale la politique de réécriture en objet JSON pour les
-// payloads clients (SW).
+// rwData marshals the rewriting policy into a JSON object for the
+// client payloads (SW).
 func (h *Handler) rwData() string { return core.AsciiJSON(h.rw, "{}") }
 
-// rewritePreludeJS : bloc injecté dans le SW workbox quand la route
-// porte upstream.rewriteBody — données RW + fonction de matching +
-// listener fetch raw. Le listener est DECLARÉ AVANT les routes
-// workbox (ordre d'écriture du corps) et les matchers workbox excluent
-// les cibles RW : une URL cible n'est jamais touchée par les caches
-// (premier matching gagne sinon), et seul ce listener répond avec la
-// requête réécrite (pas de double respondWith).
+// rewritePreludeJS: block injected into the workbox SW when the route
+// carries upstream.rewriteBody — RW data + matching function +
+// raw fetch listener. The listener is DECLARED BEFORE the workbox
+// routes (body writing order) and the workbox matchers exclude the
+// RW targets: a target URL is never touched by the caches
+// (first match wins otherwise), and only this listener answers with
+// the rewritten request (no double respondWith).
 //
-// Matching = sémantique rewriteBody : hostname d'origine (sans port,
-// cf. url.hostname), préfixe de chemin le plus long d'abord ; entrée
-// avec "to" → host alternatif, entrée sans "to" → null (le fetch part
-// tel quel à l'origine : exception de lecture), sinon → Target. La
-// requête réécrite conserve méthode/entêtes/corps (new Request) ;
-// aucun cache ne la touche : interception = re-fetch vers la gateway.
+// Matching = rewriteBody semantics: origin hostname (without port,
+// see url.hostname), longest path prefix first; entry
+// with "to" → alternate host, entry without "to" → null (the fetch
+// goes as-is to the origin: reading exception), otherwise → Target.
+// The rewritten request keeps method/headers/body (new Request);
+// no cache touches it: interception = re-fetch towards the gateway.
 func (h *Handler) rewritePreludeJS() string {
 	return `
-// == Réécriture client (upstream.rewriteBody) ==
+// == Client-side rewriting (upstream.rewriteBody) ==
 const RW = ` + h.rwData() + `;
 
 function rwMatch(url) {
@@ -289,10 +293,10 @@ function rwMatch(url) {
   for (var i = 0; i < RW.except.length; i++) {
     if (RW.except[i].path &&
         url.pathname.indexOf(RW.except[i].path) === 0) {
-      return RW.except[i].to || null; // exception : alternative ou reste à l'origine
+      return RW.except[i].to || null; // exception: alternative or remains at the origin
     }
   }
-  return RW.target; // réécriture standard vers le host public
+  return RW.target; // standard rewrite to the public host
 }
 
 self.addEventListener('fetch', (event) => {
@@ -301,32 +305,32 @@ self.addEventListener('fetch', (event) => {
     url = new URL(event.request.url);
     base = rwMatch(url);
   } catch (e) { return; }
-  if (!base) return; // hors cibles : laisses aux routes existantes
+  if (!base) return; // outside targets: leave to the existing routes
   try {
     const target = new URL(base);
     target.pathname = url.pathname;
     target.search = url.search;
     event.respondWith(fetch(new Request(target, event.request)));
   } catch (e) {
-    // corps/mode non réinscriptibles : requête au réseau normal
+    // non-rewritable body/mode: normal network request
   }
 });
 `
 }
 
-// plainRewriteSW : service worker PUREMENT pass-through de réécriture
-// (route avec upstream.rewriteBody et sans PWA service worker) : pas
-// de workbox, AUCUN cache, aucun matching hors cibles RW — skipWaiting
-// + clients.claim pour prendre la main dès l'installation (même
-// mécanique de version que le SW PWA : le contenu changeant déclenche
-// l'update).
+// plainRewriteSW: PURELY rewriting pass-through service worker
+// (route with upstream.rewriteBody and no PWA service worker): no
+// workbox, NO cache, no matching outside RW targets — skipWaiting
+// + clients.claim to take control as soon as installed (same
+// versioning mechanism as the PWA SW: changing content triggers
+// the update).
 func (h *Handler) plainRewriteSW() string {
-	return `// Généré par la gateway — service worker pass-through de réécriture.
-// Aucune mise en cache, aucune interception hors cibles RW ; les
-// appels (fetch/XHR/…) vers les hosts d'origine du site repartent
-// vers le host public (passage par la gateway : sessions et quotas
-// applicables). Les exceptions de préfixe (RW.except) restent à
-// l'origine ou pointent leur host alternatif.
+	return `// Generated by the gateway — rewriting pass-through service worker.
+// No caching, no interception outside RW targets; calls
+// (fetch/XHR/…) to the site's origin hosts go back
+// to the public host (through the gateway: sessions and quotas
+// applicable). The prefix exceptions (RW.except) remain at
+// the origin or point to their alternate host.
 const RW = ` + h.rwData() + `
 
 function rwMatch(url) {
@@ -334,19 +338,19 @@ function rwMatch(url) {
   for (var i = 0; i < RW.except.length; i++) {
     if (RW.except[i].path &&
         url.pathname.indexOf(RW.except[i].path) === 0) {
-      return RW.except[i].to || null; // exception : alternative ou reste à l'origine
+      return RW.except[i].to || null; // exception: alternative or remains at the origin
     }
   }
-  // le SW vit sur le host public : SON origine EST la cible
-  // (schéma réel — http en démo, https en production)
+  // the SW lives on the public host: ITS origin IS the target
+  // (actual scheme — http in demo, https in production)
   return self.location.origin;
 }
 
 self.skipWaiting();
 
 self.addEventListener('activate', (event) => {
-  // claim immédiat : prenant le contrôle des pages ouvertes, la
-  // fenêtre d'appels partis à l'origine avant contrôle se referme.
+  // immediate claim: by taking control of the open pages, the
+  // window of calls sent to the origin before control closes.
   event.waitUntil(self.clients.claim());
 });
 
@@ -356,14 +360,14 @@ self.addEventListener('fetch', (event) => {
     url = new URL(event.request.url);
     base = rwMatch(url);
   } catch (e) { return; }
-  if (!base) return; // hors cibles (ou exceptions à l'origine)
+  if (!base) return; // outside targets (or exceptions to the origin)
   try {
     const target = new URL(base);
     target.pathname = url.pathname;
     target.search = url.search;
     event.respondWith(fetch(new Request(target, event.request)));
   } catch (e) {
-    // corps/mode non réinscriptibles : requête au réseau normal
+    // non-rewritable body/mode: normal network request
   }
 });
 `
@@ -393,9 +397,9 @@ func (h *Handler) networkOnlyJS() string {
 	}
 
 	return decls.String() + `
-  // URLs déclarées networkOnly (pwa.networkOnly) : jamais cachées,
-  // jamais rejouées — authentification, callbacks OAuth/OIDC avec codes
-  // à usage unique, tout ce que la configuration du déploiement exclut.
+  // URLs declared networkOnly (pwa.networkOnly): never cached,
+  // never replayed — authentication, OAuth/OIDC callbacks with
+  // one-time codes, everything the deployment configuration excludes.
   workbox.routing.registerRoute(
     ({url}) => ` + tests.String() + (func() string {
 		if h.rwEnabled() {
@@ -423,9 +427,9 @@ func (h *Handler) apiCacheJS() string {
 	var sb strings.Builder
 	// Shared helpers, defined once.
 	sb.WriteString(`
-  // Clé de cache explicite : Cache Storage ignore le corps des requêtes
-  // POST dans sa clé (toutes les segmentations s'écraseraient), donc le
-  // corps est hashé dans un paramètre artificiel de l'URL.
+  // Explicit cache key: Cache Storage ignores the body of POST
+  // requests in its key (all segmentations would overwrite each
+  // other), so the body is hashed into an artificial URL parameter.
   async function buildCacheKey(url, bodyText, method) {
     let key = url;
     if (bodyText) {
@@ -439,12 +443,12 @@ func (h *Handler) apiCacheJS() string {
     return new Request(key);
   }
 
-  // fetch avec un abort limité à l'attente des HEADERS : dès que la
-  // réponse (headers) arrive, le listener abort est retiré et le
-  // streaming de la réponse peut durer librement. Un abort n'est
-  // donc possible qu'avant toute réponse : DNS/TCP down, serveur
-  // muet. Renvoie {response, error} sans lever : le catch du
-  // handler décide du replay selon response.ok ou error.
+  // fetch with an abort limited to waiting for the HEADERS: as soon
+  // as the response (headers) arrives, the abort listener is removed
+  // and the response streaming can freely take its time. An abort is
+  // therefore only possible before any response: DNS/TCP down,
+  // silent server. Returns {response, error} without throwing: the
+  // handler's catch decides on replay based on response.ok or error.
   async function fetchNetwork(req, timeoutSec) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
@@ -460,10 +464,11 @@ func (h *Handler) apiCacheJS() string {
     }
   }
 
-  // Accumule la branche du tee et écrit dans le cache : à la fin propre
-  // du flux, OU après 1,5 s sans nouveau chunk (les SSE ne se ferment
-  // pas toujours : attendre done indéfiniment ne cacherait jamais
-  // rien). Les réponses dépassant maxEntrySizeBytes ne sont pas cachées.
+  // Accumulates the tee branch and writes to the cache: at the clean
+  // end of the stream, OR after 1.5 s without a new chunk (SSE
+  // streams do not always close: waiting for done indefinitely would
+  // never cache anything). Responses exceeding maxEntrySizeBytes are
+  // not cached.
   async function storeCompleteResponse(cache, cacheName, request, stream, expiration, maxSize, idleMs) {
     try {
       let size = 0;
@@ -474,12 +479,12 @@ func (h *Handler) apiCacheJS() string {
           setTimeout(() => resolve({done: true, value: undefined, idle: true}), idleMs);
         });
         const {done, value, idle} = await Promise.race([reader.read(), timeout]);
-        if (idle && parts.length > 0) break; // silence prolongé : finaliser
+        if (idle && parts.length > 0) break; // prolonged silence: finalize
         if (done) break;
         size += value.byteLength;
         if (maxSize > 0 && size > maxSize) {
           await reader.cancel();
-          return; // réponse trop volumineuse : pas de cache
+          return; // response too large: no caching
         }
         parts.push(value);
       }
@@ -489,7 +494,7 @@ func (h *Handler) apiCacheJS() string {
         headers: {'Content-Type': 'text/event-stream'},
       });
       await cache.put(request, response);
-      console.log('[gateway-pwa] cache API écrit:', request.url, size + ' octets');
+      console.log('[gateway-pwa] API cache written:', request.url, size + ' bytes');
       await expiration.cacheDidUpdate({
         cacheName: cacheName,
         request: request,
@@ -497,8 +502,8 @@ func (h *Handler) apiCacheJS() string {
         newResponse: response,
       });
     } catch (err) {
-      console.error('[gateway-pwa] cache API ÉCHEC:', err && err.message);
-      // flux annulé ou interrompu, ou quota dépassé : rien n'est caché
+      console.error('[gateway-pwa] API cache FAILURE:', err && err.message);
+      // stream cancelled or interrupted, or quota exceeded: nothing is cached
     }
   }
 `)
@@ -507,9 +512,9 @@ func (h *Handler) apiCacheJS() string {
 		if c.Path == "" {
 			continue
 		}
-		// method "none" : le path est explicitement hors cache — pas de
-		// route générée ; la catch-all l'ignore déjà (path déclaré =
-		// maître de son path, toutes méthodes).
+		// method "none": the path is explicitly out of cache — no
+		// route generated; the catch-all already ignores it (declared
+		// path = master of its path, every method).
 		if strings.EqualFold(strings.TrimSpace(c.Method), "none") {
 			continue
 		}
@@ -530,26 +535,27 @@ func (h *Handler) apiCacheJS() string {
 func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
 	all := h.policy.ApiGETCache
 
-	// Défauts catch-all (sans config déclarable pour l'instant).
+	// Catch-all defaults (no declarable config for now).
 	const (
 		allMaxEntries = 200
 		allMaxAgeSec  = 86400
-		allMaxSize    = 2 << 20 // 2 MiB par entrée
+		allMaxSize    = 2 << 20 // 2 MiB per entry
 		allTimeoutSec = 3
 	)
 
 	cacheName := "gateway-pwa-api-all"
-	// Versionnement : hash du bloc de configuration (excludes inclus)
-	// + la version logique commune. Reconfigurer la catch-all
-	// n'invalide pas les caches des endpoints explicites, et inversement.
+	// Versioning: hash of the configuration block (excludes
+	// included) + the common logic version. Reconfiguring the
+	// catch-all does not invalidate the explicit endpoints' caches,
+	// and vice versa.
 	polHash := fmt.Sprintf("%x", sha256.Sum256(apiCachePolicyJSON(all)))[:8]
 	cacheName += "-v" + apiCacheLogicVersion + "-" + polHash
 
-	// Filtre d'exclusion : préfixe virtuel de la gateway, préfixes
-	// déclarés, paths des endpoints déclarés (variante A : un endpoint
-	// déclaré est maître de son path, toutes méthodes), et expressions
-	// régulières testées contre l'URL COMPLÈTE (pathname + query — un
-	// paramètre particulier peut disqualifier une requête).
+	// Exclusion filter: the gateway's virtual prefix, declared
+	// prefixes, declared endpoints' paths (variant A: a declared
+	// endpoint is master of its path, every method), and regular
+	// expressions tested against the COMPLETE URL (pathname + query
+	// — a particular parameter can disqualify a request).
 	excludes := []string{PathPrefix}
 	excludes = append(excludes, all.Excludes...)
 	for _, c := range declared {
@@ -571,21 +577,21 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
 		if pat == "" {
 			continue
 		}
-		// Déclaration d'une RegExp nommée (l'index suffit à l'unicité
-		// dans le scope du SW) + test contre l'URL complète.
+		// Declaration of a named RegExp (the index is enough for
+		// uniqueness in the SW's scope) + test against the complete URL.
 		patternDecls += "\n  const EXCLUDE_RE_" + fmtInt(i) + " = new RegExp(" + fmtJSLit(pat) + ");"
 		patternTests += " && !EXCLUDE_RE_" + fmtInt(i) + ".test(url.href)"
 	}
 
 	return `
-  // Cache GET universel (apiGETCache) : les requêtes GET que
-  // rien d'autre ne couvre (fetch data API, images, fonts). SWR :
-  // le cache répond immédiatement, le réseau rafraîchit en fond ;
-  // hors ligne -> le cache. Un path déclaré dans apiCaches[] est
-  // maître de son path (toutes méthodes) et n'atteint pas ce bloc ;
-  // les excludesPatterns sont des RegExp testées contre l'URL
-  // complète (pathname + query). Défauts : ` + fmtInt(allMaxEntries) + ` entrées,
-  // ` + fmtInt(allMaxAgeSec) + `s, ` + fmtInt64(allMaxSize) + ` octets max, abort ` + fmtInt(allTimeoutSec) + ` s.
+  // Universal GET cache (apiGETCache): the GET requests
+  // nothing else covers (data API fetches, images, fonts). SWR:
+  // the cache answers instantly, the network refreshes in the
+  // background; offline -> the cache. A path declared in
+  // apiCaches[] is master of its path (every method) and does not
+  // reach this block; the excludesPatterns are RegExps tested
+  // against the complete URL (pathname + query). Defaults: ` + fmtInt(allMaxEntries) + ` entries,
+  // ` + fmtInt(allMaxAgeSec) + `s, ` + fmtInt64(allMaxSize) + ` bytes max, abort ` + fmtInt(allTimeoutSec) + ` s.
   const exp_api_all = new workbox.expiration.ExpirationPlugin({
     maxEntries: ` + fmtInt(allMaxEntries) + `,
     maxAgeSeconds: ` + fmtInt(allMaxAgeSec) + `,
@@ -602,12 +608,12 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
     async ({event}) => {
       const req = event.request;
       if (req.method !== 'GET') {
-        // la catch-all ne matche que les GET (méthode 'GET' déclarée
-        // ci-dessous) — garde-fou défensif pour les GET d'URL
-        // exotiques (about:, blob:) déjà exclus par workbox.
+        // the catch-all only matches GETs (method 'GET' declared
+        // below) — defensive guard for GETs of exotic
+        // URLs (about:, blob:) already excluded by workbox.
         return fetch(req);
       }
-      console.log('[gateway-pwa] apiGETCache intercepté:', req.url);
+      console.log('[gateway-pwa] apiGETCache intercepted:', req.url);
       const cache = await caches.open('` + cacheName + `');
       const hit = await cache.match(req);
       const refresh = () => fetchNetwork(req, ` + fmtInt(allTimeoutSec) + `).then(({response}) => {
@@ -663,18 +669,18 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	}
 	idleMs := c.IdleFinalizeMs
 	if idleMs <= 0 {
-		idleMs = 1500 // finalisation du cache après ce silence du flux
+		idleMs = 1500 // cache finalization after this stream silence
 	}
 	netTimeout := c.NetworkTimeoutSeconds
 	if netTimeout <= 0 {
-		netTimeout = 3 // abort du fetch sans réponse au bout de 3 s
+		netTimeout = 3 // fetch abort when there is no response after 3 s
 	}
 	method := strings.ToUpper(c.Method)
 	if method != "GET" {
-		method = "POST" // défaut (et compat) : replay network-first
+		method = "POST" // default (and compat): network-first replay
 	}
-	// offlineFastPath : POST seulement (pour un GET, SWR sert déjà le
-	// caché immédiatement — sans objet).
+	// offlineFastPath: POST only (for a GET, SWR already serves the
+	// cached response instantly — pointless).
 	offlineFast := method == "POST" &&
 		(c.OfflineFastPath == nil || *c.OfflineFastPath)
 
@@ -684,19 +690,19 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	}
 	cacheName = strings.ReplaceAll(cacheName, "/", "-")
 
-	// Versionnement par endpoint : le nom incorpore le hash du bloc de
-	// configuration JSON de CET endpoint (pas du SW entier). Reconfigurer
-	// ce worker dans api-routes.json invalide son cache, et lui seul ;
-	// le replay des autres endpoints et les caches assets survivent à un
-	// déploiement. apiCacheLogicVersion est incrémenté manuellement quand
-	// le format des entrées stockées change.
+	// Per-endpoint versioning: the name incorporates the hash of
+	// THIS endpoint's JSON configuration block (not the whole SW).
+	// Reconfiguring this worker in api-routes.json invalidates its
+	// cache, and its alone; the other endpoints' replay and the
+	// assets caches survive a deployment. apiCacheLogicVersion is
+	// incremented manually when the stored entries' format changes.
 	polHash := fmt.Sprintf("%x", sha256.Sum256(apiCachePolicyJSON(c)))[:8]
 	cacheName += "-v" + apiCacheLogicVersion + "-" + polHash
 
 	return `
-  // Cache API déclaratif : ` + c.Path + ` (méthode ` + method + `).
-  // ` + fmtInt(maxEntries) + ` entrées max, ` + fmtInt(maxAge) + `s,
-  // ` + fmtInt64(maxSize) + ` octets max par entrée,
+  // Declarative API cache: ` + c.Path + ` (method ` + method + `).
+  // ` + fmtInt(maxEntries) + ` entries max, ` + fmtInt(maxAge) + `s,
+  // ` + fmtInt64(maxSize) + ` bytes max per entry,
   // offlineFastPath: ` + jsBool(offlineFast) + ` (POST only).
   const OFFLINE_FAST_` + jsIdent(c.Path) + ` = ` + jsBool(offlineFast) + `; // POST only
   const exp_` + jsIdent(c.Path) + ` = new workbox.expiration.ExpirationPlugin({
@@ -707,28 +713,28 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 
   workbox.routing.registerRoute(
     ({url}) => ` + (func() string {
-		// une route d'endpoint déclarée ne cible jamais une cible de
-		// réécriture : hostname + path identiques au cross-origin sont
-		// possibles, et le premier matching gagnerait sinon
+		// a declared endpoint route never targets a rewrite
+		// target: identical hostname + path cross-origin are
+		// possible, and first match would win otherwise
 		if h.rwEnabled() {
 			return "!rwMatch(url) && "
 		}
 		return ""
 	}()) + `url.pathname === '` + c.Path + `',
     async ({event}) => {
-      console.log('[gateway-pwa] route apiCache interceptée:', event.request.method, event.request.url);
+      console.log('[gateway-pwa] apiCache route intercepted:', event.request.method, event.request.url);
       const req = event.request;
       const cache = await caches.open('` + cacheName + `');` + func() string {
 		if method == "GET" {
 			return `
-      // SWR : le cache répond immédiatement (même en ligne), le
-      // réseau rafraîchit en fond ; offline strict -> le cache.
-      // Clé = URL seule (pas de corps pour un GET). Les réponses
-      // non-200 ou avec Set-Cookie ne sont pas mises en cache.
+      // SWR: the cache answers instantly (even online), the
+      // network refreshes in the background; strict offline ->
+      // the cache. Key = URL alone (no body for a GET). Responses
+      // non-200 or with Set-Cookie are not cached.
       const hit = await cache.match(req);
       const refresh = () => fetchNetwork(req, ` + fmtInt(netTimeout) + `).then(({response}) => {
         if (!response || !response.ok || response.headers.has('set-cookie')) return;
-        // réponse opaque ou vide : rien à stocker
+        // opaque or empty response: nothing to store
         if (!response.body) return;
         event.waitUntil(response.arrayBuffer().then((buf) =>
           cache.put(req, new Response(buf, {
@@ -757,53 +763,54 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
       return response;`
 		}
 		return `
-      // Clé de cache explicite : Cache Storage ignore le corps des POST
-      // dans sa clé (toutes les segmentations s'écraseraient), donc on
-      // hashe l'URL + le corps dans un paramètre artificiel.
-      // IMPORTANT : construite AVANT le fetch — le corps d'une requête
-      // ne peut être lu qu'une fois, et après un fetch échoué (offline)
-      // req.clone().text() throwerait "Failed to fetch" au lieu du
-      // replay attendu.
+      // Explicit cache key: Cache Storage ignores the body of POSTs
+      // in its key (all segmentations would overwrite each other),
+      // so we hash the URL + body into an artificial parameter.
+      // IMPORTANT: built BEFORE the fetch — a request's body
+      // can only be read once, and after a failed fetch (offline)
+      // req.clone().text() would throw "Failed to fetch" instead of
+      // the expected replay.
       let keyReq = null;
       try {
         const bodyText = req.method === 'GET' ? '' : await req.clone().text();
         keyReq = await buildCacheKey(req.url, bodyText, req.method);
-        // Diagnostic de clé : la clé = SHA-256 du corps. Deux
-        // segmentations "identiques" aux yeux de l'utilisateur mais
-        // avec une clé différente => un champ du corps a changé.
-        // Logguer le corps permet de voir immédiatement LE champ en
-        // cause (phonetic, meters, espace en fin de texte...).
-        console.log('[gateway-pwa] clé:', keyReq.url.slice(keyReq.url.indexOf('__pwa_key=')),
-          '\n  corps:', bodyText);
-      } catch (e) { keyReq = null; } // corps illisible : pas de replay
+        // Key diagnostics: the key = SHA-256 of the body. Two
+        // segmentations "identical" from the user's point of view but
+        // with a different key => a body field changed.
+        // Logging the body makes it possible to immediately see THE
+        // field at fault (phonetic, meters, trailing space in the
+        // text...).
+        console.log('[gateway-pwa] key:', keyReq.url.slice(keyReq.url.indexOf('__pwa_key=')),
+          '\n  body:', bodyText);
+      } catch (e) { keyReq = null; } // unreadable body: no replay
       try {
-        // Hors ligne (l'OS le sait : wifi coupé, avion) : pas de
-        // fetch du tout, le cache répond immédiatement (fast-path,
-        // offlineFastPath: true par défaut ; false pour un endpoint
-        // où rejouer un caché serait faux, p.ex. une écriture).
-        // En ligne : fetch d'abord (fraîcheur), aborté au bout de
-        // networkTimeoutSeconds si aucune réponse — le replay ne
-        // subit plus le timeout TCP complet (~5 s) d'un réseau mort.
-        // Le timeout ne couvre QUE l'attente des headers : le
-        // listener est retiré dès que la réponse arrive, le
-        // streaming de la réponse elle-même reste libre.
+        // Offline (the OS knows: wifi off, airplane): no
+        // fetch at all, the cache answers instantly (fast-path,
+        // offlineFastPath: true by default; false for an endpoint
+        // where replaying a cached response would be wrong, e.g. a
+        // write). Online: fetch first (freshness), aborted after
+        // networkTimeoutSeconds if no response — the replay no
+        // longer suffers the full TCP timeout (~5 s) of a dead
+        // network. The timeout only covers waiting for the headers:
+        // the listener is removed as soon as the response arrives,
+        // and streaming the response itself stays free.
         if (OFFLINE_FAST_` + jsIdent(c.Path) + ` && !self.navigator.onLine) {
           const offlineHit = keyReq ? await cache.match(keyReq) : null;
           if (offlineHit) {
             console.log('[gateway-pwa] replay offline (onLine=false):', keyReq.url);
             return offlineHit;
           }
-          // rien de caché : tenter le fetch malgré tout (offline
-          // pas toujours détecté, p.ex. serveur local)
+          // nothing cached: try the fetch anyway (offline
+          // not always detected, e.g. local server)
         }
         const { response, error } = await fetchNetwork(req, ` + fmtInt(netTimeout) + `);
         if (error) throw error;
         if (response.ok && response.body) {
           const [toApp, toCache] = response.body.tee();
-          // event.waitUntil est INDISPENSABLE : sans lui, le navigateur
-          // peut suspendre le SW dès que la réponse est renvoyée, avant
-          // que l'accumulation + cache.put ne finissent (le cache API
-          // ne serait jamais écrit, surtout sur Firefox).
+          // event.waitUntil is INDISPENSABLE: without it, the browser
+          // may suspend the SW as soon as the response is returned,
+          // before the accumulation + cache.put finish (the API cache
+          // would never be written, especially on Firefox).
           if (keyReq) {
             event.waitUntil(
               storeCompleteResponse(cache, ` + fmtJSLit(cacheName) + `, keyReq, toCache, exp_` + jsIdent(c.Path) + `, ` + fmtInt64(maxSize) + `, ` + fmtInt(idleMs) + `)
@@ -817,31 +824,31 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
         }
         return response;
       } catch (err) {
-        // hors ligne (ou réseau instable) : rejouer la réponse
-        // précédemment stockée pour cette requête exacte
+        // offline (or unstable network): replay the previously
+        // stored response for this exact request
         if (keyReq) {
           const cached = await cache.match(keyReq);
           if (cached) {
             console.log('[gateway-pwa] replay offline:', keyReq.url);
             return cached;
           }
-          console.warn('[gateway-pwa] pas de cache pour cette requête:', keyReq.url);
+          console.warn('[gateway-pwa] no cache for this request:', keyReq.url);
         }
         throw err;
       }`
 	}() + `
     },
-    // Cache Storage ignore les POST dans sa clé et workbox route les
-    // requêtes non-GET SEULEMENT si la méthode est explicite (Route
-    // constructor, method défaut "GET") : sans le 3e argument pour un
-    // POST, la route ne matchait aucun POST => "No route found",
+    // Cache Storage ignores POSTs in its key and workbox routes
+    // non-GET requests ONLY if the method is explicit (Route
+    // constructor, default method "GET"): without the 3rd argument
+    // for a POST, the route matched no POST => "No route found",
     // replay impossible.
     '` + method + `'
   );
 `
 }
 
-// jsBool rend un booléen Go en littéral JS.
+// jsBool renders a Go bool as a JS literal.
 func jsBool(b bool) string {
 	if b {
 		return "true"
@@ -849,25 +856,25 @@ func jsBool(b bool) string {
 	return "false"
 }
 
-// jsIdent convertit un chemin en identifiant JS utilisable.
+// jsIdent converts a path into a usable JS identifier.
 func jsIdent(path string) string {
 	ident := strings.TrimPrefix(path, "/")
 	ident = strings.ReplaceAll(ident, "/", "_")
 	ident = strings.ReplaceAll(ident, "-", "_")
-	// préfixe si le premier caractère n'est pas une lettre
+	// prefix if the first character is not a letter
 	if ident == "" || (ident[0] < 'a' || ident[0] > 'z') && (ident[0] < 'A' || ident[0] > 'Z') {
 		ident = "api_" + ident
 	}
 	return ident
 }
 
-// fmtJSLit rend une chaîne Go en littéral JS (chemins contrôlés côté
-// générateur : pas de caractères d'échappement attendus).
+// fmtJSLit renders a Go string as a JS literal (paths controlled on
+// the generator side: no escape characters expected).
 func fmtJSLit(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "\\'") + "'"
 }
 
-// fmtInt évite d'importer strconv pour deux entiers du template.
+// fmtInt avoids importing strconv for two template integers.
 func fmtInt64(n int64) string {
 	return fmtInt(int(n))
 }
@@ -894,8 +901,8 @@ func fmtInt(n int) string {
 	return string(b[i:])
 }
 
-// pwaIconSizes déduit la taille déclarée du nom de fichier
-// (icon-192.png => "192x192"). Défaut : "512x512".
+// pwaIconSizes infers the declared size from the file name
+// (icon-192.png => "192x192"). Default: "512x512".
 func pwaIconSizes(src string) string {
 	for _, size := range []string{"512", "384", "256", "192", "144", "96"} {
 		if strings.Contains(src, size) {
@@ -911,9 +918,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch rest {
 	case "manifest.json":
-		// Route sans PWA (rewriteBody seul) : pas de manifeste — le
-		// SW reste disponible (sw.js) et le workbox runtime sert un
-		// 404 identique à avant.
+		// Route without PWA (rewriteBody only): no manifest — the
+		// SW remains available (sw.js) and the workbox runtime
+		// serves a 404 identical to before.
 		if h.policy == nil {
 			http.NotFound(w, r)
 			return

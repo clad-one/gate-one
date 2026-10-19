@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 )
 
-// Statistiques légères : compteurs par route (requêtes, statuts) +
-// l'activité du cache d'auth. Exposées sur /__gateway/stats (JSON) —
-// compteurs seulement, aucune donnée utilisateur.
+// Lightweight statistics: per-route counters (requests, statuses) +
+// auth cache activity. Exposed on /__gateway/stats (JSON) —
+// counters only, no user data.
 
 type routeStats struct {
 	Requests int64         `json:"requests"`
@@ -20,8 +20,8 @@ type routeStats struct {
 var (
 	statsMu         sync.Mutex
 	statsByRoute    = map[string]*routeStats{}
-	statAuthBridge  int64 // appels frais vers auth-bridge
-	statAuthCacheHi int64 // hits du cache d'identité
+	statAuthBridge  int64 // fresh calls toward auth-bridge
+	statAuthCacheHi int64 // identity cache hits
 )
 
 func statRecord(routeKey string, status int) {
@@ -38,7 +38,7 @@ func statRecord(routeKey string, status int) {
 	}
 }
 
-// statsWriter comptabilise le statut FINAL de la réponse.
+// statsWriter accounts for the response's FINAL status.
 type statsWriter struct {
 	http.ResponseWriter
 	status int
@@ -58,7 +58,7 @@ func (w *statsWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// serveStats répond /__gateway/stats.
+// serveStats answers /__gateway/stats.
 func serveStats(w http.ResponseWriter, r *http.Request) {
 	statsMu.Lock()
 	defer statsMu.Unlock()
