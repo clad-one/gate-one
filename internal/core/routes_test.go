@@ -41,6 +41,7 @@ func TestMCPScopeDeserialization(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
 	cfg := `{
+		"oidc": {"issuer": "https://auth.plateforme.test/realms/test"},
 		"routes": [
 			{"host": "a.local", "path": "/mcp", "backend": "http://x",
 			 "mcp": {"enabled": true, "scope": "custom-scope"}},
@@ -55,6 +56,9 @@ func TestMCPScopeDeserialization(t *testing.T) {
 	c, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := c.OIDC.Issuer; got != "https://auth.plateforme.test/realms/test" {
+		t.Errorf(`"oidc.issuer" désérialisé en %q`, got)
 	}
 	if got := c.Routes[0].MCP.Scope; got != "custom-scope" {
 		t.Errorf(`"mcp": {"scope": "custom-scope"} deserialized as %q`, got)

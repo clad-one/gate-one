@@ -4,12 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"cladone/gateway/internal/core"
 )
 
 // newMCPTestGateway builds a Gateway with one MCP route (scope
@@ -59,16 +55,7 @@ func newMCPTestGatewayWithBridgeStatus(
 		}]
 	}`
 
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "routes.json")
-	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := core.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadForTest(t, routesJSON)
 
 	gw, err := New(cfg)
 	if err != nil {

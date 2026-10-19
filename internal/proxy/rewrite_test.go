@@ -596,3 +596,33 @@ func TestRewriteParityWithServiceWorkerJS(t *testing.T) {
 		}
 	}
 }
+
+// DÉMO HTTP DIRECTE (pas d'ingress, pas de X-Forwarded-Proto) : les
+// URLs d'origine sont réécrites en http:// — le schéma suit la
+// requête réelle, rien n'est codé en dur.
+func TestRewriteBodyGatewayE2EHTTPDemo(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true, "rewriteBody": {"enabled": true}}
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/rwpage", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	b := readBody(t, resp)
+
+	if !strings.Contains(b, "http://public.test/edit/page?x=1") {
+		t.Error("réécriture attendue en http:// (démo directe)")
+	}
+	// les LIENS pointent en http:// ; la DTO du garde (métadonnée
+	// target=https://…) reste documentaire — le SW/patch réécrivent
+	// vers leur origine réelle à l'exécution
+	if strings.Contains(b, `href="https://public.test`) ||
+		strings.Contains(b, `url(https://public.test`) {
+		t.Error("les liens ne doivent pas être codés https : schéma de la requête")
+	}
+}

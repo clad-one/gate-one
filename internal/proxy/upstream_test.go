@@ -9,14 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"cladone/gateway/internal/core"
 )
 
 // upstreamTestServer : backend d'écho qui simule l'essentiel d'un
@@ -205,17 +201,8 @@ func upstreamGateway(
 
 	srv := upstreamTestServer(t)
 
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "routes.json")
 	routesJSON = strings.ReplaceAll(routesJSON, "BACKEND", srv.URL)
-	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := core.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadForTest(t, routesJSON)
 
 	gw, err := New(cfg)
 	if err != nil {
@@ -508,7 +495,7 @@ func guardInjectedLen(t *testing.T) int {
 	}
 	script := fmt.Sprintf(
 		guardScript,
-		guardLoginURL(route),
+		gw.config.LoginURLFor(route),
 		AuthStatePath,
 		uiGateJSON(route),
 		userBadgeJSON(route),
@@ -649,15 +636,8 @@ func TestAuthCacheCollapsesBridgeCalls(t *testing.T) {
 		}]
 	}`
 	routesJSON = strings.ReplaceAll(routesJSON, "SRV", srv.URL)
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "routes.json")
-	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := core.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadForTest(t, routesJSON)
+
 	gw, err := New(cfg, WithAuthBridgeURL(bridge.URL))
 	if err != nil {
 		t.Fatal(err)
@@ -801,16 +781,9 @@ func TestHangingAuthBridgeTimesOut(t *testing.T) {
 	// gateway avec auth-bridge pointant sur le serveur qui hangue :
 	// construction manuelle (le helper pointe vers son propre stub).
 	srv := upstreamTestServer(t)
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "routes.json")
 	routesJSON = strings.ReplaceAll(routesJSON, "BACKEND", srv.URL)
-	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := core.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadForTest(t, routesJSON)
+
 	gw, err := New(cfg, WithAuthBridgeURL(hang.URL))
 	if err != nil {
 		t.Fatal(err)
@@ -847,8 +820,8 @@ func TestUpstreamAuthStillEnforced(t *testing.T) {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302 (redirection login)", resp.StatusCode)
 	}
-	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, LoginPageURL) {
-		t.Errorf("Location = %q, want préfixe %q", loc, LoginPageURL)
+	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, testLoginURL) {
+		t.Errorf("Location = %q, want préfixe %q", loc, testLoginURL)
 	}
 }
 

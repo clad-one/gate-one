@@ -9,11 +9,6 @@ import (
 	"cladone/gateway/internal/core"
 )
 
-// LoginPageURL is the public auth-bridge login page. Shared by the
-// server-side redirect for page routes (proxy.go) and the injected
-// 401 guard script (this file).
-const LoginPageURL = "https://login.cladone.com/login"
-
 // AuthStatePath is the gateway-served session probe: 200 + JSON
 // {roles, scopes, claims} when the caller holds a valid session
 // (Bearer header or cookies), 401 otherwise. Never proxied. Consumed
@@ -141,12 +136,9 @@ func guardEnabledFor(route *core.Route) bool {
 }
 
 // guardLoginURL returns the login URL configured for the guard, if any.
-func guardLoginURL(route *core.Route) string {
-	if route.AuthGuard != nil && route.AuthGuard.LoginURL != "" {
-		return route.AuthGuard.LoginURL
-	}
-	return LoginPageURL
-}
+// (l'URL de login d'une route se résout par core.Config.LoginURLFor :
+// authGuard.loginUrl gagne sur oidc.loginUrl — la validation au load
+// garantit qu'une route à garde active en a une).
 
 // injectGuardScript installe l'injection de la garde en FLUX : le
 // corps n'est plus bufferisé (l'algorithme d'avant 2026-10-18 lisait

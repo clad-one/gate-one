@@ -47,16 +47,8 @@ func customGateway(
 		}
 	}
 
-	cfgPath := filepath.Join(dir, "routes.json")
 	routesJSON = strings.ReplaceAll(routesJSON, "BACKEND", srv.URL)
-	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := core.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadForTestIn(t, dir, routesJSON)
 
 	gw, err := New(cfg)
 	if err != nil {

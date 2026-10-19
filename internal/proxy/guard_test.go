@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,17 +51,8 @@ func testGateway(
 	))
 	t.Cleanup(backend.Close)
 
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "routes.json")
 	routesJSON = strings.ReplaceAll(routesJSON, "BACKEND", backend.URL)
-	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := core.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadForTest(t, routesJSON)
 
 	gw, err := New(cfg)
 	if err != nil {
@@ -85,6 +75,10 @@ func doGet(
 
 	req := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
 	req.Host = host
+	// simulate l'ingress de production : TLS terminé en amont,
+	// X-Forwarded-Proto posé par Traefik (les tests de la variante
+	// démo HTTP directe passent par doRequestWithHeaders sans XFP)
+	req.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 	return rec.Result()
@@ -118,11 +112,13 @@ func TestGuardInjectedOnFrontendHTML(t *testing.T) {
 	if !strings.Contains(b, "__cladoneAuthGuard") {
 		t.Error("guard script missing from HTML response")
 	}
+	// l'URL de login vient de la CONFIG (bloc oidc de test) — jamais
+	// d'URL codée en dur
 	if !strings.Contains(
 		b,
-		"https://login.cladone.com/login",
+		testLoginURL,
 	) {
-		t.Error("guard script does not reference the login page")
+		t.Errorf("guard script does not reference the login page (%s)", testLoginURL)
 	}
 	// injected right after <head>
 	if !strings.Contains(b, "<head><script>") {
@@ -277,18 +273,69 @@ func TestBackendErrorForwardedUnmodified(t *testing.T) {
 	}
 }
 
-func TestLoginPageURLConstantSharedWithRedirect(t *testing.T) {
-	// page-route auth redirect must use the same constant as the guard
-	if !strings.HasPrefix(LoginPageURL, "https://") {
-		t.Errorf("LoginPageURL = %q, want https URL", LoginPageURL)
-	}
-	if !strings.HasSuffix(LoginPageURL, "/login") {
-		t.Errorf("LoginPageURL = %q, want .../login", LoginPageURL)
-	}
-	// and must be URL-parseable
-	if _, err := url.Parse(LoginPageURL); err != nil {
-		t.Errorf("LoginPageURL not parseable: %v", err)
-	}
+// La résolution du login : authGuard.loginUrl (route) gagne sur
+// oidc.loginUrl (plateforme) ; une route à garde active sans aucun
+// des deux REFUSE de démarrer (validation au load).
+func TestLoginURLResolution(t *testing.T) {
+	t.Run("priorité route > plateforme", func(t *testing.T) {
+		cfg := loadForTest(t, `{
+			"oidc": {"loginUrl": "https://login.plateforme.test/login"},
+			"routes": [{
+				"host": "front.test", "path": "/*", "frontend": true,
+				"backend": "http://127.0.0.1:1",
+				"authGuard": {"loginUrl": "https://login.route.test/login"}
+			}]
+		}`)
+		if got := cfg.LoginURLFor(&cfg.Routes[0]); got != "https://login.route.test/login" {
+			t.Errorf("login = %q, want l'URL de la route", got)
+		}
+	})
+
+	t.Run("défaut plateforme", func(t *testing.T) {
+		cfg := loadForTest(t, `{
+			"oidc": {"loginUrl": "https://login.plateforme.test/login"},
+			"routes": [{
+				"host": "front.test", "path": "/*", "frontend": true,
+				"backend": "http://127.0.0.1:1"
+			}]
+		}`)
+		if got := cfg.LoginURLFor(&cfg.Routes[0]); got != "https://login.plateforme.test/login" {
+			t.Errorf("login = %q, want l'URL de la plateforme", got)
+		}
+	})
+
+	t.Run("garde sans login : refus de démarrer", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "routes.json")
+		cfgJSON := `{"routes": [{
+			"host": "front.test", "path": "/*", "frontend": true,
+			"backend": "http://127.0.0.1:1"
+		}]}`
+		if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := core.Load(cfgPath); err == nil ||
+			!strings.Contains(err.Error(), "sans URL de login") {
+			t.Errorf("err = %v, want refus « sans URL de login »", err)
+		}
+	})
+
+	t.Run("MCP sans issuer : refus de démarrer", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "routes.json")
+		cfgJSON := `{"routes": [{
+			"host": "mcp.test", "path": "/mcp",
+			"backend": "http://127.0.0.1:1",
+			"mcp": {"enabled": true, "path": "/mcp", "scope": "mcp-tools"}
+		}]}`
+		if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := core.Load(cfgPath); err == nil ||
+			!strings.Contains(err.Error(), "oidc.issuer") {
+			t.Errorf("err = %v, want refus « oidc.issuer »", err)
+		}
+	})
 }
 
 // testGatewayWithAuthBridge is testGateway with the Gateway pointed

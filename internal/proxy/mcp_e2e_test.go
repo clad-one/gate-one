@@ -3,13 +3,9 @@ package proxy
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"cladone/gateway/internal/core"
 )
 
 // TestMCPE2EOnLine reproduit le scénario du smoke.sh (POST /mcp JSON
@@ -104,15 +100,7 @@ func TestMCPBridgeUnreachable(t *testing.T) {
 func loadGatewayForTest(t *testing.T, routesJSON string) *Gateway {
 	t.Helper()
 
-	cfgPath := filepath.Join(t.TempDir(), "routes.json")
-	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := core.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadForTest(t, routesJSON)
 
 	gw, err := New(cfg)
 	if err != nil {

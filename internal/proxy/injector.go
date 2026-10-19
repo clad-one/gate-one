@@ -56,6 +56,7 @@ func isHTMLResponse(resp *http.Response) bool {
 // compilée (nil si absente) ; injectsBody = une injection de corps est
 // attendue (forçage gzip amont déjà décidé).
 func buildInjectors(
+	cfg *core.Config,
 	route *core.Route,
 	u *url.URL,
 	rwPlan *rewritePlan,
@@ -73,11 +74,11 @@ func buildInjectors(
 			"GUARD enabled host=%s path=%s loginUrl=%s",
 			route.Host,
 			route.Path,
-			guardLoginURL(route),
+			cfg.LoginURLFor(route),
 		)
 		script := fmt.Sprintf(
 			guardScript,
-			guardLoginURL(route),
+			cfg.LoginURLFor(route),
 			AuthStatePath,
 			uiGateJSON(route),
 			userBadgeJSON(route),
@@ -220,11 +221,13 @@ func (i *rewriteBodyInjector) modify(resp *http.Response) error {
 	}
 	// Réécriture EN FLUX idem guardStream : aucun buffering,
 	// Content-Length retiré (chunked, flush par écriture car
-	// ContentLength vaut -1).
+	// ContentLength vaut -1). Le schéma des URLs réécrites suit la
+	// requête (https en production, http en démo).
 	resp.Header.Del("Content-Length")
 	resp.Header.Del("Content-Encoding")
 	resp.ContentLength = -1
-	resp.Body = newRewriteStream(resp.Body, i.plan)
+	resp.Body = newRewriteStreamWithScheme(
+		resp.Body, i.plan, requestSchemeOut(resp.Request))
 	return nil
 }
 

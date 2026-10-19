@@ -4,12 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"cladone/gateway/internal/core"
 )
 
 // newMCPProtocolGateway construit une gateway avec une route MCP dont
@@ -46,15 +42,7 @@ func newMCPProtocolGateway(t *testing.T) *Gateway {
 		}]
 	}`
 
-	cfgPath := filepath.Join(t.TempDir(), "routes.json")
-	if err := os.WriteFile(cfgPath, []byte(routesJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := core.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadForTest(t, routesJSON)
 
 	gw, err := New(cfg)
 	if err != nil {

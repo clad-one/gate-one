@@ -337,7 +337,9 @@ function rwMatch(url) {
       return RW.except[i].to || null; // exception : alternative ou reste à l'origine
     }
   }
-  return RW.target;
+  // le SW vit sur le host public : SON origine EST la cible
+  // (schéma réel — http en démo, https en production)
+  return self.location.origin;
 }
 
 self.skipWaiting();

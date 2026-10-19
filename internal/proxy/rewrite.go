@@ -53,8 +53,14 @@ type rewritePlan struct {
 	// sans port, minuscules (self-référencements plausibles du HTML
 	// d'origine : host du backend + hostOverride éventuel).
 	origins []string
-	// pub : base de remplacement par défaut, "https://host.public".
+	// pub : base de remplacement par défaut en https ("https://host.public")
+	// — la forme servie au SW client (qui s'en sert comme documentation ;
+	// à l'exécution il réécrit vers SON origine) et à l'oracle de test.
 	pub string
+	// pubHost : host public sans schéma — la réécriture SERVEUR y
+	// préfixe le schéma réel de la requête (https en prod, http en
+	// démo : X-Forwarded-Proto / TLS direct).
+	pubHost string
 	// except : exceptions triées par longueur décroissante (préfixe
 	// le plus long gagne) ; To vide = rester à l'origine.
 	except []core.RewriteExcept
@@ -117,6 +123,7 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 	return &rewritePlan{
 		origins:   origins,
 		pub:       "https://" + normalizeHost(route.Host),
+		pubHost:   normalizeHost(route.Host),
 		except:    except,
 		hold:      len("https://") + maxHost,
 		maxExcept: maxExcept,
@@ -171,6 +178,9 @@ func rewriteGuardDTOFor(route *core.Route, backend *url.URL) *rewriteGuardDTO {
 type rewriteStream struct {
 	src io.ReadCloser
 	cfg *rewritePlan
+	// scheme : le schéma des URLs réécrites (schéma réel de la
+	// requête) ; "" = https (défaut).
+	scheme string
 
 	scratch  []byte
 	buf      []byte
@@ -183,9 +193,18 @@ type rewriteStream struct {
 }
 
 func newRewriteStream(src io.ReadCloser, cfg *rewritePlan) *rewriteStream {
+	return newRewriteStreamWithScheme(src, cfg, "https")
+}
+
+func newRewriteStreamWithScheme(
+	src io.ReadCloser,
+	cfg *rewritePlan,
+	scheme string,
+) *rewriteStream {
 	return &rewriteStream{
 		src:     src,
 		cfg:     cfg,
+		scheme:  scheme,
 		scratch: make([]byte, 4096),
 	}
 }
@@ -474,7 +493,12 @@ func (s *rewriteStream) decision(m cand) (replacement string, keep bool) {
 			return "", true // exception : rester à l'origine
 		}
 	}
-	return s.cfg.pub, false // réécriture standard
+	// réécriture standard : le schéma suit la requête (https en
+	// production, http en démo)
+	if s.scheme == "" || s.scheme == "https" {
+		return s.cfg.pub, false
+	}
+	return s.scheme + "://" + s.cfg.pubHost, false
 }
 
 // applyCandidate émet buf[:formStart] puis (original inchangé ou

@@ -1,5 +1,9 @@
 {
   "$schema": "./api-routes.schema.json",
+  "oidc": {
+    "loginUrl": "https://login.cladone.com/login",
+    "issuer": "https://auth.cladone.com/realms/cladone"
+  },
   "routes": [    
     {
       "host": "gram.cladone.com",

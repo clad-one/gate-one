@@ -4,6 +4,7 @@ import (
 	"cladone/gateway/internal/core"
 	mcpserver "cladone/gateway/internal/mcp"
 	"cladone/gateway/internal/pwa"
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -169,6 +170,13 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 		rp.Director = func(req *http.Request) {
 			original(req)
+			// fige le schéma CLIENT (X-Forwarded-Proto de l'ingress,
+			// encore intact ici — ReverseProxy l'écrase ensuite avec
+			// le schéma du tronçon gateway→backend) dans le
+			// contexte : les injecteurs de corps le relisent en
+			// ModifyResponse (resp.Request).
+			*req = *req.WithContext(context.WithValue(
+				req.Context(), clientSchemeKey, clientScheme(req)))
 			if injectsBody {
 				req.Header.Set("Accept-Encoding", "gzip")
 			}
@@ -232,7 +240,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		// rewriteBody → upstream(headers) → pwa → custom. Le JS de
 		// garde vit dans guard/guard.js.tmpl (go:embed) ; les
 		// injections custom (bundle) sont des données, pas du code.
-		if injectors := buildInjectors(route, u, rwPlan, injectsBody); len(injectors) > 0 {
+		if injectors := buildInjectors(cfg, route, u, rwPlan, injectsBody); len(injectors) > 0 {
 			rp.ModifyResponse = chainInjectors(injectors)
 		}
 
@@ -269,7 +277,7 @@ func (g *Gateway) serveMCPProtectedResourceMetadata(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	resource, ok := g.mcpResourceURLForHost(r.Host)
+	resource, ok := g.mcpResourceURLForHost(r.Host, clientScheme(r))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -280,7 +288,7 @@ func (g *Gateway) serveMCPProtectedResourceMetadata(
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"resource": resource,
 		"authorization_servers": []string{
-			"https://auth.cladone.com/realms/cladone",
+			g.config.OIDC.Issuer,
 		},
 		"scopes_supported":         []string{g.mcpScopeForHost(r.Host)},
 		"bearer_methods_supported": []string{"header"},
@@ -533,7 +541,49 @@ func (g *Gateway) mcpRouteForHost(host string) (*core.Route, bool) {
 	return nil, false
 }
 
-func (g *Gateway) mcpResourceURLForHost(host string) (string, bool) {
+// clientSchemeKey : le schéma CLIENT (navigateur→ingress) figé dans
+// le contexte de la requête sortante par le Director — ReverseProxy
+// écrase X-Forwarded-Proto avec le schéma du tronçon
+// gateway→backend ; les injecteurs de corps (ModifyResponse) relisent
+// la valeur d'origine ici.
+type clientSchemeKeyT struct{}
+
+var clientSchemeKey = new(clientSchemeKeyT)
+
+// clientScheme : le schéma de la requête NAVIGATEUR (handlers qui
+// voient la requête entrante) : X-Forwarded-Proto (posé par
+// l'ingress), sinon TLS direct = https, sinon plain http (démo
+// directe).
+func clientScheme(r *http.Request) string {
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		return p
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+// requestSchemeOut : le schéma client pour les injecteurs en
+// ModifyResponse (resp.Request = requête sortante) : la valeur figée
+// par le Director, sinon ce que ReverseProxy a posé (X-Forwarded-Proto
+// reflète le TLS entrant direct), sinon https.
+func requestSchemeOut(r *http.Request) string {
+	if r != nil {
+		if v, ok := r.Context().Value(clientSchemeKey).(string); ok && v != "" {
+			return v
+		}
+		if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+			return p
+		}
+	}
+	return "https"
+}
+
+func (g *Gateway) mcpResourceURLForHost(
+	host string,
+	scheme string,
+) (string, bool) {
 	route, ok := g.mcpRouteForHost(host)
 	if !ok {
 		return "", false
@@ -552,7 +602,7 @@ func (g *Gateway) mcpResourceURLForHost(host string) (string, bool) {
 		path = "/" + path
 	}
 
-	return "https://" + normalizeHost(route.Host) + path, true
+	return scheme + "://" + normalizeHost(route.Host) + path, true
 }
 
 // mcpScopeForHost retourne le scope MCP exigé pour un host (champ
@@ -565,12 +615,15 @@ func (g *Gateway) mcpScopeForHost(host string) string {
 	return route.MCP.Scope
 }
 
-func (g *Gateway) mcpResourceMetadataURL(host string) (string, bool) {
-	if _, ok := g.mcpResourceURLForHost(host); !ok {
+func (g *Gateway) mcpResourceMetadataURL(
+	host string,
+	scheme string,
+) (string, bool) {
+	if _, ok := g.mcpResourceURLForHost(host, scheme); !ok {
 		return "", false
 	}
 
-	return "https://" +
+	return scheme + "://" +
 		normalizeHost(host) +
 		"/.well-known/oauth-protected-resource", true
 }
@@ -586,7 +639,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// MCP OAuth protected-resource metadata
 	if ctx.Path == "/.well-known/oauth-protected-resource" {
-		if _, ok := g.mcpResourceURLForHost(ctx.Host); ok {
+		if _, ok := g.mcpResourceURLForHost(ctx.Host, clientScheme(r)); ok {
 			g.serveMCPProtectedResourceMetadata(w, r)
 			return
 		}
@@ -643,7 +696,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		//
 		if g.needsAuthentication(route, ctx) {
 
-			resourceMetadataURL, ok := g.mcpResourceMetadataURL(ctx.Host)
+			resourceMetadataURL, ok := g.mcpResourceMetadataURL(
+				ctx.Host, clientScheme(r))
 			if !ok {
 				http.Error(
 					w,
@@ -782,12 +836,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 				host := r.Host
 
-				returnTo := "https://" + host + r.RequestURI
+				returnTo := clientScheme(r) + "://" +
+					host + r.RequestURI
 
 				http.Redirect(
 					w,
 					r,
-					LoginPageURL+"?returnTo="+
+					g.config.LoginURLFor(route)+"?returnTo="+
 						url.QueryEscape(returnTo),
 					http.StatusFound,
 				)
@@ -798,7 +853,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// API route
 			//
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("WWW-Authenticate", `Bearer realm="cladone"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="gateway"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":"authentication_required"}`))
 			return

@@ -21,6 +21,9 @@ const self = {
   skipWaiting: () => {},
   clients: { claim: () => Promise.resolve() },
 };
+// le SW réécrit vers SON ORIGINE (location.origin) — un faux origin
+// cohérent avec les attentes de parité
+self.location = { origin: "https://public.test" };
 const sandbox = {
   self,
   URL,

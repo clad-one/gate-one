@@ -570,7 +570,54 @@ type Config struct {
 	// (autocomplétion/validation éditeur) — ignorée au runtime.
 	Schema string `json:"$schema,omitempty"`
 
+	// OIDC : l'IdP de la plateforme — la gateway est multi-tenant,
+	// aucune URL d'IdP n'est codée en dur (les routes y accèdent via
+	// LoginURLFor / OIDC.Issuer).
+	OIDC *OIDCConfig `json:"oidc,omitempty"`
+
 	Routes []Route `json:"routes"`
+}
+
+// OIDCConfig : l'IdP de la plateforme (bloc top-level). loginUrl =
+// page de login par défaut des routes frontend à garde active
+// (overridable par route via authGuard.loginUrl) ; issuer = émetteur
+// OIDC annoncé dans la metadata OAuth des routes MCP.
+type OIDCConfig struct {
+	LoginURL string `json:"loginUrl,omitempty"`
+	Issuer   string `json:"issuer,omitempty"`
+}
+
+// GuardActive : la garde est-elle active sur cette route ? (frontend +
+// authGuard non désactivé) — la même règle que le proxy.
+func (r *Route) GuardActive() bool {
+	if r.Frontend != true {
+		return false
+	}
+	if r.AuthGuard == nil {
+		return true
+	}
+	if r.AuthGuard.Enabled != nil {
+		return *r.AuthGuard.Enabled
+	}
+	return true
+}
+
+// MCPActive : la route expose-t-elle un serveur MCP ?
+func (r *Route) MCPActive() bool {
+	return r.MCP != nil && r.MCP.Enabled
+}
+
+// LoginURLFor : l'URL de login d'une route — authGuard.loginUrl
+// (route) gagne sur oidc.loginUrl (plateforme). Garantie non vide par
+// la validation au load pour toute route à garde active.
+func (c *Config) LoginURLFor(route *Route) string {
+	if route.AuthGuard != nil && route.AuthGuard.LoginURL != "" {
+		return route.AuthGuard.LoginURL
+	}
+	if c.OIDC != nil {
+		return c.OIDC.LoginURL
+	}
+	return ""
 }
 
 func Load(path string) (*Config, error) {
@@ -925,8 +972,21 @@ func (c *Config) expandUpstreamEnv() error {
 func (c *Config) validate() error {
 	for i := range c.Routes {
 		host := c.Routes[i].Host
+		route := &c.Routes[i]
 
-		if p := c.Routes[i].PWA; p != nil {
+		if route.GuardActive() && c.LoginURLFor(route) == "" {
+			return fmt.Errorf(
+				"route %s: garde active sans URL de login (bloc oidc.loginUrl ou authGuard.loginUrl requis)",
+				host)
+		}
+
+		if route.MCPActive() && (c.OIDC == nil || c.OIDC.Issuer == "") {
+			return fmt.Errorf(
+				"route %s: MCP actif sans oidc.issuer (metadata OAuth : authorization_servers)",
+				host)
+		}
+
+		if p := route.PWA; p != nil {
 			for _, pat := range p.networkOnlyPatterns() {
 				if _, err := regexp.Compile(pat); err != nil {
 					return fmt.Errorf(
@@ -1021,7 +1081,7 @@ func validateRewriteBody(rb *RewriteBodyPolicy) error {
 		u, err := url.Parse(e.To)
 		if err != nil || u.Scheme == "" || u.Host == "" {
 			return fmt.Errorf(
-				"rewriteBody.except[%d]: to %q n'est pas une URL absolue (https://host)", i, e.To)
+				"rewriteBody.except[%d]: to %q n'est pas une URL absolue (https://host, http://host en démo)", i, e.To)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
 			return fmt.Errorf(
