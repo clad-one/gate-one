@@ -229,19 +229,18 @@ func TestConfigRejectsInvalidExcludePattern(t *testing.T) {
 
 // pwa.networkOnly declarative: the NetworkOnly route is generated
 // from the config's patterns (no hard-coded filter — the gateway
-// supports any authentication server). The OIDC callback URLs
-// (query code/state/session_state/iss) must be excluded by the
-// declared patterns.
+// supports any authentication server). The production-shape patterns
+// are anchored: Keycloak endpoints on the IdP origin, and a defensive
+// callback guard on the app origin (the auth-bridge callback page has
+// no SW and redirects clean, so the app anchor is belt-and-braces —
+// patterns must never be generic: tested against the FULL url.href,
+// `/auth` would already match `/authors/42`).
 func TestSWNetworkOnlyGenerated(t *testing.T) {
 	pol := emptyPolicy()
 	pol.NetworkOnly = &core.PWANetworkOnlyPolicy{
 		ExcludePatterns: []string{
-			"/protocol/openid-connect",
-			"/auth",
-			"[?&]code=",
-			"[?&]state=",
-			"[?&]session_state=",
-			"[?&]iss=",
+			"^https://idp\\.test/realms/[^/?#]+/protocol/openid-connect",
+			"^https://app\\.test/\\?[^#]*\\bcode=",
 		},
 	}
 	sw := New(pol).swJS()
@@ -279,7 +278,8 @@ func TestSWNetworkOnlyAbsent(t *testing.T) {
 // were consulted first.
 func TestSWNetworkOnlyBeforeAssets(t *testing.T) {
 	pol := emptyPolicy()
-	pol.NetworkOnly = &core.PWANetworkOnlyPolicy{ExcludePatterns: []string{"[?&]code="}}
+	pol.NetworkOnly = &core.PWANetworkOnlyPolicy{
+		ExcludePatterns: []string{"^https://app\\.test/\\?[^#]*\\bcode="}}
 	sw := New(pol).swJS()
 
 	iNo := strings.Index(sw, "NO_CACHE_RE_0.test(url.href)")

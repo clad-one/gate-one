@@ -61,12 +61,8 @@
         },
         "networkOnly": {
           "excludePatterns": [
-            "/protocol/openid-connect",
-            "/auth",
-            "[?&]code=",
-            "[?&]state=",
-            "[?&]session_state=",
-            "[?&]iss="
+            "^https://auth\\.cladone\\.com/realms/[^/?#]+/protocol/openid-connect",
+            "^https://vers\\.cladone\\.com/\\?[^#]*\\bcode="
           ]
         },
         "apiCaches": [
