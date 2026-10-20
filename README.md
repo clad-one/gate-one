@@ -16,8 +16,12 @@ repositories complete the picture:
 The live production configuration lives in
 `cladone-it-infra/compose/gate-one/api-routes.json`.
 `testdata/api-routes.json` is the copy used by
-`TestLoadRealConfigStrict` (strict grammar check); keep it in sync
-when the live config changes.
+`TestLoadRealConfigStrict` (strict grammar check). Refresh it from the
+infra repo when the live config changes:
+
+```bash
+cd ../cladone-it-infra && make sync-config
+```
 
 ## Build
 
