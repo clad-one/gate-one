@@ -412,7 +412,7 @@ func TestUpstreamResponseHeaders(t *testing.T) {
 			"backend": "BACKEND",
 			"upstream": {"responseHeaders": {
 			  "remove": ["Content-Security-Policy"],
-			  "set": {"X-Gateway-Note": "instrumented"}
+			  "set": {"X-Gate-One-Note": "instrumented"}
 			}}
 		}]
 	}`)
@@ -421,8 +421,8 @@ func TestUpstreamResponseHeaders(t *testing.T) {
 	if got := resp.Header.Get("Content-Security-Policy"); got != "" {
 		t.Errorf("CSP not removed: %q", got)
 	}
-	if got := resp.Header.Get("X-Gateway-Note"); got != "instrumented" {
-		t.Errorf("X-Gateway-Note = %q", got)
+	if got := resp.Header.Get("X-Gate-One-Note"); got != "instrumented" {
+		t.Errorf("X-Gate-One-Note = %q", got)
 	}
 }
 
@@ -738,7 +738,7 @@ func TestHealthzAndStats(t *testing.T) {
 	}
 
 	doGet(t, gw, "public.test", "/echo")
-	resp = doGet(t, gw, "any.host.at.all", "/__gateway/stats")
+	resp = doGet(t, gw, "any.host.at.all", "/__gate-one/stats")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stats: status = %d, want 200", resp.StatusCode)
 	}

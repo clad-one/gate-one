@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gateway smoke test: starts a fake backend + a gateway with a pwa
+# Cladone Gate One smoke test: starts a fake backend + a gateway with a pwa
 # route and an authenticated MCP route, then checks HTML injection,
 # manifest, sw.js, self-hosted workbox runtime, and the MCP circuit
 # (configured scope, X-MCP-Scope header to the fake auth-bridge, 401
@@ -56,7 +56,7 @@ cat > "$routes_tmp" <<EOF
         "rewriteRedirects": true,
         "responseHeaders": {
           "remove": ["Content-Security-Policy"],
-          "set": {"X-Gateway-Smoke": "upstream"}
+          "set": {"X-Gate-One-Smoke": "upstream"}
         }
       }
     }
@@ -154,7 +154,7 @@ python3 "$bridge_tmp" "$PORT_AB" "$scopes_tmp" & AB_PID=$!
 # -authBridge: the gateway must query the local STUB (without the flag,
 # it would call the Docker service name auth-bridge:3000).
 SMOKE_UPSTREAM_TOKEN=YmFzaWMtdG9rZW4= \
-  ./bin/gateway -config "$routes_tmp" -addr ":${PORT_GW}" \
+  ./bin/gate-one -config "$routes_tmp" -addr ":${PORT_GW}" \
     -authBridge "http://127.0.0.1:${PORT_AB}" > "$gw_log" 2>&1 & GW_PID=$!
 
 # debug: all 3 services must be listening — robust wait (a plain
@@ -197,7 +197,7 @@ grep_body() {
 }
 
 step "HTML injection"
-grep_body '<link rel="manifest" href="/__gateway_pwa/manifest.json">' \
+grep_body '<link rel="manifest" href="/__gate-one_pwa/manifest.json">' \
     -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/" \
     || fail "manifest link not injected in HTML"
 
@@ -210,19 +210,19 @@ meta_pos=$(curl -sf -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/" \
     || fail "meta charset outside browser detection window (position: ${meta_pos:-absent})"
 
 grep_body '"name": "SmokeApp"' \
-    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/manifest.json" \
+    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gate-one_pwa/manifest.json" \
     || fail "manifest not served / wrong name"
 
-grep_body "modulePathPrefix: '/__gateway_pwa/workbox/'" \
-    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/sw.js" \
+grep_body "modulePathPrefix: '/__gate-one_pwa/workbox/'" \
+    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gate-one_pwa/sw.js" \
     || fail "sw.js not self-hosted"
 
 grep_body "workbox" \
-    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gateway_pwa/workbox/workbox-sw.js" \
+    -H "Host: smoke.local" "http://127.0.0.1:${PORT_GW}/__gate-one_pwa/workbox/workbox-sw.js" \
     || fail "embedded workbox runtime not served"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: smoke.local" \
-    "http://127.0.0.1:${PORT_GW}/__gateway_pwa/workbox/../pwa.go")
+    "http://127.0.0.1:${PORT_GW}/__gate-one_pwa/workbox/../pwa.go")
 [ "$code" = "404" ] || fail "path traversal not blocked (got $code)"
 
 # --- MCP circuit ---
@@ -274,7 +274,7 @@ resp_page=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
 grep -qi '^content-security-policy:' <<<"$resp_page" \
     && fail "Origin CSP not removed"
 grep -qi '^x-gateway-smoke: upstream' <<<"$resp_page" \
-    || fail "X-Gateway-Smoke not set"
+    || fail "X-Gate-One-Smoke not set"
 
 # 4) the guard script is still injected into the proxied HTML
 grep_body '__cladoneAuthGuard' \

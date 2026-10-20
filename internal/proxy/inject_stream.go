@@ -20,7 +20,7 @@ import (
 	"regexp"
 	"strings"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 var bodyCloseTag = regexp.MustCompile(`(?i)</body`)

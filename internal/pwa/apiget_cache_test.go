@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 // method:"GET" on a declared endpoint => SWR route (cache answers
@@ -32,7 +32,7 @@ func TestSWApiCacheMethodGET(t *testing.T) {
 	if !strings.Contains(sw, "'GET'\n  );") {
 		t.Error("GET: route registered with method 'GET' expected")
 	}
-	if strings.Contains(sw, "storeCompleteResponse(cache, 'gateway-pwa-api-openapi.json") {
+	if strings.Contains(sw, "storeCompleteResponse(cache, 'gate-one-pwa-api-openapi.json") {
 		t.Error("GET: no storeCompleteResponse (no SSE tee/idle)")
 	}
 }
@@ -60,7 +60,7 @@ func TestSWApiGETCatchAll(t *testing.T) {
 
 	// catch-all registered after the explicit routes
 	iExplicit := strings.Index(sw, "url.pathname === '/api/process_stream'")
-	iAll := strings.Index(sw, "gateway-pwa-api-all-v")
+	iAll := strings.Index(sw, "gate-one-pwa-api-all-v")
 	if iExplicit < 0 || iAll < 0 {
 		t.Fatalf("expected routes missing: explicit=%d all=%d", iExplicit, iAll)
 	}
@@ -85,7 +85,7 @@ func TestSWApiGETCatchAll(t *testing.T) {
 // apiGETCache absent => no regression: no catch-all generated.
 func TestSWApiGETCatchAllAbsent(t *testing.T) {
 	sw := New(emptyPolicy()).swJS()
-	if strings.Contains(sw, "gateway-pwa-api-all-v") {
+	if strings.Contains(sw, "gate-one-pwa-api-all-v") {
 		t.Error("catch-all generated without apiGETCache")
 	}
 }
@@ -123,7 +123,7 @@ func TestApiGETCatchAllVersioning(t *testing.T) {
 }
 
 func extractCatchAllName(sw string) string {
-	marker := "caches.open('gateway-pwa-api-all-"
+	marker := "caches.open('gate-one-pwa-api-all-"
 	i := strings.Index(sw, marker)
 	if i < 0 {
 		return ""
@@ -151,7 +151,7 @@ func TestSWApiCacheMethodNone(t *testing.T) {
 	if strings.Contains(sw, "url.pathname === '/api/live'") {
 		t.Error("method none: no route must be generated for the path")
 	}
-	if strings.Contains(sw, "gateway-pwa-api-api-live-") {
+	if strings.Contains(sw, "gate-one-pwa-api-api-live-") {
 		t.Error("method none: no dedicated cache must be created")
 	}
 	// the catch-all still excludes it (defense in depth if one day

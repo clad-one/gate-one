@@ -66,7 +66,7 @@ content-type: application/json
 date: Mon, 14 Sep 2026 01:04:40 GMT
 content-length: 183
 
-{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"tools":{"listChanged":true}},"protocolVersion":"2025-11-25","serverInfo":{"name":"cladone-gateway","version":"0.1.0"}}}
+{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"tools":{"listChanged":true}},"protocolVersion":"2025-11-25","serverInfo":{"name":"cladone-gate-one","version":"0.1.0"}}}
 
 
  curl -i   -X POST   https://gram.cladone.com/mcp   -H 'Content-Type: application/json'   -H 'Accept: application/json, text/event-stream'   -H "Authorization: Bearer $TOKEN"   -d '{

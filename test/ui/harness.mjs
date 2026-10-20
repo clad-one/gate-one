@@ -22,7 +22,7 @@ const SERVED_URL = process.env.GATEWAY_UI_URL || "https://vers.cladone.com/";
 export function renderGuard(opts = {}) {
   const tmpl = readFileSync(GUARD_TMPL, "utf8");
   const loginUrl = opts.loginUrl || "https://login.cladone.com/login";
-  const authState = opts.authState || "/__gateway/auth";
+  const authState = opts.authState || "/__gate-one/auth";
   const uiGate = opts.uiGate || "[]";
   const userBadge = opts.userBadge || "null";
   const rewrite = opts.rewrite || "null";
@@ -63,7 +63,7 @@ export async function mkWindow(guard, html, sessionPayload, uiGate = "[]") {
   const w = dom.window;
   const st = { openCalls: 0, lastTab: null, msgListeners: [], navs: [] };
   w.fetch = async (url) => {
-    if (url === "/__gateway/auth") {
+    if (url === "/__gate-one/auth") {
       return sessionPayload
         ? new w.Response(JSON.stringify(sessionPayload), { status: 200 })
         : new w.Response('{"error":"authentication_required"}', { status: 401 });

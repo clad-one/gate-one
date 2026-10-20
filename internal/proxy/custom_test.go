@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 // customGateway: like upstreamGateway, but ALSO writes the injection

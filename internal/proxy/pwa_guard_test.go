@@ -38,7 +38,7 @@ func TestPWAChainedWithGuard(t *testing.T) {
 	if !strings.Contains(html, `window.__cladoneAuthGuard`) {
 		t.Error("guard script missing from chained response")
 	}
-	if !strings.Contains(html, `<link rel="manifest" href="/__gateway_pwa/manifest.json">`) {
+	if !strings.Contains(html, `<link rel="manifest" href="/__gate-one_pwa/manifest.json">`) {
 		t.Error("manifest link missing from chained response")
 	}
 	if !strings.Contains(html, "navigator.serviceWorker.register") {
@@ -56,7 +56,7 @@ func TestPWAChainedWithGuard(t *testing.T) {
 	}
 
 	// virtual PWA endpoints answer on the same host
-	manifest := doGet(t, gw, host, "/__gateway_pwa/manifest.json")
+	manifest := doGet(t, gw, host, "/__gate-one_pwa/manifest.json")
 	defer manifest.Body.Close()
 	if manifest.StatusCode != http.StatusOK {
 		t.Errorf("manifest status = %d, want 200", manifest.StatusCode)

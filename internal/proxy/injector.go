@@ -24,8 +24,8 @@ import (
 	"net/url"
 	"strings"
 
-	"cladone/gateway/internal/core"
-	"cladone/gateway/internal/pwa"
+	"cladone/gate-one/internal/core"
+	"cladone/gate-one/internal/pwa"
 )
 
 // injector: one response modification applied to the routes eligible

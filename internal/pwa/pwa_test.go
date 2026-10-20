@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 func makePolicy() *core.PWAPolicy {
@@ -28,7 +28,7 @@ func emptyPolicy() *core.PWAPolicy {
 func TestManifest(t *testing.T) {
 	h := New(makePolicy())
 
-	req := httptest.NewRequest(http.MethodGet, "/__gateway_pwa/manifest.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/__gate-one_pwa/manifest.json", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -56,7 +56,7 @@ func TestManifest(t *testing.T) {
 func TestManifestDefaults(t *testing.T) {
 	h := New(emptyPolicy())
 
-	req := httptest.NewRequest(http.MethodGet, "/__gateway_pwa/manifest.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/__gate-one_pwa/manifest.json", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -69,7 +69,7 @@ func TestManifestDefaults(t *testing.T) {
 func TestServiceWorker(t *testing.T) {
 	h := New(emptyPolicy())
 
-	req := httptest.NewRequest(http.MethodGet, "/__gateway_pwa/sw.js", nil)
+	req := httptest.NewRequest(http.MethodGet, "/__gate-one_pwa/sw.js", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -90,7 +90,7 @@ func TestServiceWorker(t *testing.T) {
 	if strings.Contains(body, "googleapis.com") {
 		t.Error("sw.js must not reference googleapis.com (self-hosting required)")
 	}
-	if !strings.Contains(body, "modulePathPrefix: '/__gateway_pwa/workbox/'") {
+	if !strings.Contains(body, "modulePathPrefix: '/__gate-one_pwa/workbox/'") {
 		t.Error("sw.js must use the self-hosted modulePathPrefix")
 	}
 	// No hard-coded auth exclusions: without a declared
@@ -116,7 +116,7 @@ func TestServiceWorkerApiCache(t *testing.T) {
 	for _, want := range []string{
 		"url.pathname === '/api/process_stream'",
 		// cache name suffixed by the SW version (hash)
-		"caches.open('gateway-pwa-api-api-process_stream-",
+		"caches.open('gate-one-pwa-api-api-process_stream-",
 		"storeCompleteResponse",
 		"body.tee()",
 		"buildCacheKey",
@@ -163,8 +163,8 @@ func TestServiceWorkerApiCachesMultiple(t *testing.T) {
 		}
 	}
 	// each endpoint its own cache (SW version suffix)
-	if !strings.Contains(sw, "caches.open('gateway-pwa-api-api-process_stream-") ||
-		!strings.Contains(sw, "caches.open('gateway-pwa-api-api-poems-") {
+	if !strings.Contains(sw, "caches.open('gate-one-pwa-api-api-process_stream-") ||
+		!strings.Contains(sw, "caches.open('gate-one-pwa-api-api-poems-") {
 		t.Errorf("per-endpoint cache names missing:\n%s", sw)
 	}
 }
@@ -242,7 +242,7 @@ func TestApiCacheVersionField(t *testing.T) {
 		Version: "morphalou",
 	}}
 	sw := New(pol).swJS()
-	if !strings.Contains(sw, "gateway-pwa-api-api-process_stream-morphalou-") {
+	if !strings.Contains(sw, "gate-one-pwa-api-api-process_stream-morphalou-") {
 		t.Errorf("apiCache version not in cache name:\n%s", sw)
 	}
 
@@ -252,7 +252,7 @@ func TestApiCacheVersionField(t *testing.T) {
 		Version: "morphalou-2",
 	}}
 	sw2 := New(pol2).swJS()
-	if !strings.Contains(sw2, "gateway-pwa-api-api-process_stream-morphalou-2-") {
+	if !strings.Contains(sw2, "gate-one-pwa-api-api-process_stream-morphalou-2-") {
 		t.Errorf("bumped apiCache version missing:\n%s", sw2)
 	}
 	if extractCacheVersion(sw) == extractCacheVersion(sw2) {
@@ -277,7 +277,7 @@ func extractCacheVersion(sw string) string {
 func TestWorkboxEmbedded(t *testing.T) {
 	h := New(emptyPolicy())
 
-	req := httptest.NewRequest(http.MethodGet, "/__gateway_pwa/workbox/workbox-sw.js", nil)
+	req := httptest.NewRequest(http.MethodGet, "/__gate-one_pwa/workbox/workbox-sw.js", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -295,7 +295,7 @@ func TestWorkboxEmbedded(t *testing.T) {
 func TestWorkboxTraversalBlocked(t *testing.T) {
 	h := New(emptyPolicy())
 
-	req := httptest.NewRequest(http.MethodGet, "/__gateway_pwa/workbox/../pwa.go", nil)
+	req := httptest.NewRequest(http.MethodGet, "/__gate-one_pwa/workbox/../pwa.go", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -307,7 +307,7 @@ func TestWorkboxTraversalBlocked(t *testing.T) {
 func TestUnknownPathNotFound(t *testing.T) {
 	h := New(emptyPolicy())
 
-	req := httptest.NewRequest(http.MethodGet, "/__gateway_pwa/whatever", nil)
+	req := httptest.NewRequest(http.MethodGet, "/__gate-one_pwa/whatever", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -332,7 +332,7 @@ func TestInjectResponse(t *testing.T) {
 	got, _ := io.ReadAll(resp.Body)
 	s := string(got)
 
-	if !strings.Contains(s, `<link rel="manifest" href="/__gateway_pwa/manifest.json">`) {
+	if !strings.Contains(s, `<link rel="manifest" href="/__gate-one_pwa/manifest.json">`) {
 		t.Errorf("manifest link not injected:\n%s", s)
 	}
 	if !strings.Contains(s, "navigator.serviceWorker.register") {

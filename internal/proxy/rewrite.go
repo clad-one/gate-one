@@ -5,8 +5,8 @@ import (
 	"io"
 	"net/url"
 
-	"cladone/gateway/internal/core"
-	"cladone/gateway/internal/pwa"
+	"cladone/gate-one/internal/core"
+	"cladone/gate-one/internal/pwa"
 )
 
 //

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 // AuthStatePath is the gateway-served session probe: 200 + JSON
@@ -16,7 +16,7 @@ import (
 // [data-gtw-auth-hidden] / [data-gtw-roles] / [data-gtw-scopes] /
 // [data-gtw-claims] gating. MUST match the path hardcoded in
 // guardScript below.
-const AuthStatePath = "/__gateway/auth"
+const AuthStatePath = "/__gate-one/auth"
 
 // guardScript is injected into HTML responses of frontend routes. It
 // wraps window.fetch so that a 401 answer (session expired or

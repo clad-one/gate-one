@@ -386,7 +386,7 @@ type PWAApiCache struct {
 // (pwa.apiGETCache). Its presence enables it.
 type PWAApiGETCache struct {
 	// Excludes: path prefixes never cached by the catch-all (on top
-	// of the declared apiCaches[] paths and the virtual /__gateway_pwa/
+	// of the declared apiCaches[] paths and the virtual /__gate-one_pwa/
 	// prefix, which are always excluded).
 	Excludes []string `json:"excludes,omitempty"`
 	// ExcludePatterns: regular expressions (JS RegExp syntax, tested
@@ -413,7 +413,7 @@ type PWANetworkOnlyPolicy struct {
 }
 
 // PWAPolicy declares, per frontend route, the gateway-managed PWA wrap:
-// virtual endpoints under /__gateway_pwa/ (manifest, service worker,
+// virtual endpoints under /__gate-one_pwa/ (manifest, service worker,
 // self-hosted Workbox runtime) and <head> injection on HTML responses.
 type PWAPolicy struct {
 	Enabled    bool   `json:"enabled"`

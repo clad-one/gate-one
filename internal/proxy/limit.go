@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 	"net/http"
 	"strconv"
 	"strings"

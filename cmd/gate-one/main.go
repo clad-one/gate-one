@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"cladone/gateway/internal/core"
-	"cladone/gateway/internal/proxy"
+	"cladone/gate-one/internal/core"
+	"cladone/gate-one/internal/proxy"
 )
 
 func main() {
@@ -61,7 +61,7 @@ func main() {
 	printRoutes(cfg)
 
 	if *check {
-		fmt.Println("configuration is valid")
+		fmt.Println("Cladone Gate One: configuration is valid")
 		return
 	}
 
@@ -139,7 +139,7 @@ func main() {
 		}
 	}()
 
-	log.Printf("Gateway listening on %s", *addr)
+	log.Printf("Cladone Gate One listening on %s", *addr)
 
 	if err := srv.ListenAndServe(); err != nil &&
 		err != http.ErrServerClosed {

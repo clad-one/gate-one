@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 func TestSWAssetsStrategyDefault(t *testing.T) {

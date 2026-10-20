@@ -209,7 +209,7 @@ func (g *Gateway) checkAuth(
 	ctx.Scopes = splitRoles(resp.Header.Get("X-Scopes"))
 
 	// Token claims (base64-JSON of the full payload): consumed by
-	// the when.claims conditions and the /__gateway/auth probe.
+	// the when.claims conditions and the /__gate-one/auth probe.
 	if xc := resp.Header.Get("X-Claims"); xc != "" {
 		if raw, derr := base64.StdEncoding.DecodeString(xc); derr == nil {
 			var claims map[string]any

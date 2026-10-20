@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 // testGateway builds a Gateway from a routes JSON (same schema as
@@ -377,7 +377,7 @@ func TestAuthStateEndpointAuthenticated(t *testing.T) {
 	}`, bridge.URL)
 	host := hosts["front.test"]
 
-	resp := doGet(t, gw, host, "/__gateway/auth")
+	resp := doGet(t, gw, host, "/__gate-one/auth")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -566,7 +566,7 @@ func TestAuthStateEndpointAnonymous(t *testing.T) {
 	}`, bridge.URL)
 	host := hosts["front.test"]
 
-	resp := doGet(t, gw, host, "/__gateway/auth")
+	resp := doGet(t, gw, host, "/__gate-one/auth")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -599,7 +599,7 @@ func TestAuthStateEndpointAbsentWithoutGuard(t *testing.T) {
 	}`)
 
 	for _, host := range []string{hosts["api.test"], hosts["noguard.test"]} {
-		resp := doGet(t, gw, host, "/__gateway/auth")
+		resp := doGet(t, gw, host, "/__gate-one/auth")
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("host %s: status = %d, want 200 (proxied)", host, resp.StatusCode)

@@ -48,7 +48,7 @@
       ORIGINS[REWRITE.origins[oi]] = true;
     }
     var EXCEPT = REWRITE.except || [];
-    var OUR_SW = REWRITE.sw || '/__gateway_pwa/sw.js';
+    var OUR_SW = REWRITE.sw || '/__gate-one_pwa/sw.js';
     var rwAbort = false; // third-party SW detected: cancels diagnostic/claim
 
     function rewriteString(u) {
@@ -152,7 +152,7 @@
               // the site knows its own logic. The fetch/XHR patch
               // above stays active; no heal below.
               rwAbort = true;
-              console.warn('[gateway] third-party service worker detected (' +
+              console.warn('[gate-one] third-party service worker detected (' +
                 act.scriptURL + '): registration cancelled, post-load interception unavailable');
               return null;
             }
@@ -160,11 +160,11 @@
           return navigator.serviceWorker.register(OUR_SW, { scope: '/' });
         }).then(function (reg) {
           if (reg) {
-            console.info('[gateway] rewrite SW ' +
+            console.info('[gate-one] rewrite SW ' +
               (reg.active ? 'active' : 'installed, waiting for control'));
           }
         }, function (err) {
-          console.warn('[gateway] service worker registration failed: ' + err);
+          console.warn('[gate-one] service worker registration failed: ' + err);
         });
       } catch (e) { /* diagnostics only, never breaks the page */ }
     }
@@ -200,7 +200,7 @@
       } catch (e) {
         return; // no storage: no catch-up (no loop)
       }
-      console.warn('[gateway] call(s) went to the origin before SW control — catch-up reload (unique per session)');
+      console.warn('[gate-one] call(s) went to the origin before SW control — catch-up reload (unique per session)');
       location.reload();
     }
     try {
@@ -716,7 +716,7 @@
     }
     // roles / scopes chips (USERBADGE.roles / .scopes): the same
     // data the when.conditions and the data-gtw-roles gating see —
-    // read once from the /__gateway/auth probe.
+    // read once from the /__gate-one/auth probe.
     if (sessionRoles.length) {
       var rl = badgeItems(USERBADGE.roles, sessionRoles);
       if (rl.length) body.appendChild(chipsRow("roles", rl));

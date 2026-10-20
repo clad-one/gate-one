@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 // extractApiCacheName returns the generated apiCache cache name from a
 // generated SW body.
 func extractApiCacheName(sw string) string {
-	marker := "caches.open('gateway-pwa-api-"
+	marker := "caches.open('gate-one-pwa-api-"
 	i := strings.Index(sw, marker)
 	if i < 0 {
 		return ""
@@ -80,5 +80,32 @@ func TestApiCacheNameStableAcrossSWChanges(t *testing.T) {
 	if extractApiCacheName(sw1) != extractApiCacheName(sw2) {
 		t.Errorf("API cache invalidated by an unrelated change:\n%q\nvs\n%q",
 			extractApiCacheName(sw1), extractApiCacheName(sw2))
+	}
+}
+
+// The "Cladone Gate One" rename changed the cache prefixes
+// (gateway-pwa-* -> gate-one-pwa-*). Caches left in storage by a
+// pre-rename service worker would never match the current-version
+// filters: the activate handler must carry a delete-only legacy list
+// and clear them unconditionally. Text-level regression: the
+// generated SW must keep the LEGACY_PREFIXES constant and the
+// unconditional filter clause (behavioral check: sw-sim).
+func TestSWLegacyCachePurge(t *testing.T) {
+	sw := New(emptyPolicy()).swJS()
+
+	for _, want := range []string{
+		// delete-only constant, pre-rename prefixes
+		"const LEGACY_PREFIXES = ['gateway-pwa-'];",
+		// unconditional deletion clause, evaluated FIRST
+		"LEGACY_PREFIXES.some((p) => k.startsWith(p)) ||",
+	} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("legacy purge missing %s in:\n%s", want, sw)
+		}
+	}
+	// sanity: the CURRENT prefixes replaced the old ones
+	if strings.Contains(strings.ReplaceAll(sw, "LEGACY_PREFIXES = ['gateway-pwa-'];", ""),
+		"'gateway-pwa-") {
+		t.Error("a legacy prefix leaked outside LEGACY_PREFIXES (caches would be re-created)")
 	}
 }

@@ -124,8 +124,8 @@ func TestMCPLegacyInitialize(t *testing.T) {
 	}
 
 	serverInfo, _ := result["serverInfo"].(map[string]any)
-	if name, _ := serverInfo["name"].(string); name != "cladone-gateway" {
-		t.Errorf("serverInfo.name = %v, want cladone-gateway", serverInfo)
+	if name, _ := serverInfo["name"].(string); name != "cladone-gate-one" {
+		t.Errorf("serverInfo.name = %v, want cladone-gate-one", serverInfo)
 	}
 }
 

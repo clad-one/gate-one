@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 // testLoginURL: the login page of the test configs (the UI harness

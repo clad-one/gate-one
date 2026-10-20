@@ -1,5 +1,5 @@
 // Package pwa implements the declarative PWA wrap of frontend routes:
-// it serves /__gateway_pwa/manifest.json, /__gateway_pwa/sw.js and the
+// it serves /__gate-one_pwa/manifest.json, /__gate-one_pwa/sw.js and the
 // self-hosted Workbox runtime (embedded in the binary, nothing is
 // fetched from storage.googleapis.com at runtime — Workbox is MIT
 // licensed, see workbox/LICENSE).
@@ -14,11 +14,11 @@ import (
 	"net/http"
 	"strings"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 // Virtual prefix served by the gateway itself, before any route proxying.
-const PathPrefix = "/__gateway_pwa/"
+const PathPrefix = "/__gate-one_pwa/"
 
 // SwURL: URL of the unified service worker (PWA and/or client-side
 // rewriting), served by the gateway pre-authentication,
@@ -163,7 +163,12 @@ workbox.setConfig({ modulePathPrefix: '` + PathPrefix + `workbox/' });
 // activation. No change => same caches, the offline replay
 // survives tab closures.
 const CACHE_VERSION = '@@CACHE_VERSION@@';
-const ASSETS_CACHE = 'gateway-pwa-assets-' + CACHE_VERSION;
+const ASSETS_CACHE = 'gate-one-pwa-assets-' + CACHE_VERSION;
+// Legacy cache names from before the "Cladone Gate One" rename —
+// delete-only: caches actually installed by a predecessor SW stay in
+// storage and must be wiped at activation, they can never be matched
+// (let alone cleaned) by the current-version filters below.
+const LEGACY_PREFIXES = ['gateway-pwa-'];
 
 // takes control as soon as installed: the update takes effect at
 // the next load, without waiting for all tabs to close
@@ -181,10 +186,14 @@ self.addEventListener('activate', (event) => {
             // version is encoded in the name (v<logic>-<hash>) and
             // the CACHE_VERSION purge must NOT touch them — only
             // API caches with the outdated format are deleted.
+            // Plus the LEGACY_PREFIXES, deleted unconditionally (see
+            // above): a pre-rename SW never matches the current
+            // prefixes, its caches would linger forever.
             .filter((k) =>
-              (k.startsWith('gateway-pwa-assets-') && !k.includes(CACHE_VERSION)) ||
-              (k.startsWith('gateway-pwa-api-') &&
-               !/^gateway-pwa-api-.*-v\d+-[0-9a-f]{8}$/.test(k))
+              LEGACY_PREFIXES.some((p) => k.startsWith(p)) ||
+              (k.startsWith('gate-one-pwa-assets-') && !k.includes(CACHE_VERSION)) ||
+              (k.startsWith('gate-one-pwa-api-') &&
+               !/^gate-one-pwa-api-.*-v\d+-[0-9a-f]{8}$/.test(k))
             )
             .map((k) => caches.delete(k))
         )
@@ -206,12 +215,12 @@ if (workbox) {
     })
   );
   // diagnostic marker step 1: networkOnly + assets routes registered
-  caches.open('gateway-pwa-debug').then((c) => c.put('/step1-assets-route', new Response('ok')));
+  caches.open('gate-one-pwa-debug').then((c) => c.put('/step1-assets-route', new Response('ok')));
   // diagnostic marker step 2: apiCache about to start
-  caches.open('gateway-pwa-debug').then((c) => c.put('/step2-before-apicache', new Response('ok')));
+  caches.open('gate-one-pwa-debug').then((c) => c.put('/step2-before-apicache', new Response('ok')));
 ` + h.apiCacheJS() + `
   // diagnostic marker: the SW has loaded all its routes
-  caches.open('gateway-pwa-debug').then((c) => c.put('/__routes_loaded', new Response('ok')));
+  caches.open('gate-one-pwa-debug').then((c) => c.put('/__routes_loaded', new Response('ok')));
   }
 self.addEventListener('fetch', () => {}); // no-op: force listener attachment
 `
@@ -494,7 +503,7 @@ func (h *Handler) apiCacheJS() string {
         headers: {'Content-Type': 'text/event-stream'},
       });
       await cache.put(request, response);
-      console.log('[gateway-pwa] API cache written:', request.url, size + ' bytes');
+      console.log('[gate-one-pwa] API cache written:', request.url, size + ' bytes');
       await expiration.cacheDidUpdate({
         cacheName: cacheName,
         request: request,
@@ -502,7 +511,7 @@ func (h *Handler) apiCacheJS() string {
         newResponse: response,
       });
     } catch (err) {
-      console.error('[gateway-pwa] API cache FAILURE:', err && err.message);
+      console.error('[gate-one-pwa] API cache FAILURE:', err && err.message);
       // stream cancelled or interrupted, or quota exceeded: nothing is cached
     }
   }
@@ -543,7 +552,7 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
 		allTimeoutSec = 3
 	)
 
-	cacheName := "gateway-pwa-api-all"
+	cacheName := "gate-one-pwa-api-all"
 	// Versioning: hash of the configuration block (excludes
 	// included) + the common logic version. Reconfiguring the
 	// catch-all does not invalidate the explicit endpoints' caches,
@@ -613,7 +622,7 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
         // URLs (about:, blob:) already excluded by workbox.
         return fetch(req);
       }
-      console.log('[gateway-pwa] apiGETCache intercepted:', req.url);
+      console.log('[gate-one-pwa] apiGETCache intercepted:', req.url);
       const cache = await caches.open('` + cacheName + `');
       const hit = await cache.match(req);
       const refresh = () => fetchNetwork(req, ` + fmtInt(allTimeoutSec) + `).then(({response}) => {
@@ -684,7 +693,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 	offlineFast := method == "POST" &&
 		(c.OfflineFastPath == nil || *c.OfflineFastPath)
 
-	cacheName := "gateway-pwa-api-" + strings.TrimPrefix(c.Path, "/")
+	cacheName := "gate-one-pwa-api-" + strings.TrimPrefix(c.Path, "/")
 	if c.Version != "" {
 		cacheName += "-" + c.Version
 	}
@@ -722,7 +731,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
 		return ""
 	}()) + `url.pathname === '` + c.Path + `',
     async ({event}) => {
-      console.log('[gateway-pwa] apiCache route intercepted:', event.request.method, event.request.url);
+      console.log('[gate-one-pwa] apiCache route intercepted:', event.request.method, event.request.url);
       const req = event.request;
       const cache = await caches.open('` + cacheName + `');` + func() string {
 		if method == "GET" {
@@ -780,7 +789,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
         // Logging the body makes it possible to immediately see THE
         // field at fault (phonetic, meters, trailing space in the
         // text...).
-        console.log('[gateway-pwa] key:', keyReq.url.slice(keyReq.url.indexOf('__pwa_key=')),
+        console.log('[gate-one-pwa] key:', keyReq.url.slice(keyReq.url.indexOf('__pwa_key=')),
           '\n  body:', bodyText);
       } catch (e) { keyReq = null; } // unreadable body: no replay
       try {
@@ -797,7 +806,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
         if (OFFLINE_FAST_` + jsIdent(c.Path) + ` && !self.navigator.onLine) {
           const offlineHit = keyReq ? await cache.match(keyReq) : null;
           if (offlineHit) {
-            console.log('[gateway-pwa] replay offline (onLine=false):', keyReq.url);
+            console.log('[gate-one-pwa] replay offline (onLine=false):', keyReq.url);
             return offlineHit;
           }
           // nothing cached: try the fetch anyway (offline
@@ -829,10 +838,10 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
         if (keyReq) {
           const cached = await cache.match(keyReq);
           if (cached) {
-            console.log('[gateway-pwa] replay offline:', keyReq.url);
+            console.log('[gate-one-pwa] replay offline:', keyReq.url);
             return cached;
           }
-          console.warn('[gateway-pwa] no cache for this request:', keyReq.url);
+          console.warn('[gate-one-pwa] no cache for this request:', keyReq.url);
         }
         throw err;
       }`
@@ -936,13 +945,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		// The SW is registered from a page on "/" scope; registering
-		// from /__gateway_pwa/ would otherwise limit its scope.
+		// from /__gate-one_pwa/ would otherwise limit its scope.
 		w.Header().Set("Service-Worker-Allowed", "/")
 		_, _ = w.Write([]byte(h.swJS()))
 		return
 	}
 
-	// Vendored Workbox runtime: /__gateway_pwa/workbox/<file>
+	// Vendored Workbox runtime: /__gate-one_pwa/workbox/<file>
 	if strings.HasPrefix(rest, "workbox/") {
 		name := strings.TrimPrefix(rest, "workbox/")
 		name = strings.TrimPrefix(name, "/")

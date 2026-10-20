@@ -9,7 +9,7 @@ import (
 )
 
 // Lightweight statistics: per-route counters (requests, statuses) +
-// auth cache activity. Exposed on /__gateway/stats (JSON) —
+// auth cache activity. Exposed on /__gate-one/stats (JSON) —
 // counters only, no user data.
 
 type routeStats struct {
@@ -58,7 +58,7 @@ func (w *statsWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// serveStats answers /__gateway/stats.
+// serveStats answers /__gate-one/stats.
 func serveStats(w http.ResponseWriter, r *http.Request) {
 	statsMu.Lock()
 	defer statsMu.Unlock()

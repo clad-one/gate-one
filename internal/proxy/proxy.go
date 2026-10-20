@@ -1,9 +1,9 @@
 package proxy
 
 import (
-	"cladone/gateway/internal/core"
-	mcpserver "cladone/gateway/internal/mcp"
-	"cladone/gateway/internal/pwa"
+	"cladone/gate-one/internal/core"
+	mcpserver "cladone/gate-one/internal/mcp"
+	"cladone/gate-one/internal/pwa"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,7 +28,7 @@ type compiledRoute struct {
 	mcp *mcpserver.Server
 
 	// non-nil when the route declares a pwa policy: serves
-	// /__gateway_pwa/* and injects PWA tags into HTML responses
+	// /__gate-one_pwa/* and injects PWA tags into HTML responses
 	pwa *pwa.Handler
 
 	// route rateLimit/quota limiters (fixed windows), built
@@ -675,7 +675,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
 		return
-	case "/__gateway/stats":
+	case "/__gate-one/stats":
 		serveStats(w, r)
 		return
 	}

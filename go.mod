@@ -1,4 +1,4 @@
-module cladone/gateway
+module cladone/gate-one
 
 go 1.26.4
 

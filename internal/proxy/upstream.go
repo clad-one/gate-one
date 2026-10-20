@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 // applyUpstreamDirector finalizes the outgoing request according to

@@ -16,7 +16,7 @@ func New(
 
 	server := mcp.NewServer(
 		&mcp.Implementation{
-			Name:    "cladone-gateway",
+			Name:    "cladone-gate-one",
 			Version: "0.1.0",
 		},
 		nil,

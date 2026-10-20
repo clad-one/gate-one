@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"cladone/gateway/internal/core"
+	"cladone/gate-one/internal/core"
 )
 
 // Unit table of rewriteCookieDomain: input = raw Set-Cookie line
