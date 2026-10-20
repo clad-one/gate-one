@@ -20,8 +20,16 @@ gw_log=$(mktemp /tmp/gw-smoke-gwlog.XXXX)
 # gw_log is kept after the run (for diagnostics): /tmp/gw-smoke-gwlog.*
 trap 'kill $GW_PID $BE_PID $AB_PID 2>/dev/null || true; rm -f "$routes_tmp" "$backend_tmp" "$bridge_tmp" "$scopes_tmp"' EXIT
 
+# oidc block: MANDATORY since the auth-bridge externalisation — the
+# guard-active routes are refused at load without a login URL, and the
+# MCP metadata needs an issuer (fail-fast validation in core.Load).
+# Pointing both at the local auth-bridge STUB (no external dependency).
 cat > "$routes_tmp" <<EOF
 {
+  "oidc": {
+    "loginUrl": "http://127.0.0.1:${PORT_AB}/login",
+    "issuer": "http://127.0.0.1:${PORT_AB}/realms/smoke"
+  },
   "routes": [
     {
       "host": "smoke.local",
@@ -261,19 +269,28 @@ grep -q '"authorization": "Basic YmFzaWMtdG9rZW4="' <<<"$echo_result" \
 grep -q '"strip_present": false' <<<"$echo_result" \
     || fail "X-Strip-Me (empty value) not removed: $echo_result"
 
-# 2) absolute Location from the backend origin rewritten back to the public host
+# 2) absolute Location from the backend origin rewritten back to the
+#    PUBLIC origin: scheme MIRROR of what the client used — http for a
+#    direct curl on the plain gateway, https when the front proxy
+#    (traefik) passes X-Forwarded-Proto (the production path)
 resp_redirect=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/redirect?loc=http%3A%2F%2F127.0.0.1%3A${PORT_BE}%2Fcible%2F%3Fa%3D1")
 loc=$(grep -i '^location:' <<<"$resp_redirect" | tr -d '\r' | awk '{print $2}')
+[ "$loc" = "http://upstream.smoke.local/cible/?a=1" ] \
+    || fail "Location not rewritten (direct, http expected): '$loc'"
+resp_redirect=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
+    -H 'X-Forwarded-Proto: https' \
+    "http://127.0.0.1:${PORT_GW}/redirect?loc=http%3A%2F%2F127.0.0.1%3A${PORT_BE}%2Fcible%2F%3Fa%3D1")
+loc=$(grep -i '^location:' <<<"$resp_redirect" | tr -d '\r' | awk '{print $2}')
 [ "$loc" = "https://upstream.smoke.local/cible/?a=1" ] \
-    || fail "Location not rewritten: '$loc'"
+    || fail "Location not rewritten (X-Forwarded-Proto: https expected): '$loc'"
 
 # 3) backend CSP removed + response header set
 resp_page=$(curl -s -D - -o /dev/null -H "Host: upstream.smoke.local" \
     "http://127.0.0.1:${PORT_GW}/page")
 grep -qi '^content-security-policy:' <<<"$resp_page" \
     && fail "Origin CSP not removed"
-grep -qi '^x-gateway-smoke: upstream' <<<"$resp_page" \
+grep -qi '^x-gate-one-smoke: upstream' <<<"$resp_page" \
     || fail "X-Gate-One-Smoke not set"
 
 # 4) the guard script is still injected into the proxied HTML
