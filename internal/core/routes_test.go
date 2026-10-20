@@ -396,7 +396,8 @@ func TestUserBadgeRolesScopesDeserialization(t *testing.T) {
 	}
 }
 
-// The REAL production config must pass the strict grammar.
+// The reference production config (testdata/api-routes.json, a copy
+// of the live cladone-it-infra config) must pass the strict grammar.
 // Secrets are referenced there by ${VAR} interpolation (resolved
 // from the container environment in production): the test
 // pre-sets each referenced variable to a dummy value —
@@ -404,7 +405,7 @@ func TestUserBadgeRolesScopesDeserialization(t *testing.T) {
 // TestUpstreamEnvMissingVarFails), not this test.
 func TestLoadRealConfigStrict(t *testing.T) {
 
-	data, err := os.ReadFile("../../api-routes.json")
+	data, err := os.ReadFile("../../testdata/api-routes.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +414,7 @@ func TestLoadRealConfigStrict(t *testing.T) {
 		t.Setenv(m[1], "test-"+m[1])
 	}
 
-	c, err := Load("../../api-routes.json")
+	c, err := Load("../../testdata/api-routes.json")
 	if err != nil {
 		t.Fatalf("real api-routes.json invalid: %v", err)
 	}
