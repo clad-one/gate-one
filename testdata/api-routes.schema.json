@@ -1,0 +1,515 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cladone.com/schemas/api-routes.schema.json",
+  "title": "Cladone gateway configuration (api-routes.json)",
+  "description": "Formal grammar of the Gate One configuration file. Complementary source of truth: gate-one-src/internal/core/routes.go (JSON tags). Only implemented fields are described — any unknown field is rejected by the strict test (core: TestLoadRealConfigStrict).",
+  "type": "object",
+  "required": ["routes"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional reference to this schema (autocompletion and validation in the editor)."
+    },
+    "oidc": {
+      "type": "object",
+      "description": "The platform's IdP — NO IdP URL is hard-coded in the code: the gateway is deployable by others, for other sites, with other rights. loginUrl = default login page for frontend routes with active guard (overridable per route via authGuard.loginUrl); required if such a route exists. issuer = OIDC issuer announced in the OAuth metadata of MCP routes (authorization_servers); required if an MCP route exists. Refuses to start/reload if a requirement is not met.",
+      "additionalProperties": false,
+      "properties": {
+        "loginUrl": {
+          "type": "string",
+          "description": "Platform login page (e.g. \"https://login.example.com/login\"). Used by the server-side redirect of frontend routes and by the guard script (per-route authGuard.loginUrl takes precedence)."
+        },
+        "issuer": {
+          "type": "string",
+          "description": "OIDC issuer (e.g. \"https://auth.example.com/realms/example\") — announced as the authorization_server of the MCP OAuth metadata."
+        }
+      }
+    },
+    "routes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/route" }
+    }
+  },
+  "definitions": {
+    "match": {
+      "type": "object",
+      "description": "Policy triggering conditions. Two families: technical (method/query/header/body — evaluated BEFORE authentication, decide whether auth is required) and identity (roles/scopes/claims/user — evaluated AFTER authentication on the verified token; failure = 403 forbidden). All conditions combine with AND.",
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "type": "string",
+          "description": "Exact HTTP method (e.g. \"POST\")."
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Exact equality of URL parameters."
+        },
+        "header": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Exact equality of headers. Caution: a header is forgeable by the client — never put an authorization there (use roles instead)."
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Exact equality of fields of the parsed JSON body (flattened one level)."
+        },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required Keycloak roles (realm roles + flattened client roles, see auth-bridge's X-Roles). AND between them. Example of a fixed name: offline_access (realm role granted to every user via default-roles-<realm>)."
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required granted scopes (token `scope` claim, see auth-bridge's X-Scopes). AND between them. Example of a fixed name: profile (default client scope, always present)."
+        },
+        "claims": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Token claims: value \"*\" = mere presence, otherwise comparison of the stringified value (JSON boolean → \"true\"/\"false\", numbers → Go format). AND between them. NB: client_credentials tokens (service accounts) have neither email nor profile claims."
+        },
+        "user": {
+          "type": "string",
+          "description": "Exact username required (preferred_username)."
+        }
+      }
+    },
+    "authPolicy": {
+      "type": "object",
+      "description": "Authentication policy: when empty ({}) authentication is ALWAYS required; with a when, it is required when the technical conditions match, and the identity conditions are checked afterwards (403 otherwise).",
+      "additionalProperties": false,
+      "properties": {
+        "when": { "$ref": "#/definitions/match" }
+      }
+    },
+    "userBadgePolicy": {
+      "type": "object",
+      "description": "User badge injected by the guard script once authenticated: collapsed on the top edge (one line = username), expanded on hover/keyboard focus — chosen claims + logout button (OIDC end_session + cookie clearing). Absent = no badge.",
+      "additionalProperties": false,
+      "properties": {
+        "position": {
+          "type": "string",
+          "enum": ["left", "right"],
+          "description": "Top edge (default right)."
+        },
+        "claims": {
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          ],
+          "description": "What the expanded badge displays as claims: true = every claim of the session, false = none, a list = only these (missing ones omitted)."
+        },
+        "roles": {
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          ],
+          "description": "Session roles displayed as chips in the expanded badge: true = every role, false = none, a list = only these (same data as the when.roles conditions, served by the /__gate-one/auth probe)."
+        },
+        "scopes": {
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          ],
+          "description": "Granted scopes displayed as chips in the expanded badge: true = every scope, false = none, a list = only these."
+        },
+        "logoutLabel": {
+          "type": "string",
+          "description": "Label of the logout button (default Log out)."
+        },
+        "loginBadge": {
+          "type": "boolean",
+          "description": "true = the badge ALSO appears when anonymous, from the very first visit, in invitation mode (\"👤 Sign in\") — clicked, it opens the login tab: offer sign-in without touching the site's markup. Default false (badge only once authenticated; when anonymous it only appears after a detected session death)."
+        }
+      }
+    },
+    "uiGateRule": {
+      "type": "object",
+      "description": "UI gating rule by config — for fronts whose markup cannot be modified (if you control the HTML, prefer the data-gtw-* attributes). The selected element is visible only if the session satisfies the conditions (OR on roles, OR on scopes, AND on claims). PRECEDENCE: an element carrying at least one data-gtw-* attribute ignores uiGate rules; several rules on a same element combine with AND; invalid selector = rule ignored.",
+      "additionalProperties": false,
+      "required": ["selector"],
+      "properties": {
+        "selector": {
+          "type": "string",
+          "description": "CSS selector (querySelectorAll) of the targeted elements."
+        },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Visible if AT LEAST ONE of these roles is held."
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Visible if AT LEAST ONE of these scopes is granted."
+        },
+        "claims": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "All must match (\"*\" = presence)."
+        },
+        "auth": {
+          "type": "string",
+          "enum": ["after", "before"],
+          "description": "Turns the selected elements into login triggers: after = native action preserved + invitation tab; before = click neutralized + direct tab."
+        },
+        "hidden": {
+          "type": "string",
+          "enum": ["before", "after"],
+          "description": "Hiding: before = hidden before authentication (any click reaching it is neutralized → banner); after = hidden once authenticated."
+        }
+      }
+    },
+    "rateLimitPolicy": {
+      "type": "object",
+      "description": "Rate limiting: fixed window per identity (authenticated user, else real IP via X-Forwarded-For), per route. Full window = 429 + Retry-After (seconds). Periods: second|minute|hour|day.",
+      "additionalProperties": false,
+      "required": ["requests", "period"],
+      "properties": {
+        "requests": { "type": "integer" },
+        "period": { "type": "string" },
+        "when": { "$ref": "#/definitions/match" }
+      }
+    },
+    "quotaPolicy": {
+      "type": "object",
+      "description": "Cumulative quota: same mechanics as rateLimit with a longer window in practice (day). Full window = 429 + Retry-After.",
+      "additionalProperties": false,
+      "required": ["limit", "period"],
+      "properties": {
+        "limit": { "type": "integer" },
+        "period": { "type": "string" },
+        "when": { "$ref": "#/definitions/match" }
+      }
+    },
+    "authGuardPolicy": {
+      "type": "object",
+      "description": "401 guard script (login without reloading: tab + replay + banner + declarative gating). Active by default on frontend routes; no-op elsewhere. The guard only intercepts the 401 — a 403 (insufficient rights) crosses to the app.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "false = opt-out (the front handles its own 401)."
+        },
+        "loginUrl": {
+          "type": "string",
+          "description": "Default: https://login.cladone.com/login (auth-bridge page)."
+        }
+      }
+    },
+    "openapiPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string" },
+        "public": { "type": "boolean", "description": "false = the openapi.json is only served authenticated." }
+      }
+    },
+    "mcpOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "operationId"],
+      "properties": {
+        "name": { "type": "string" },
+        "operationId": { "type": "string" }
+      }
+    },
+    "mcpPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "operations"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "path": { "type": "string", "description": "Default: /mcp." },
+        "scope": {
+          "type": "string",
+          "description": "Keycloak client scope required from MCP clients (bearer `scope` claim), announced in /.well-known/oauth-protected-resource and checked by auth-bridge (internal X-MCP-Scope header). Default: mcp-tools."
+        },
+        "operations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/mcpOperation" }
+        }
+      }
+    },
+    "pwaApiCache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" },
+        "method": {
+          "type": "string",
+          "enum": ["POST", "GET", "none"],
+          "description": "POST (default) = network-first offline replay of POST/SSE; GET = SWR cache of this exact path; none = full opt-out (never cached, excluded from the apiGETCache catch-all)."
+        },
+        "maxEntries": { "type": "integer", "description": "Default 50." },
+        "maxAgeSeconds": { "type": "integer", "description": "Default 86400 (24 h)." },
+        "maxEntrySizeBytes": { "type": "integer", "description": "Default 2 MiB — beyond, streamed but not cached." },
+        "version": { "type": "string", "description": "Semantic invalidation of the endpoint's cache (bump it when the backend result changes)." },
+        "idleFinalizeMs": { "type": "integer", "description": "Default 1500 — finalizes the cached response after this SSE silence." },
+        "networkTimeoutSeconds": { "type": "integer", "description": "Default 3 — network delay before the cache fallback (headers only)." },
+        "offlineFastPath": {
+          "type": "boolean",
+          "description": "Default true: offline, serves the cache directly. false = the network failure (bounded by networkTimeoutSeconds) triggers the fallback — for endpoints where replaying a write would be wrong."
+        }
+      }
+    },
+    "pwaApiGETCache": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Its presence activates the universal GET cache (everything nothing else covers).",
+      "properties": {
+        "excludes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Path prefixes never cached by the catch-all."
+        },
+        "excludePatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "JS regexes (full URL) never cached — invalid syntax rejected at load."
+        }
+      }
+    },
+    "pwaNetworkOnly": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Its presence activates the \"never cached\" route (auth exchanges, OAuth callbacks carrying a one-time code…).",
+      "properties": {
+        "excludePatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "JS regexes (full URL) → straight to the network, no cache."
+        }
+      }
+    },
+    "pwaAssets": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Strategy of same-origin pages/assets (documents, scripts, styles). Default: staleWhileRevalidate without timeout.",
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "description": "staleWhileRevalidate (default) | networkFirst | cacheFirst (case-free, normalized)."
+        },
+        "networkTimeoutSeconds": {
+          "type": "integer",
+          "description": "For networkFirst (default 3)."
+        }
+      }
+    },
+    "pwaPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "name": { "type": "string" },
+        "shortName": { "type": "string" },
+        "themeColor": { "type": "string" },
+        "icon": { "type": "string", "description": "Legacy singular (still read)." },
+        "icons": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Same-host paths referenced by the manifest (Chrome: 192×192 and 512×512 PNG for full install)."
+        },
+        "apiCache": { "$ref": "#/definitions/pwaApiCache", "description": "Legacy singular (still read)." },
+        "apiCaches": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/pwaApiCache" }
+        },
+        "apiGETCache": { "$ref": "#/definitions/pwaApiGETCache" },
+        "networkOnly": { "$ref": "#/definitions/pwaNetworkOnly" },
+        "assets": { "$ref": "#/definitions/pwaAssets" }
+      }
+    },
+    "upstreamResponseHeaders": {
+      "type": "object",
+      "description": "Adjustment of the backend's RESPONSE headers before sending to the browser — typically remove an origin Content-Security-Policy that would block the injected guard script, or set a deployment header.",
+      "additionalProperties": false,
+      "properties": {
+        "set": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Headers added/overwritten on the response; values with ${VAR} interpolation (container environment); empty value = header removed (never transmitted empty)."
+        },
+        "remove": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Header names removed from the response (e.g. Content-Security-Policy)."
+        }
+      }
+    },
+    "upstreamPolicy": {
+      "type": "object",
+      "description": "Join to a backend outside the internal network (proxified external site — e.g. Cloudflare Pages/Workers). Absent = unchanged historical behavior: public Host preserved, client headers passed as-is.",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "boolean",
+          "description": "true = the Host header sent to the backend is that of the backend's origin (required for an external site that routes by Host, e.g. Cloudflare — otherwise the request arrives with the public host and the origin does not recognize it). Absent/false = public Host passed as-is (internal backends). TLS/SNI always targets the backend's origin."
+        },
+        "hostOverride": {
+          "type": "string",
+          "description": "Explicit value of the Host header sent to the backend, when it must differ from both the public host and the backend's origin (rare). Precedence over host."
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Static request headers set toward the backend (Set: overwrite any value the client may have sent). Uses: get through an origin basic auth (\"Authorization\": \"Basic ${MYSITE_BASIC_AUTH}\") or the Cloudflare Access service tokens (CF-Access-Client-Id / CF-Access-Client-Secret). Values with ${VAR} interpolation from the container environment — missing variable = fatal error at load (never a silent empty credential); empty value = header removed from the request. Values are never logged."
+        },
+        "rewriteRedirects": {
+          "type": "boolean",
+          "description": "true = ABSOLUTE Locations targeting the backend's origin are rewritten to the public host (https scheme, path/query preserved) — otherwise the browser would leave the proxy at the target site's first absolute redirect (e.g. 301 of the trailing slash). Relative Locations and those targeting other origins (e.g. a Cloudflare Access team domain) pass intact. Default: false."
+        },
+        "responseHeaders": { "$ref": "#/definitions/upstreamResponseHeaders" },
+        "rewriteBody": { "$ref": "#/definitions/rewriteBodyPolicy" },
+        "rewriteCookies": { "$ref": "#/definitions/rewriteCookiesPolicy" },
+        "browserCache": { "$ref": "#/definitions/browserCachePolicy" }
+      }
+    },
+    "browserCachePolicy": {
+      "type": "object",
+      "description": "HTTP-cache orientation to the BROWSER for assets the origin serves with no Cache-Control (and no Last-Modified either: without these two headers the browser has no heuristic cache — every re-view re-fetches or revalidates each asset, one full round-trip each). Only 200 responses of content-type image/*, Cache-Control absent only: the origin's own declarations pass untouched. Sent as \"private, max-age=…\" — private: resources under authentication stay out of any shared cache; the origin's ETag remains for revalidation after expiry. Default: absent (headers preserved as-is).",
+      "additionalProperties": false,
+      "required": ["imagesMaxAgeSeconds"],
+      "properties": {
+        "imagesMaxAgeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Freshness duration (seconds) granted to the images (content-type image/*). E.g. 604800 = a week; 31536000 = a year (only if these files are immutable: the image names followed here are the capture timestamps, not content hashes — prefer a moderate duration if the app can re-edite a photo)."
+        }
+      }
+    },
+    "rewriteCookiesPolicy": {
+      "type": "object",
+      "description": "Translation of the Set-Cookie set by the origin: a Domain attribute targeting its own namespace (\"Domain=jacquelot…workers.dev\") would be rejected by the browser from the public host — the cookie would be silently lost. Active: a Domain targeting the origin host (equal or parent) is rewritten to the public host in \"rewrite\" mode (the sharing scope — host + subdomains — is transposed as-is), or the attribute is removed in \"strip\" mode (host-only on the public host). Other cookies pass intact (surgery of the Domain attribute only: Path/Secure/HttpOnly/SameSite/Expires come out byte-exact). Auth protection: an origin Set-Cookie bearing a name reserved for the gateway session (access_token, refresh_token, id_token, session) is removed with a warning — set on the same public host, it would overwrite the session cookies. Default: absent (no cookie rewriting).",
+      "additionalProperties": false,
+      "required": ["domain"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["rewrite", "strip"],
+          "description": "\"rewrite\" (recommended) = Domain transposed to the public host; \"strip\" = Domain attribute removed."
+        }
+      }
+    },
+    "rewriteBodyPolicy": {
+      "type": "object",
+      "description": "Rewriting of the HTML body (200 text/html only, STREAMING — O(1) memory): the origin's absolute URLs cited in the pages (\"https://origin/…\", \"http://origin/…\", \"//origin/…\") are rewritten to the route's public host, so the browser stays in the proxy. Any explicit port is part of the rewritten prefix and is lost (target served on the standard port). The path, query and fragment follow as-is. At runtime (fetch/XHR/sendBeacon launched by the site), the client SW served on /__gate-one_pwa/sw.js applies the same policy — it is auto-registered by the guard script, served pre-authentication. One same policy (origins × exceptions × target) is implemented three times (Go engine, client SW, script patch) — parity tested. Default: absent (no body rewriting).",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "true = engine active (the block is present to stay declarative; absent = disabled)."
+        },
+        "except": {
+          "type": "array",
+          "maxItems": 64,
+          "description": "Exceptions by path prefix: string entry (\"/reading/…\") = these URLs stay at the ORIGIN (out-of-proxy reading link); object entry {path, to} = rewritten to an ALTERNATIVE public base. Longest prefix wins. '/…' prefix mandatory, '?'/'#' forbidden, 256 bytes max; 'to' = absolute http(s) URL, trailing slashes trimmed.",
+          "items": { "$ref": "#/definitions/rewriteExcept" }
+        }
+      }
+    },
+    "rewriteExcept": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Path prefix kept at the origin (e.g. \"/CorrespondancesBonPapaEtBonneMaman/\" = origin-direct reading link)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Concerned path prefix (\"/…\")."
+            },
+            "to": {
+              "type": "string",
+              "description": "Replacement base \"https://alternative.host\" (the full path follows)."
+            }
+          }
+        }
+      ]
+    },
+    "injectPatch": {
+      "type": "object",
+      "description": "A patch rule: the attributes (typically data-gtw-*) are set on the matched elements, client-side, on every guard evaluation cycle (dynamic elements covered). A pre-existing markup attribute is overwritten.",
+      "additionalProperties": false,
+      "required": ["selector", "attrs"],
+      "properties": {
+        "selector": {
+          "type": "string",
+          "description": "CSS selector (querySelectorAll); invalid = rule ignored + nothing broken."
+        },
+        "attrs": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Attributes to set (e.g. {\"data-gtw-logout\": \"\", \"data-gtw-auth-hidden\": \"after\"})."
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "path", "backend"],
+      "properties": {
+        "host": { "type": "string", "description": "Host of the route (routed by Host). Named capture {name}: one DNS label, expanded AT LOAD into one concrete route per allow-listed label of the wildcard block (bounded, fail-closed anti-SSRF)." },
+        "wildcard": {
+          "type": "object",
+          "description": "Named host/backend expansion — one route, N sites. Keys = capture names ({name} in host and backend), values = the ALLOW-LISTS of DNS labels they may take (a-z0-9, hyphens, no dots). The route expands at load into one concrete route per label; a label outside the lists has no route (fail-closed: the backend is never attacker-derived).",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "path": {
+          "type": "string",
+          "description": "Prefix; \"/*\" = wildcard (whole host)."
+        },
+        "backend": { "type": "string" },
+        "inject": {
+          "type": "string",
+          "description": "Path of the route's custom injection bundle (JSON), relative to the config file. The bundle declares HTML/JS/CSS insertions by named target (\"head\" = after <head>/meta charset, \"body-end\" = before </body>) with per-page targeting (when = path prefix) and data-* attribute patches applied client-side by the guard. Inline content or file: (relative to the bundle, read at load — a faulty bundle refuses startup). See the doc's § upstream.inject."
+        },
+        "upstream": { "$ref": "#/definitions/upstreamPolicy" },
+        "frontend": {
+          "type": "boolean",
+          "description": "Page route: auth failure → 302 to the login (API routes get a JSON 401); eligible for the guard script and the pwa policy."
+        },
+        "autoHead": {
+          "type": "boolean",
+          "description": "HEAD requests are served as GET, body removed."
+        },
+        "auth": { "$ref": "#/definitions/authPolicy" },
+        "rateLimit": { "$ref": "#/definitions/rateLimitPolicy" },
+        "quota": { "$ref": "#/definitions/quotaPolicy" },
+        "openapi": { "$ref": "#/definitions/openapiPolicy" },
+        "mcp": { "$ref": "#/definitions/mcpPolicy" },
+        "pwa": { "$ref": "#/definitions/pwaPolicy" },
+        "userBadge": { "$ref": "#/definitions/userBadgePolicy" },
+        "uiGate": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/uiGateRule" },
+          "description": "UI gating by config (CSS selectors) — embedded in the injected guard script. Only for non-modifiable fronts; an element's data-gtw-* markup wins over the rules."
+        },
+        "authGuard": { "$ref": "#/definitions/authGuardPolicy" }
+      }
+    }
+  }
+}
