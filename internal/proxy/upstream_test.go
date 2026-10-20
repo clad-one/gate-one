@@ -55,6 +55,23 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte("<html><head></head><body>x</body></html>"))
 	})
 
+	// Image asset served WITHOUT Cache-Control (the no-heuristic
+	// case browserCache covers) — the ?cc= query simulates an
+	// origin MAKING its own declaration.
+	mux.HandleFunc("/img", func(w http.ResponseWriter, r *http.Request) {
+		if cc := r.URL.Query().Get("cc"); cc != "" {
+			w.Header().Set("Cache-Control", cc)
+		}
+		w.Header().Set("Content-Type", "image/webp")
+		_, _ = w.Write([]byte("IMAGEDATA"))
+	})
+
+	// Conditional image (ETag match): 304 without body.
+	mux.HandleFunc("/img304", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/webp")
+		w.WriteHeader(http.StatusNotModified)
+	})
+
 	// HTML served gzip (Content-Encoding: gzip) — simulates an
 	// origin that compresses (Cloudflare does it systematically).
 	mux.HandleFunc("/gz", func(w http.ResponseWriter, r *http.Request) {
@@ -400,6 +417,88 @@ func TestUpstreamRedirectsUntouchedByDefault(t *testing.T) {
 	resp := doGet(t, gw, "public.test", "/redirect?loc="+url.QueryEscape(absolu))
 	if got := resp.Header.Get("Location"); got != absolu {
 		t.Errorf("Location = %q, want %q (not rewritten)", got, absolu)
+	}
+}
+
+// browserCache: an image served by the origin with NO Cache-Control
+// (the book page case: no Last-Modified either — without it the
+// browser validates on each view BEFORE caching... nothing at all)
+// carries the freshness duration declared by the policy.
+func TestUpstreamBrowserCacheImages(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true,
+			             "browserCache": {"imagesMaxAgeSeconds": 604800}}
+		}]
+	}`)
+
+	resp := doGet(t, gw, "public.test", "/img")
+	if got := resp.Header.Get("Cache-Control"); got != "private, max-age=604800" {
+		t.Errorf("Cache-Control = %q, want %q", got, "private, max-age=604800")
+	}
+}
+
+// The origin's own declaration wins: an already-present
+// Cache-Control is never touched.
+func TestUpstreamBrowserCacheRespectsOriginDeclaration(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true,
+			             "browserCache": {"imagesMaxAgeSeconds": 604800}}
+		}]
+	}`)
+
+	resp := doGet(t, gw, "public.test", "/img?cc=max-age=9")
+	if got := resp.Header.Get("Cache-Control"); got != "max-age=9" {
+		t.Errorf("origin Cache-Control = %q, want untouched %q", got, "max-age=9")
+	}
+}
+
+// Cautious semantics: HTML bodies and non-200 answers (conditional
+// 304 here) never receive the header — the feature fills only the
+// silence, for the browser's image resources.
+func TestUpstreamBrowserCacheOnlyImagesAnd200s(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true,
+			             "browserCache": {"imagesMaxAgeSeconds": 604800}}
+		}]
+	}`)
+
+	resp := doGet(t, gw, "public.test", "/page")
+	if got := resp.Header.Get("Cache-Control"); got != "" {
+		t.Errorf("HTML body: Cache-Control = %q, want absent", got)
+	}
+
+	resp = doGet(t, gw, "public.test", "/img304")
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("304 status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "" {
+		t.Errorf("304: Cache-Control = %q, want absent", got)
+	}
+}
+
+// Without the browserCache block (default): headers pass as-is,
+// identical historical behavior.
+func TestUpstreamBrowserCacheOffByDefault(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true}
+		}]
+	}`)
+
+	resp := doGet(t, gw, "public.test", "/img")
+	if got := resp.Header.Get("Cache-Control"); got != "" {
+		t.Errorf("default: Cache-Control = %q, want absent", got)
 	}
 }
 

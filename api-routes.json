@@ -149,6 +149,9 @@
         "rewriteBody": {
           "enabled": true,
           "except": ["/CorrespondancesBonPapaEtBonneMaman/"]
+        },
+        "browserCache": {
+          "imagesMaxAgeSeconds": 604800
         }
       }
     }

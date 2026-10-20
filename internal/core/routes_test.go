@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -128,7 +129,8 @@ func TestUpstreamDeserialization(t *testing.T) {
 			   "responseHeaders": {
 			     "set": {"X-Note": "instrumented"},
 			     "remove": ["Content-Security-Policy"]
-			   }
+			   },
+			   "browserCache": {"imagesMaxAgeSeconds": 604800}
 			 }}
 		]
 	}`
@@ -166,11 +168,35 @@ func TestUpstreamDeserialization(t *testing.T) {
 		up.ResponseHeaders.Remove[0] != "Content-Security-Policy" {
 		t.Errorf("responseHeaders = %+v", up.ResponseHeaders)
 	}
+	if up.BrowserCache == nil || up.BrowserCache.ImagesMaxAgeSeconds != 604800 {
+		t.Errorf("browserCache = %+v", up.BrowserCache)
+	}
+}
+
+// browserCache validation: a declared value must be a positive
+// integer (in seconds) — declared-and-zero = configuration error,
+// not a silent deactivation.
+func TestBrowserCacheValidationForcesPositive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	for _, ma := range []int{0, -42} {
+		cfg := fmt.Sprintf(`{
+			"routes": [{
+				"host": "a.local", "path": "/*", "backend": "https://ext.example",
+				"upstream": {"browserCache": {"imagesMaxAgeSeconds": %d}}
+			}]
+		}`, ma)
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Errorf("imagesMaxAgeSeconds = %d: acceptance expected to be refused", ma)
+		}
+	}
 }
 
 // A route without an upstream policy must not get an empty one created.
-func TestUpstreamAbsent(t *testing.T) {
-	dir := t.TempDir()
+func TestUpstreamAbsent(t *testing.T) {	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
 	cfg := `{"routes": [
 		{"host": "a.local", "path": "/*", "backend": "http://x"}

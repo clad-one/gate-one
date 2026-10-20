@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -98,8 +99,39 @@ func upstreamResponseModifier(
 			}
 		}
 
+		if bc := up.BrowserCache; bc != nil {
+			setBrowserCacheControl(bc.ImagesMaxAgeSeconds, resp)
+		}
+
 		return nil
 	}
+}
+
+// setBrowserCacheControl: gives the browser a freshness duration
+// (Cache-Control: private, max-age=…) on the ASSETS the origin
+// serves with no Cache-Control — the typical case of the image
+// resources of a proxified site: without it and without
+// Last-Modified, the browser has NO heuristic cache and re-fetches
+// or revalidates every image on each view (one round-trip each,
+// at millisecond scale geographically heavy). Cautious semantics:
+// 200 only, content-type image/* only, absent Cache-Control only —
+// the origin's own declarations never touch.
+func setBrowserCacheControl(imagesMaxAge int, resp *http.Response) {
+
+	if imagesMaxAge < 1 || resp.StatusCode != 200 {
+		return
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" || !strings.HasPrefix(contentType, "image/") {
+		return
+	}
+	if resp.Header.Get("Cache-Control") != "" {
+		return
+	}
+	resp.Header.Set(
+		"Cache-Control",
+		fmt.Sprintf("private, max-age=%d", imagesMaxAge),
+	)
 }
 
 // rewriteUpstreamLocation rewrites the response's Location header

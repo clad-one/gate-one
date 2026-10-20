@@ -249,6 +249,24 @@ type UpstreamResponseHeaders struct {
 	Remove []string `json:"remove,omitempty"`
 }
 
+// BrowserCachePolicy: HTTP-cache orientation to the BROWSER for
+// asset resources the origin serves with no Cache-Control (and,
+// typically, with no Last-Modified either: without these two
+// headers the browser never derives its heuristic cache —
+// EVERY re-view re-fetches or revalidates each asset, one full
+// round-trip each). Only 200 responses of the types image/*,
+// Cache-Control absent only, are concerned — never modified when
+// the origin declares one.
+type BrowserCachePolicy struct {
+	// ImagesMaxAgeSeconds: freshness duration granted to the images
+	// (content-type image/*), sent as "private, max-age=…" —
+	// private: resources under authentication stay out of any
+	// SHARED cache; the origin's ETag remains for revalidation
+	// after expiry.
+	ImagesMaxAgeSeconds int `json:"imagesMaxAgeSeconds,omitempty"`
+}
+
+
 // UpstreamPolicy: how the gateway reaches the backend when it
 // is not a service of the internal network — typically a site
 // hosted behind Cloudflare (Pages, Access…). Absent =
@@ -297,6 +315,10 @@ type UpstreamPolicy struct {
 	// which the browser would reject from the public host).
 	// Default: no cookie rewriting.
 	RewriteCookies *RewriteCookiesPolicy `json:"rewriteCookies,omitempty"`
+	// BrowserCache: cache orientation to the browser when the
+	// origin serves its assets with no Cache-Control (see
+	// BrowserCachePolicy). Default: headers preserved as-is.
+	BrowserCache *BrowserCachePolicy `json:"browserCache,omitempty"`
 }
 
 // RewriteCookiesPolicy: translation of the origin's Set-Cookie to
@@ -1238,6 +1260,14 @@ func (c *Config) validate() error {
 				return fmt.Errorf(
 					"route %s: rewriteCookies.domain %q (expected \"rewrite\" or \"strip\")",
 					host, up.RewriteCookies.Domain)
+			}
+		}
+
+		if up := c.Routes[i].Upstream; up != nil && up.BrowserCache != nil {
+			if ma := up.BrowserCache.ImagesMaxAgeSeconds; ma < 1 {
+				return fmt.Errorf(
+					"route %s: browserCache.imagesMaxAgeSeconds %d (expected: positive integer in seconds, e.g. 604800 for a week)",
+					host, ma)
 			}
 		}
 	}
