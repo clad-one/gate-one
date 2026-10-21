@@ -55,13 +55,16 @@ func apiCachePolicyJSON(c any) []byte {
 // upstream.rewriteBody), serialized into the generated service
 // worker. Origins are the origin hosts whose absolute URLs are
 // intercepted; Target the default replacement base
-// ("https://public.host"); Except the path-prefix exceptions
-// (sorted: longest prefix first), whose entries without To remain
-// at the origin.
+// ("https://public.host"); Siblings the wildcard-expansion map
+// origin-host → sibling public host (rewritten on the SW's own
+// scheme/port, before the exceptions); Except the path-prefix
+// exceptions (sorted: longest prefix first), whose entries without
+// To remain at the origin.
 type RewriteSpec struct {
-	Origins []string             `json:"origins"`
-	Target  string               `json:"target"`
-	Except  []core.RewriteExcept `json:"except,omitempty"`
+	Origins  []string             `json:"origins"`
+	Target   string               `json:"target"`
+	Siblings map[string]string    `json:"siblings,omitempty"`
+	Except   []core.RewriteExcept `json:"except,omitempty"`
 }
 
 type Handler struct {
@@ -299,6 +302,14 @@ const RW = ` + h.rwData() + `;
 
 function rwMatch(url) {
   if (RW.origins.indexOf(url.hostname) === -1) return null;
+  // sibling edition of the same wildcard: its PUBLIC host, on the
+  // SW's own scheme/port (the gateway serves them on one listener).
+  var sibling = RW.siblings && RW.siblings[url.hostname];
+  if (sibling) {
+    var alt = new URL(self.location.origin);
+    alt.hostname = sibling;
+    return alt.origin;
+  }
   for (var i = 0; i < RW.except.length; i++) {
     if (RW.except[i].path &&
         url.pathname.indexOf(RW.except[i].path) === 0) {
@@ -344,6 +355,14 @@ const RW = ` + h.rwData() + `
 
 function rwMatch(url) {
   if (RW.origins.indexOf(url.hostname) === -1) return null;
+  // sibling edition of the same wildcard: its PUBLIC host, on the
+  // SW's own scheme/port (the gateway serves them on one listener).
+  var sibling = RW.siblings && RW.siblings[url.hostname];
+  if (sibling) {
+    var alt = new URL(self.location.origin);
+    alt.hostname = sibling;
+    return alt.origin;
+  }
   for (var i = 0; i < RW.except.length; i++) {
     if (RW.except[i].path &&
         url.pathname.indexOf(RW.except[i].path) === 0) {

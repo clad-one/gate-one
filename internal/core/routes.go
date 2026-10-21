@@ -266,7 +266,6 @@ type BrowserCachePolicy struct {
 	ImagesMaxAgeSeconds int `json:"imagesMaxAgeSeconds,omitempty"`
 }
 
-
 // UpstreamPolicy: how the gateway reaches the backend when it
 // is not a service of the internal network — typically a site
 // hosted behind Cloudflare (Pages, Access…). Absent =
@@ -599,6 +598,16 @@ type Route struct {
 	// wildcardSrc: the wildcard pattern this route was expanded
 	// from (route table annotation; never decoded).
 	wildcardSrc string `json:"-"`
+
+	// rewriteSiblings: sibling-expansion map (backend origin host →
+	// public host) for routes expanded from the same wildcard. Built
+	// AT LOAD, shared read-only by rewriteBody (server, SW, guard):
+	// an HTML page of one edition links to the origin of another
+	// edition, and the link is rewritten to that sibling's public
+	// host without any per-request route lookup. nil when there is
+	// no unambiguous mapping (one variant, or one origin shared by
+	// several public hosts — the alias form).
+	rewriteSiblings map[string]string `json:"-"`
 }
 
 // Wildcard: a route's expansion allow-lists — key = capture name
@@ -608,6 +617,16 @@ type Wildcard map[string][]string
 // WildcardSource: the wildcard pattern the route was expanded from
 // ("" for a route declared literally) — route table annotation.
 func (r *Route) WildcardSource() string { return r.wildcardSrc }
+
+// RewriteSiblings: for a route expanded from a wildcard, the map
+// backend-origin-hostname → public-host of the OTHER concrete routes
+// of the same expansion (nil when there is no unambiguous mapping).
+// Read-only: compiled once at load, shared by the server rewriter,
+// the service worker and the guard script. This is what lets an
+// interlanguage link ("https://es.wikipedia.org/…") found in the
+// English edition be rewritten to the Spanish public host without
+// duplicating the host block in the config or the plugin.
+func (r *Route) RewriteSiblings() map[string]string { return r.rewriteSiblings }
 
 // wildcardLabel: an allow-list entry — one DNS label, lowercase,
 // no dots (the bounded-domain guarantee: a value can never jump to
@@ -755,7 +774,93 @@ func (r *Route) expandWildcard(taken map[string]bool) ([]Route, error) {
 		e.wildcardSrc = r.Host
 		out = append(out, e)
 	}
+	annotateRewriteSiblings(out)
 	return out, nil
+}
+
+// annotateRewriteSiblings compiles the cross-route rewrite map of one
+// wildcard expansion: backend origin host → public host of the sibling
+// variants. It is the compact counterpart of the finite allow-list:
+// the config declares one host pattern and its labels; the expansion
+// already knows every (origin, public host) pair, so no per-request
+// mapping and no duplicated host block are needed.
+//
+// Ambiguity is left UNMAPPED: the alias form (capture absent from the
+// backend) points every public host at one origin, so a link to that
+// origin cannot choose a label. The same applies to a HostOverride
+// shared by several variants. The route's own origins never appear in
+// its map (self-rewrite keeps its existing semantics).
+func annotateRewriteSiblings(variants []Route) {
+	if len(variants) < 2 || variants[0].UpstreamRewriteBody() == nil {
+		return
+	}
+
+	type target struct {
+		host      string
+		ambiguous bool
+	}
+	byOrigin := make(map[string]*target, len(variants))
+	for i := range variants {
+		for _, origin := range rewriteOriginHosts(&variants[i]) {
+			t := byOrigin[origin]
+			if t == nil {
+				byOrigin[origin] = &target{host: variants[i].Host}
+				continue
+			}
+			if t.host != variants[i].Host {
+				t.ambiguous = true
+			}
+		}
+	}
+
+	for i := range variants {
+		self := make(map[string]bool)
+		for _, origin := range rewriteOriginHosts(&variants[i]) {
+			self[origin] = true
+		}
+		var siblings map[string]string
+		for origin, t := range byOrigin {
+			if t.ambiguous || self[origin] {
+				continue
+			}
+			if siblings == nil {
+				siblings = make(map[string]string, len(byOrigin))
+			}
+			siblings[origin] = t.host
+		}
+		variants[i].rewriteSiblings = siblings
+	}
+}
+
+// rewriteOriginHosts: origin hostnames a concrete route may cite in
+// its own HTML — its backend hostname and the optional Host override.
+// Normalized (lowercase, no port), deduplicated, stable order.
+func rewriteOriginHosts(r *Route) []string {
+	out := make([]string, 0, 2)
+	add := func(h string) {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			return
+		}
+		for _, have := range out {
+			if have == h {
+				return
+			}
+		}
+		out = append(out, h)
+	}
+	if u, err := url.Parse(r.Backend); err == nil {
+		add(u.Hostname())
+	}
+	if r.Upstream != nil && r.Upstream.HostOverride != "" {
+		h := strings.TrimSpace(r.Upstream.HostOverride)
+		if u, err := url.Parse("//" + h); err == nil && u.Hostname() != "" {
+			add(u.Hostname())
+		} else {
+			add(strings.Split(h, ":")[0])
+		}
+	}
+	return out
 }
 
 // InjectionBundle: the route's resolved injection bundle; nil

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,12 +36,30 @@ func rewriteTestPlan() *rewritePlan {
 			maxExcept = len(e.Path)
 		}
 	}
+	siblings := map[string]string{
+		"de.origin.example": "de.public.test",
+		"fr.origin.example": "fr.public.test",
+		"ja.origin.example": "ja.public.test",
+	}
+	origins := []string{
+		"origin.example",
+		"de.origin.example",
+		"fr.origin.example",
+		"ja.origin.example",
+	}
+	maxHost := 0
+	for _, h := range origins {
+		if len(h) > maxHost {
+			maxHost = len(h)
+		}
+	}
 	return &rewritePlan{
-		origins:   []string{"origin.example"},
+		origins:   origins,
+		siblings:  siblings,
 		pub:       "https://public.test",
 		pubHost:   "public.test",
 		except:    except,
-		hold:      len("https://") + len("origin.example"),
+		hold:      len("https://") + maxHost,
 		maxExcept: maxExcept,
 	}
 }
@@ -112,6 +131,31 @@ func rewriteTextCases() []rwCase {
 			Input: `<a href="https://origin.example:9/lecture/bonpapa">p</a>`,
 		},
 		{
+			Name:   "sibling https: its own public host",
+			Input:  `<a href="https://fr.origin.example/wiki/Chat">fr</a>`,
+			Expect: `<a href="https://fr.public.test/wiki/Chat">fr</a>`,
+		},
+		{
+			Name:   "sibling http: scheme follows the request",
+			Input:  `<a href="http://de.origin.example/x">de</a>`,
+			Expect: `<a href="https://de.public.test/x">de</a>`,
+		},
+		{
+			Name:   "sibling protocol-relative",
+			Input:  `<img src="//ja.origin.example/y.png">`,
+			Expect: `<img src="https://ja.public.test/y.png">`,
+		},
+		{
+			Name:   "sibling: route-local exception does not apply",
+			Input:  `<a href="https://fr.origin.example/lecture/bonpapa/ch1">l</a>`,
+			Expect: `<a href="https://fr.public.test/lecture/bonpapa/ch1">l</a>`,
+		},
+		{
+			Name:   "sibling explicit port: dropped, like self",
+			Input:  `<a href="https://fr.origin.example:4443/x">p</a>`,
+			Expect: `<a href="https://fr.public.test/x">p</a>`,
+		},
+		{
 			Name:  "other host: untouched",
 			Input: `<a href="https://autre.example/x">a</a>`,
 		},
@@ -168,15 +212,15 @@ func rewriteReference(body []byte, plan *rewritePlan) string {
 	for i < len(body) {
 		// first occurrence of an origin host; at equal index the
 		// longest (mirror of findHost)
-		h, hl := -1, 0
+		h, host := -1, ""
 		for _, o := range plan.origins {
 			j := bytes.Index(body[i:], []byte(o))
 			if j < 0 {
 				continue
 			}
 			j += i
-			if h == -1 || j < h || (j == h && len(o) > hl) {
-				h, hl = j, len(o)
+			if h == -1 || j < h || (j == h && len(o) > len(host)) {
+				h, host = j, o
 			}
 		}
 		if h == -1 {
@@ -212,7 +256,7 @@ func rewriteReference(body []byte, plan *rewritePlan) string {
 
 		// optional :digits port — included in the rewritten prefix,
 		// absent from the replacements
-		portEnd := h + hl
+		portEnd := h + len(host)
 		if !invalid && portEnd < len(body) && body[portEnd] == ':' {
 			k := portEnd + 1
 			for k < len(body) && body[k] >= '0' && body[k] <= '9' {
@@ -233,24 +277,30 @@ func rewriteReference(body []byte, plan *rewritePlan) string {
 			continue
 		}
 
-		// exceptions: longest prefix wins (sorted upstream)
 		keep, repl := false, plan.pub
-		end := len(body)
-		for j := portEnd; j < len(body); j++ {
-			if isPathStop(body[j]) {
-				end = j
-				break
-			}
-		}
-		for _, e := range plan.except {
-			if len(e.Path) <= end-portEnd &&
-				bytes.HasPrefix(body[portEnd:end], []byte(e.Path)) {
-				if e.To != "" {
-					repl = e.To
-				} else {
-					keep = true
+		if sibling, ok := plan.siblings[host]; ok {
+			// sibling expansion: its public host, no route-local
+			// exceptions
+			repl = "https://" + sibling
+		} else {
+			// exceptions: longest prefix wins (sorted upstream)
+			end := len(body)
+			for j := portEnd; j < len(body); j++ {
+				if isPathStop(body[j]) {
+					end = j
+					break
 				}
-				break
+			}
+			for _, e := range plan.except {
+				if len(e.Path) <= end-portEnd &&
+					bytes.HasPrefix(body[portEnd:end], []byte(e.Path)) {
+					if e.To != "" {
+						repl = e.To
+					} else {
+						keep = true
+					}
+					break
+				}
 			}
 		}
 
@@ -298,6 +348,31 @@ func TestRewriteStreamRequestHostPort(t *testing.T) {
 	want := `<a href="http://wikipedia.demo.localhost:3000/edit/page?x=1">edit</a>` +
 		`<a href="http://wikipedia.demo.localhost:3000/x">x</a>` +
 		`<a href="http://wikipedia.demo.localhost:3000/y">y</a>`
+	if string(got) != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+// Sibling rewriting keeps the request's listener: the Spanish public
+// host in the demo is reachable on the same :3000 as the English page
+// that links to it (an https-only or port-less sibling target would
+// throw the browser out of the proxy).
+func TestRewriteStreamSiblingKeepsRequestPort(t *testing.T) {
+	plan := rewriteTestPlan()
+	plan.pubHost = "en.wikipedia.demo.localhost"
+	plan.siblings["fr.origin.example"] = "fr.wikipedia.demo.localhost"
+	rs := newRewriteStreamForRequest(
+		io.NopCloser(bytes.NewReader(
+			[]byte(`<a href="https://fr.origin.example/wiki/Chat">fr</a>`+
+				`<a href="https://origin.example/wiki/Cat">en</a>`))),
+		plan, "http", "en.wikipedia.demo.localhost:3000",
+	)
+	got, err := io.ReadAll(rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<a href="http://fr.wikipedia.demo.localhost:3000/wiki/Chat">fr</a>` +
+		`<a href="http://en.wikipedia.demo.localhost:3000/wiki/Cat">en</a>`
 	if string(got) != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
@@ -400,6 +475,72 @@ func TestRewriteStreamRawFlushThenError(t *testing.T) {
 	}
 	if string(out) != `<a href="https://origin.exa` {
 		t.Errorf("pre-error bytes rewritten despite the cut: %q", string(out))
+	}
+}
+
+// Wildcard sibling wiring: the rewrite plan of an expanded route
+// carries the OTHER variants' backend origins and their public hosts,
+// so the server engine can rewrite an interlanguage link without any
+// per-request route lookup.
+func TestRewritePlanWildcardSiblings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"oidc": {"loginUrl": "http://login.test/login"},
+		"routes": [{
+			"host": "{lang}.wikipedia.demo.localhost", "path": "/*",
+			"backend": "https://{lang}.wikipedia.org",
+			"wildcard": {"lang": ["fr", "en"]},
+			"frontend": true,
+			"upstream": {"host": true, "rewriteBody": {"enabled": true}}
+		}]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := core.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Routes) != 2 {
+		t.Fatalf("routes = %d, want 2", len(c.Routes))
+	}
+	want := map[string]map[string]string{
+		"en.wikipedia.demo.localhost": {
+			"fr.wikipedia.org": "fr.wikipedia.demo.localhost",
+		},
+		"fr.wikipedia.demo.localhost": {
+			"en.wikipedia.org": "en.wikipedia.demo.localhost",
+		},
+	}
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		u, err := url.Parse(r.Backend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := rewritePlanFor(r, u)
+		if plan == nil {
+			t.Fatalf("%s: nil rewrite plan", r.Host)
+		}
+		if len(plan.origins) != 2 {
+			t.Errorf("%s: origins = %v, want self + sibling",
+				r.Host, plan.origins)
+		}
+		for origin, public := range want[r.Host] {
+			if plan.siblings[origin] != public {
+				t.Errorf("%s: sibling %s -> %q, want %q",
+					r.Host, origin, plan.siblings[origin], public)
+			}
+			if spec := plan.clientSpec(); spec.Siblings[origin] != public {
+				t.Errorf("%s: SW sibling %s -> %q, want %q",
+					r.Host, origin, spec.Siblings[origin], public)
+			}
+			if dto := rewriteGuardDTOFor(r, u); dto.Siblings[origin] != public {
+				t.Errorf("%s: guard sibling %s -> %q, want %q",
+					r.Host, origin, dto.Siblings[origin], public)
+			}
+		}
 	}
 }
 
@@ -565,6 +706,10 @@ func rewriteSWRequestCases() []string {
 		"https://origin.example/alt/chemin",
 		"https://origin.example/l1/detail/ou",
 		"https://origin.example/l1/autre",
+		"https://fr.origin.example/wiki/Chat",
+		"http://de.origin.example/x",
+		"https://ja.origin.example/y",
+		"https://fr.origin.example/lecture/bonpapa/ch1",
 		"https://autre.example/x",
 		"https://origin.example.more/interieur",
 		"https://origin.example/doc",

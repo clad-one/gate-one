@@ -472,7 +472,7 @@
         "host": { "type": "string", "description": "Host of the route (routed by Host). Named capture {name}: one DNS label, expanded AT LOAD into one concrete route per allow-listed label of the wildcard block (bounded, fail-closed anti-SSRF)." },
         "wildcard": {
           "type": "object",
-          "description": "Named host/backend expansion — one route, N sites. Keys = capture names ({name} in host and backend), values = the ALLOW-LISTS of DNS labels they may take (a-z0-9, hyphens, no dots). The route expands at load into one concrete route per label; a label outside the lists has no route (fail-closed: the backend is never attacker-derived).",
+          "description": "Named host/backend expansion — one route, N sites. Keys = capture names ({name} in host and backend), values = the ALLOW-LISTS of DNS labels they may take (a-z0-9, hyphens, no dots). The route expands at load into one concrete route per label; a label outside the lists has no route (fail-closed: the backend is never attacker-derived). With rewriteBody enabled, the expansion also compiles the cross-route map: an origin of another variant (e.g. es.wikipedia.org in the English edition) is rewritten to that sibling's public host; ambiguous alias mappings are left alone, and route-local except prefixes do not apply to siblings.",
           "additionalProperties": {
             "type": "array",
             "items": { "type": "string" }

@@ -3,7 +3,9 @@ package proxy
 import (
 	"bytes"
 	"io"
+	"net"
 	"net/url"
+	"sort"
 
 	"cladone/gate-one/internal/core"
 	"cladone/gate-one/internal/pwa"
@@ -33,6 +35,11 @@ import (
 // (descending sort); string entry = stay at the origin,
 // {path,to} entry = "to" replacement base.
 //
+// Sibling origins (another concrete route from the same wildcard
+// expansion) are rewritten toward THAT route's public host, keeping
+// the request's scheme and port; the route's exceptions apply to its
+// own origin only. The map is compiled once at load.
+//
 // Bounded sliding window: the engine never waits for more than
 // "https://" + longest host + longest exception prefix (config:
 // ≤ 256 bytes per prefix); plus the optional explicit port, left
@@ -50,8 +57,15 @@ import (
 type rewritePlan struct {
 	// origin hosts whose absolute URLs are rewritten — hostname
 	// without port, lowercased (plausible self-references of the
-	// origin HTML: backend host + optional hostOverride).
+	// origin HTML: backend host + optional hostOverride, plus the
+	// backend origins of sibling routes from the same wildcard
+	// expansion).
 	origins []string
+	// siblings: sibling-origin hostname → sibling PUBLIC host (no
+	// scheme/port), compiled from the wildcard expansion. A hit here
+	// is rewritten toward that public host, never toward this
+	// route's own host. nil when there is no unambiguous mapping.
+	siblings map[string]string
 	// pub: default replacement base in https ("https://host.public")
 	// — the form handed to the client SW (which uses it as
 	// documentation; at runtime it rewrites toward ITS origin) and
@@ -82,8 +96,12 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 
 	up := route.Upstream
 	origins := make([]string, 0, 2)
+	siblings := make(map[string]string, len(route.RewriteSiblings()))
 	addOrigin := func(h string) {
 		h = normalizeHost(h)
+		if h == "" {
+			return
+		}
 		for _, have := range origins {
 			if have == h {
 				return
@@ -95,6 +113,32 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 	if up.HostOverride != "" {
 		addOrigin(up.HostOverride)
 	}
+
+	// Sibling routes expanded from the same wildcard: their backend
+	// origins are rewritten toward their public hosts. A sibling
+	// origin never shadows one of this route's own origins.
+	for origin, publicHost := range route.RewriteSiblings() {
+		origin = normalizeHost(origin)
+		if origin == "" {
+			continue
+		}
+		self := false
+		for _, have := range origins {
+			if have == origin {
+				self = true
+				break
+			}
+		}
+		if self {
+			continue
+		}
+		siblings[origin] = normalizeHost(publicHost)
+		addOrigin(origin)
+	}
+	if len(siblings) == 0 {
+		siblings = nil
+	}
+	sort.Strings(origins)
 
 	maxHost := 0
 	for _, h := range origins {
@@ -122,6 +166,7 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 
 	return &rewritePlan{
 		origins:   origins,
+		siblings:  siblings,
 		pub:       "https://" + normalizeHost(route.Host),
 		pubHost:   normalizeHost(route.Host),
 		except:    except,
@@ -133,9 +178,10 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 // clientSpec: adapter for the client SW (pwa.RewriteSpec).
 func (p *rewritePlan) clientSpec() *pwa.RewriteSpec {
 	return &pwa.RewriteSpec{
-		Origins: p.origins,
-		Target:  p.pub,
-		Except:  p.except,
+		Origins:  p.origins,
+		Target:   p.pub,
+		Siblings: p.siblings,
+		Except:   p.except,
 	}
 }
 
@@ -146,10 +192,11 @@ func (p *rewritePlan) clientSpec() *pwa.RewriteSpec {
 // never in a "scheme://origin" form that would be rewritten in its
 // own transport.
 type rewriteGuardDTO struct {
-	Sw      string               `json:"sw"`
-	Target  string               `json:"target"`
-	Origins []string             `json:"origins"`
-	Except  []core.RewriteExcept `json:"except"`
+	Sw       string               `json:"sw"`
+	Target   string               `json:"target"`
+	Origins  []string             `json:"origins"`
+	Siblings map[string]string    `json:"siblings,omitempty"`
+	Except   []core.RewriteExcept `json:"except"`
 }
 
 // rewriteGuardDTOFor: version for the guard script; nil when the
@@ -160,10 +207,11 @@ func rewriteGuardDTOFor(route *core.Route, backend *url.URL) *rewriteGuardDTO {
 		return nil
 	}
 	return &rewriteGuardDTO{
-		Sw:      pwa.SwURL,
-		Target:  plan.pub,
-		Origins: plan.origins,
-		Except:  plan.except,
+		Sw:       pwa.SwURL,
+		Target:   plan.pub,
+		Origins:  plan.origins,
+		Siblings: plan.siblings,
+		Except:   plan.except,
 	}
 }
 
@@ -275,7 +323,7 @@ func (s *rewriteStream) resolve() {
 
 	scan := 0
 	for {
-		h, hostLen := s.findHost(scan)
+		h, host := s.findHost(scan)
 		if h < 0 {
 			// no more whole occurrence (= also beyond):
 			if s.done {
@@ -294,7 +342,7 @@ func (s *rewriteStream) resolve() {
 			return
 		}
 
-		m := s.evaluate(h, hostLen)
+		m := s.evaluate(h, host)
 		switch m.state {
 		case candInvalid:
 			// not an origin URL (boundaries): look for the
@@ -341,8 +389,8 @@ func rescan(scan, cut int) int {
 // occurrence LONGER than buf (host cut at the edge) does not exist
 // for Index: it will be seen when more bytes arrive — the last
 // `hold` bytes of buf are therefore never emitted outside "done".
-func (s *rewriteStream) findHost(from int) (int, int) {
-	best, blen := -1, 0
+func (s *rewriteStream) findHost(from int) (int, string) {
+	best, bhost := -1, ""
 	for _, host := range s.cfg.origins {
 		i := bytes.Index(s.buf[from:], []byte(host))
 		if i < 0 {
@@ -351,12 +399,12 @@ func (s *rewriteStream) findHost(from int) (int, int) {
 		i += from
 		switch {
 		case best < 0 || i < best:
-			best, blen = i, len(host)
-		case i == best && len(host) > blen:
-			blen = len(host)
+			best, bhost = i, host
+		case i == best && len(host) > len(bhost):
+			bhost = host
 		}
 	}
-	return best, blen
+	return best, bhost
 }
 
 type candKind int
@@ -369,9 +417,10 @@ const (
 
 type cand struct {
 	state     candKind
-	formStart int // pattern start (https:// … or //)
-	formEnd   int // host end (exclusive) = path start
-	portEnd   int // after the optional port (:digits) — otherwise formEnd
+	host      string // matched origin host (self or sibling)
+	formStart int    // pattern start (https:// … or //)
+	formEnd   int    // host end (exclusive) = path start
+	portEnd   int    // after the optional port (:digits) — otherwise formEnd
 }
 
 var (
@@ -383,7 +432,9 @@ var (
 // evaluate determines the candidate at index h (host): URL form
 // (https:// | http:// | //) with left + right boundaries verified,
 // then right context availability (path for the exceptions).
-func (s *rewriteStream) evaluate(h, hostLen int) cand {
+func (s *rewriteStream) evaluate(h int, host string) cand {
+
+	hostLen := len(host)
 
 	formLen := 0
 	switch {
@@ -441,13 +492,13 @@ func (s *rewriteStream) evaluate(h, hostLen int) cand {
 		switch {
 		case k == portEnd+1 && !s.done:
 			// ':' without a digit yet: a port may follow
-			return cand{state: candPending, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
+			return cand{state: candPending, host: host, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 		case k == portEnd+1:
 			// ':' followed by a non-digit (":/x"): not a target form
 			return cand{state: candInvalid}
 		case k >= len(s.buf) && !s.done:
 			// port truncated at the window edge: wait
-			return cand{state: candPending, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
+			return cand{state: candPending, host: host, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 		}
 		portEnd = k
 	}
@@ -461,23 +512,26 @@ func (s *rewriteStream) evaluate(h, hostLen int) cand {
 	} else if !s.done {
 		// at least one byte after the host is required to settle
 		// the right boundary; nothing here: wait.
-		return cand{state: candPending, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
+		return cand{state: candPending, host: host, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 	}
 
-	// right context: path (for the exceptions)
-	pathStart := portEnd
-	stop := -1
-	for i := pathStart; i < len(s.buf) && i < pathStart+s.cfg.maxExcept; i++ {
-		if isPathStop(s.buf[i]) {
-			stop = i
-			break
+	// right context: path (for the exceptions). Sibling origins are
+	// not subject to this route's exceptions, so they settle here.
+	if _, sibling := s.cfg.siblings[host]; !sibling {
+		pathStart := portEnd
+		stop := -1
+		for i := pathStart; i < len(s.buf) && i < pathStart+s.cfg.maxExcept; i++ {
+			if isPathStop(s.buf[i]) {
+				stop = i
+				break
+			}
+		}
+		if !s.done && stop < 0 && len(s.buf)-pathStart < s.cfg.maxExcept {
+			return cand{state: candPending, host: host, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 		}
 	}
-	if !s.done && stop < 0 && len(s.buf)-pathStart < s.cfg.maxExcept {
-		return cand{state: candPending, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
-	}
 
-	return cand{state: candDecided, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
+	return cand{state: candDecided, host: host, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 }
 
 // decision: verdict for candidate m — according to the exceptions
@@ -485,6 +539,14 @@ func (s *rewriteStream) evaluate(h, hostLen int) cand {
 // text (port included) goes out as-is. replacement: text replacing
 // scheme://host[:port] (the path, starting at portEnd, follows).
 func (s *rewriteStream) decision(m cand) (replacement string, keep bool) {
+
+	// Sibling expansion: the origin belongs to another concrete route
+	// of the same wildcard. Rewrite toward THAT route's public host,
+	// on the current listener (same scheme and port as the request).
+	// This route's path exceptions do not apply to a sibling's paths.
+	if publicHost, sibling := s.cfg.siblings[m.host]; sibling {
+		return s.altBase(publicHost), false
+	}
 
 	pathStart := m.portEnd
 	end := len(s.buf)
@@ -521,6 +583,30 @@ func (s *rewriteStream) decision(m cand) (replacement string, keep bool) {
 		return "https://" + host, false
 	}
 	return s.scheme + "://" + host, false
+}
+
+// altBase: absolute base of a sibling public host, keeping the
+// request's scheme and non-standard port (demo :3000). The gateway
+// serves every route on the same listener, so the sibling lives on
+// the same port as the page that links to it.
+func (s *rewriteStream) altBase(publicHost string) string {
+	host := publicHost
+	if port := requestPort(s.reqHost); port != "" {
+		host = net.JoinHostPort(host, port)
+	}
+	if s.scheme == "" || s.scheme == "https" {
+		return "https://" + host
+	}
+	return s.scheme + "://" + host
+}
+
+// requestPort: the port of a Host header ("" when absent).
+func requestPort(hostport string) string {
+	_, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return ""
+	}
+	return port
 }
 
 // applyCandidate emits buf[:formStart] then (unchanged original or

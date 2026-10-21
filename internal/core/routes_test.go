@@ -196,7 +196,8 @@ func TestBrowserCacheValidationForcesPositive(t *testing.T) {
 }
 
 // A route without an upstream policy must not get an empty one created.
-func TestUpstreamAbsent(t *testing.T) {	dir := t.TempDir()
+func TestUpstreamAbsent(t *testing.T) {
+	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
 	cfg := `{"routes": [
 		{"host": "a.local", "path": "/*", "backend": "http://x"}
@@ -471,6 +472,96 @@ func TestWildcardExpansion(t *testing.T) {
 		}
 		if r.WildcardSource() != "{lang}.wikipedia.demo.localhost" {
 			t.Errorf("WildcardSource = %q, want the pattern", r.WildcardSource())
+		}
+	}
+}
+
+// RewriteSiblings: a wildcard expansion also compiles the
+// cross-route mapping used by rewriteBody (backend origin → public
+// host of the OTHER variants). This is what replaces a duplicated
+// per-language host block in the plugin.
+func TestWildcardRewriteSiblings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"oidc": {"loginUrl": "http://login.test/login"},
+		"routes": [{
+			"host": "{lang}.wikipedia.demo.localhost", "path": "/*",
+			"backend": "https://{lang}.wikipedia.org",
+			"wildcard": {"lang": ["fr", "en", "de"]},
+			"frontend": true,
+			"upstream": {"host": true, "rewriteBody": {"enabled": true}}
+		}]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Routes) != 3 {
+		t.Fatalf("routes = %d, want 3", len(c.Routes))
+	}
+
+	want := map[string]map[string]string{
+		"de.wikipedia.demo.localhost": {
+			"en.wikipedia.org": "en.wikipedia.demo.localhost",
+			"fr.wikipedia.org": "fr.wikipedia.demo.localhost",
+		},
+		"en.wikipedia.demo.localhost": {
+			"de.wikipedia.org": "de.wikipedia.demo.localhost",
+			"fr.wikipedia.org": "fr.wikipedia.demo.localhost",
+		},
+		"fr.wikipedia.demo.localhost": {
+			"de.wikipedia.org": "de.wikipedia.demo.localhost",
+			"en.wikipedia.org": "en.wikipedia.demo.localhost",
+		},
+	}
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		got := r.RewriteSiblings()
+		if len(got) != 2 {
+			t.Errorf("%s: siblings = %v, want 2", r.Host, got)
+		}
+		for origin, publicHost := range want[r.Host] {
+			if got[origin] != publicHost {
+				t.Errorf("%s: %s -> %q, want %q",
+					r.Host, origin, got[origin], publicHost)
+			}
+		}
+		if _, self := got[r.Host]; self {
+			t.Errorf("%s: own backend must not be a sibling", r.Host)
+		}
+	}
+}
+
+// Alias form (capture absent from the backend): every public host
+// points at the SAME origin, so a link to that origin cannot choose
+// a variant — the mapping must stay empty rather than guess.
+func TestWildcardRewriteSiblingsAliasAmbiguous(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"oidc": {"loginUrl": "http://login.test/login"},
+		"routes": [{
+			"host": "{lang}.x.localhost", "path": "/*",
+			"backend": "https://fixed.example",
+			"wildcard": {"lang": ["fr", "en"]},
+			"upstream": {"host": true, "rewriteBody": {"enabled": true}}
+		}]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range c.Routes {
+		if got := c.Routes[i].RewriteSiblings(); len(got) != 0 {
+			t.Errorf("%s: ambiguous alias mapping = %v, want none",
+				c.Routes[i].Host, got)
 		}
 	}
 }
