@@ -409,7 +409,7 @@
     },
     "rewriteBodyPolicy": {
       "type": "object",
-      "description": "Rewriting of the HTML body (200 text/html only, STREAMING — O(1) memory): the origin's absolute URLs cited in the pages (\"https://origin/…\", \"http://origin/…\", \"//origin/…\") are rewritten to the route's public host, so the browser stays in the proxy. Any explicit port is part of the rewritten prefix and is lost (target served on the standard port). The path, query and fragment follow as-is. At runtime (fetch/XHR/sendBeacon launched by the site), the client SW served on /__gate-one_pwa/sw.js applies the same policy — it is auto-registered by the guard script, served pre-authentication. One same policy (origins × exceptions × target) is implemented three times (Go engine, client SW, script patch) — parity tested. Default: absent (no body rewriting).",
+      "description": "Rewriting of the HTML body (200 text/html only, STREAMING — O(1) memory): the origin's absolute URLs cited in the pages (\"https://origin/…\", \"http://origin/…\", \"//origin/…\") are rewritten to the route's public host, so the browser stays in the proxy. Any explicit port is part of the rewritten prefix and is lost (target served on the standard port). The path, query and fragment follow as-is. Routes expanded from one wildcard automatically rewrite sibling editions toward their public hosts. `targets` and `followRoutes` add explicit cross-route mappings (bare hosts only: the request's scheme and port are inherited). At runtime (fetch/XHR/sendBeacon launched by the site), the client SW served on /__gate-one_pwa/sw.js applies the same policy — it is auto-registered by the guard script, served pre-authentication. One same policy (origins × exceptions × targets) is implemented three times (Go engine, client SW, script patch) — parity tested. Default: absent (no body rewriting).",
       "additionalProperties": false,
       "properties": {
         "enabled": {
@@ -421,6 +421,18 @@
           "maxItems": 64,
           "description": "Exceptions by path prefix: string entry (\"/reading/…\") = these URLs stay at the ORIGIN (out-of-proxy reading link); object entry {path, to} = rewritten to an ALTERNATIVE public base. Longest prefix wins. '/…' prefix mandatory, '?'/'#' forbidden, 256 bytes max; 'to' = absolute http(s) URL, trailing slashes trimmed.",
           "items": { "$ref": "#/definitions/rewriteExcept" }
+        },
+        "targets": {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": { "type": "string" },
+          "description": "Explicit cross-route mappings: backend origin host -> public route host. Bare hosts only (no scheme, port, path or wildcard); the key must be an origin of a declared route and the value the public host of a declared route. The request's scheme and port are inherited. Automatic wildcard siblings are added before these entries; a conflicting mapping is refused at load."
+        },
+        "followRoutes": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string" },
+          "description": "Selectors over declared routes BY PUBLIC HOST (exact host or '*.suffix'; a bare '*' is refused). Each selected route's backend origins are rewritten to its public host. Resolved after wildcard expansion; an unmatched selector, a self-only match or an ambiguous origin is refused at load."
         }
       }
     },

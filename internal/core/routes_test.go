@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -476,11 +477,11 @@ func TestWildcardExpansion(t *testing.T) {
 	}
 }
 
-// RewriteSiblings: a wildcard expansion also compiles the
+// RewriteTargets: a wildcard expansion also compiles the
 // cross-route mapping used by rewriteBody (backend origin → public
 // host of the OTHER variants). This is what replaces a duplicated
 // per-language host block in the plugin.
-func TestWildcardRewriteSiblings(t *testing.T) {
+func TestWildcardRewriteTargets(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
 	cfg := `{
@@ -520,9 +521,9 @@ func TestWildcardRewriteSiblings(t *testing.T) {
 	}
 	for i := range c.Routes {
 		r := &c.Routes[i]
-		got := r.RewriteSiblings()
+		got := r.RewriteTargets()
 		if len(got) != 2 {
-			t.Errorf("%s: siblings = %v, want 2", r.Host, got)
+			t.Errorf("%s: targets = %v, want 2", r.Host, got)
 		}
 		for origin, publicHost := range want[r.Host] {
 			if got[origin] != publicHost {
@@ -531,7 +532,7 @@ func TestWildcardRewriteSiblings(t *testing.T) {
 			}
 		}
 		if _, self := got[r.Host]; self {
-			t.Errorf("%s: own backend must not be a sibling", r.Host)
+			t.Errorf("%s: own backend must not be a target", r.Host)
 		}
 	}
 }
@@ -539,7 +540,7 @@ func TestWildcardRewriteSiblings(t *testing.T) {
 // Alias form (capture absent from the backend): every public host
 // points at the SAME origin, so a link to that origin cannot choose
 // a variant — the mapping must stay empty rather than guess.
-func TestWildcardRewriteSiblingsAliasAmbiguous(t *testing.T) {
+func TestWildcardRewriteTargetsAliasAmbiguous(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
 	cfg := `{
@@ -559,14 +560,281 @@ func TestWildcardRewriteSiblingsAliasAmbiguous(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range c.Routes {
-		if got := c.Routes[i].RewriteSiblings(); len(got) != 0 {
+		if got := c.Routes[i].RewriteTargets(); len(got) != 0 {
 			t.Errorf("%s: ambiguous alias mapping = %v, want none",
 				c.Routes[i].Host, got)
 		}
 	}
 }
 
-// Wildcard grammar and collisions: fail-fast at load.
+// Explicit cross-route targets: origin host → public host, resolved
+// against declared routes. This is the opt-in for routes that are not
+// variants of one wildcard expansion.
+func TestRewriteBodyExplicitTargets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"oidc": {"loginUrl": "http://login.test/login"},
+		"routes": [
+			{
+				"host": "a.public.localhost", "path": "/*", "frontend": true,
+				"backend": "https://a.backend.example",
+				"upstream": {"host": true, "rewriteBody": {
+					"enabled": true,
+					"targets": {"b.backend.example": "b.public.localhost"}
+				}}
+			},
+			{
+				"host": "b.public.localhost", "path": "/*", "frontend": true,
+				"backend": "https://b.backend.example",
+				"upstream": {"host": true}
+			}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a *Route
+	for i := range c.Routes {
+		if c.Routes[i].Host == "a.public.localhost" {
+			a = &c.Routes[i]
+		}
+	}
+	if a == nil {
+		t.Fatal("route a not found")
+	}
+	got := a.RewriteTargets()
+	if got["b.backend.example"] != "b.public.localhost" {
+		t.Errorf("targets = %v, want b.backend.example -> b.public.localhost", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("targets = %v, want exactly one entry", got)
+	}
+}
+
+// followRoutes: select declared routes by PUBLIC host (exact or
+// *.suffix), then derive origin → public host. Routes outside the
+// selectors are never mapped; the current route is never mapped.
+func TestRewriteBodyFollowRoutes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"oidc": {"loginUrl": "http://login.test/login"},
+		"routes": [
+			{
+				"host": "hub.public.localhost", "path": "/*", "frontend": true,
+				"backend": "https://hub.backend.example",
+				"upstream": {"host": true, "rewriteBody": {
+					"enabled": true,
+					"followRoutes": ["es.public.localhost", "*.elsewhere.localhost"]
+				}}
+			},
+			{"host": "es.public.localhost", "path": "/*", "backend": "https://es.backend.example"},
+			{"host": "de.elsewhere.localhost", "path": "/*", "backend": "https://de.backend.example"},
+			{"host": "fr.public.localhost", "path": "/*", "backend": "https://fr.backend.example"}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hub *Route
+	for i := range c.Routes {
+		if c.Routes[i].Host == "hub.public.localhost" {
+			hub = &c.Routes[i]
+		}
+	}
+	if hub == nil {
+		t.Fatal("hub route not found")
+	}
+	want := map[string]string{
+		"es.backend.example": "es.public.localhost",
+		"de.backend.example": "de.elsewhere.localhost",
+	}
+	got := hub.RewriteTargets()
+	if len(got) != len(want) {
+		t.Errorf("targets = %v, want %v", got, want)
+	}
+	for origin, host := range want {
+		if got[origin] != host {
+			t.Errorf("%s -> %q, want %q", origin, got[origin], host)
+		}
+	}
+	if _, mapped := got["fr.backend.example"]; mapped {
+		t.Error("followRoutes must not map a route outside the selectors")
+	}
+	if _, self := got["hub.backend.example"]; self {
+		t.Error("followRoutes must not map the current route's own origin")
+	}
+}
+
+func TestRewriteBodyTargetsRejects(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  string
+		want string
+	}{
+		{
+			name: "target value with scheme",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "targets": {"b.backend.example": "https://b.public.localhost"}}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "bare host",
+		},
+		{
+			name: "target key with scheme",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "targets": {"https://b.backend.example": "b.public.localhost"}}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "bare host",
+		},
+		{
+			name: "unknown origin",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "targets": {"nope.backend.example": "b.public.localhost"}}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "not an origin of a declared route",
+		},
+		{
+			name: "unknown target",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "targets": {"b.backend.example": "nope.public.localhost"}}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "not the public host of a declared route",
+		},
+		{
+			name: "self origin",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "targets": {"a.backend.example": "b.public.localhost"}}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "own origin",
+		},
+		{
+			name: "self public host",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "targets": {"b.backend.example": "a.public.localhost"}}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "own public host",
+		},
+		{
+			name: "targets without enabled",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": false,
+				 "targets": {"b.backend.example": "b.public.localhost"}}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "require enabled: true",
+		},
+		{
+			name: "followRoutes bare star",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "followRoutes": ["*"]}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "bare * is refused",
+		},
+		{
+			name: "followRoutes no match",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "followRoutes": ["*.nowhere.localhost"]}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "matches no declared route",
+		},
+		{
+			name: "followRoutes only self",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "followRoutes": ["a.public.localhost"]}}},
+				{"host": "b.public.localhost", "path": "/*", "backend": "https://b.backend.example"}
+			]}`,
+			want: "matches only this route",
+		},
+		{
+			name: "followRoutes ambiguity",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "followRoutes": ["x.public.localhost", "y.public.localhost"]}}},
+				{"host": "x.public.localhost", "path": "/*", "backend": "https://shared.backend.example"},
+				{"host": "y.public.localhost", "path": "/*", "backend": "https://shared.backend.example"}
+			]}`,
+			want: "already targets",
+		},
+		{
+			name: "explicit/follow conflict",
+			cfg: `{"routes": [
+				{"host": "a.public.localhost", "path": "/*", "backend": "https://a.backend.example",
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "targets": {"x.backend.example": "y.public.localhost"},
+				 "followRoutes": ["x.public.localhost"]}}},
+				{"host": "x.public.localhost", "path": "/*", "backend": "https://x.backend.example"},
+				{"host": "y.public.localhost", "path": "/*", "backend": "https://y.backend.example"}
+			]}`,
+			want: "already targets",
+		},
+		{
+			name: "explicit/wildcard conflict",
+			cfg: `{"routes": [
+				{"host": "{lang}.wiki.demo.localhost", "path": "/*",
+				 "backend": "https://{lang}.wikipedia.org",
+				 "wildcard": {"lang": ["en", "fr"]},
+				 "upstream": {"host": true, "rewriteBody": {"enabled": true,
+				 "targets": {"fr.wikipedia.org": "other.public.localhost"}}}},
+				{"host": "other.public.localhost", "path": "/*", "backend": "https://other.backend.example"}
+			]}`,
+			want: "already targets",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "routes.json")
+			if err := os.WriteFile(path, []byte(c.cfg), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load succeeded, want an error")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error = %v, want substring %q", err, c.want)
+			}
+		})
+	}
+}
+
 func TestWildcardRejects(t *testing.T) {
 	cases := []struct{ name, cfg string }{
 		{

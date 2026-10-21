@@ -234,6 +234,21 @@ type RewriteBodyPolicy struct {
 	// Except: path-prefix exceptions — string form (remains
 	// at the origin) or object {path, to} (alternate public host).
 	Except []RewriteExcept `json:"except,omitempty"`
+
+	// Targets: explicit cross-route rewrites — backend origin host →
+	// public route host. Hosts only (no scheme, no port): the
+	// request's scheme and port are inherited, and the target must be
+	// a declared route host. Keys must be origins of declared
+	// routes. Resolved at load into the same compiled map as the
+	// automatic wildcard expansion.
+	Targets map[string]string `json:"targets,omitempty"`
+
+	// FollowRoutes: selectors over declared routes BY PUBLIC HOST
+	// (exact host or "*.suffix"). Each selected route's backend
+	// origins are rewritten to its public host. Resolved after
+	// wildcard expansion; no match, self-only match or ambiguous
+	// mapping refuses the load.
+	FollowRoutes []string `json:"followRoutes,omitempty"`
 }
 
 // UpstreamResponseHeaders: adjustment of the backend's RESPONSE
@@ -599,15 +614,12 @@ type Route struct {
 	// from (route table annotation; never decoded).
 	wildcardSrc string `json:"-"`
 
-	// rewriteSiblings: sibling-expansion map (backend origin host →
-	// public host) for routes expanded from the same wildcard. Built
-	// AT LOAD, shared read-only by rewriteBody (server, SW, guard):
-	// an HTML page of one edition links to the origin of another
-	// edition, and the link is rewritten to that sibling's public
-	// host without any per-request route lookup. nil when there is
-	// no unambiguous mapping (one variant, or one origin shared by
-	// several public hosts — the alias form).
-	rewriteSiblings map[string]string `json:"-"`
+	// rewriteTargets: compiled cross-route map (backend origin host →
+	// public host) for this concrete route. Built AT LOAD from the
+	// automatic wildcard expansion, explicit rewriteBody.targets and
+	// rewriteBody.followRoutes; shared read-only by rewriteBody
+	// (server, SW, guard). nil when there is no mapping.
+	rewriteTargets map[string]string `json:"-"`
 }
 
 // Wildcard: a route's expansion allow-lists — key = capture name
@@ -618,15 +630,12 @@ type Wildcard map[string][]string
 // ("" for a route declared literally) — route table annotation.
 func (r *Route) WildcardSource() string { return r.wildcardSrc }
 
-// RewriteSiblings: for a route expanded from a wildcard, the map
-// backend-origin-hostname → public-host of the OTHER concrete routes
-// of the same expansion (nil when there is no unambiguous mapping).
-// Read-only: compiled once at load, shared by the server rewriter,
-// the service worker and the guard script. This is what lets an
-// interlanguage link ("https://es.wikipedia.org/…") found in the
-// English edition be rewritten to the Spanish public host without
-// duplicating the host block in the config or the plugin.
-func (r *Route) RewriteSiblings() map[string]string { return r.rewriteSiblings }
+// RewriteTargets: compiled cross-route map for this route, origin
+// hostname → public host. It combines the automatic wildcard sibling
+// expansion, explicit rewriteBody.targets and rewriteBody.followRoutes.
+// Read-only: compiled once at load, shared by the server rewriter, the
+// service worker and the guard script. nil when there is no mapping.
+func (r *Route) RewriteTargets() map[string]string { return r.rewriteTargets }
 
 // wildcardLabel: an allow-list entry — one DNS label, lowercase,
 // no dots (the bounded-domain guarantee: a value can never jump to
@@ -774,11 +783,11 @@ func (r *Route) expandWildcard(taken map[string]bool) ([]Route, error) {
 		e.wildcardSrc = r.Host
 		out = append(out, e)
 	}
-	annotateRewriteSiblings(out)
+	annotateRewriteTargets(out)
 	return out, nil
 }
 
-// annotateRewriteSiblings compiles the cross-route rewrite map of one
+// annotateRewriteTargets compiles the automatic cross-route map of one
 // wildcard expansion: backend origin host → public host of the sibling
 // variants. It is the compact counterpart of the finite allow-list:
 // the config declares one host pattern and its labels; the expansion
@@ -790,7 +799,7 @@ func (r *Route) expandWildcard(taken map[string]bool) ([]Route, error) {
 // origin cannot choose a label. The same applies to a HostOverride
 // shared by several variants. The route's own origins never appear in
 // its map (self-rewrite keeps its existing semantics).
-func annotateRewriteSiblings(variants []Route) {
+func annotateRewriteTargets(variants []Route) {
 	if len(variants) < 2 || variants[0].UpstreamRewriteBody() == nil {
 		return
 	}
@@ -818,17 +827,17 @@ func annotateRewriteSiblings(variants []Route) {
 		for _, origin := range rewriteOriginHosts(&variants[i]) {
 			self[origin] = true
 		}
-		var siblings map[string]string
+		var targets map[string]string
 		for origin, t := range byOrigin {
 			if t.ambiguous || self[origin] {
 				continue
 			}
-			if siblings == nil {
-				siblings = make(map[string]string, len(byOrigin))
+			if targets == nil {
+				targets = make(map[string]string, len(byOrigin))
 			}
-			siblings[origin] = t.host
+			targets[origin] = t.host
 		}
-		variants[i].rewriteSiblings = siblings
+		variants[i].rewriteTargets = targets
 	}
 }
 
@@ -1032,6 +1041,14 @@ func Load(path string) (*Config, error) {
 	}
 
 	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
+	// Cross-route rewrite map: automatic wildcard siblings + explicit
+	// rewriteBody.targets + rewriteBody.followRoutes, resolved against
+	// the expanded route table. Compiled once here; a bad target, an
+	// unmatched selector or an ambiguous origin refuses the load.
+	if err := cfg.compileRewriteTargets(); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 
@@ -1454,6 +1471,294 @@ func validateRewriteBody(rb *RewriteBodyPolicy) error {
 		}
 	}
 	return nil
+}
+
+// bounds of the cross-route rewrite configuration. The compiled map is
+// scanned by the streaming engine: a few hundred entries are cheap,
+// thousands would not be. maxTargetsEntries applies to the explicit
+// targets map; maxRewriteTargets applies to the compiled result
+// (automatic wildcard siblings included).
+const (
+	maxTargetsEntries = 256
+	maxRewriteTargets = 1024
+	maxFollowRoutes   = 64
+	maxRewriteHostLen = 253
+)
+
+// compileRewriteTargets builds each route's cross-route rewrite map:
+// automatic wildcard siblings, explicit targets (origin host → public
+// host) and followRoutes selectors over declared routes. The route
+// table is the source of truth: explicit targets must name known
+// origins/targets, selectors must match known public hosts, and no
+// origin may resolve to two different public hosts.
+func (c *Config) compileRewriteTargets() error {
+
+	if len(c.Routes) == 0 {
+		return nil
+	}
+
+	publicHosts := make(map[string]bool, len(c.Routes))
+	declaredOrigins := make(map[string]bool, len(c.Routes))
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		publicHosts[normalizeHostName(r.Host)] = true
+		for _, origin := range rewriteOriginHosts(r) {
+			declaredOrigins[origin] = true
+		}
+	}
+
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		rb := r.UpstreamRewriteBody()
+		if rb == nil {
+			if up := r.Upstream; up != nil && up.RewriteBody != nil &&
+				(len(up.RewriteBody.Targets) > 0 ||
+					len(up.RewriteBody.FollowRoutes) > 0) {
+				return fmt.Errorf(
+					"route %s: rewriteBody.targets/followRoutes require enabled: true",
+					r.Host)
+			}
+			continue
+		}
+
+		if len(rb.Targets) > maxTargetsEntries {
+			return fmt.Errorf(
+				"route %s: rewriteBody.targets: %d entries (max %d)",
+				r.Host, len(rb.Targets), maxTargetsEntries)
+		}
+		if len(rb.FollowRoutes) > maxFollowRoutes {
+			return fmt.Errorf(
+				"route %s: rewriteBody.followRoutes: %d entries (max %d)",
+				r.Host, len(rb.FollowRoutes), maxFollowRoutes)
+		}
+
+		selfOrigins := make(map[string]bool)
+		for _, origin := range rewriteOriginHosts(r) {
+			selfOrigins[origin] = true
+		}
+		selfHost := normalizeHostName(r.Host)
+
+		// start from the automatic wildcard-expansion map
+		targets := make(map[string]string, len(r.rewriteTargets)+len(rb.Targets))
+		for origin, host := range r.rewriteTargets {
+			targets[origin] = host
+		}
+
+		// explicit targets: deterministic error order
+		keys := make([]string, 0, len(rb.Targets))
+		for k := range rb.Targets {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, rawOrigin := range keys {
+			origin, err := validateRewriteHost(
+				rawOrigin, "rewriteBody.targets key")
+			if err != nil {
+				return fmt.Errorf("route %s: %v", r.Host, err)
+			}
+			if !declaredOrigins[origin] {
+				return fmt.Errorf(
+					"route %s: rewriteBody.targets[%q]: not an origin of a declared route (backend host or hostOverride)",
+					r.Host, rawOrigin)
+			}
+			rawTarget := rb.Targets[rawOrigin]
+			target, err := validateRewriteHost(
+				rawTarget, fmt.Sprintf("rewriteBody.targets[%q]", rawOrigin))
+			if err != nil {
+				return fmt.Errorf("route %s: %v", r.Host, err)
+			}
+			if !publicHosts[target] {
+				return fmt.Errorf(
+					"route %s: rewriteBody.targets[%q]: %q is not the public host of a declared route",
+					r.Host, rawOrigin, rawTarget)
+			}
+			if selfOrigins[origin] {
+				return fmt.Errorf(
+					"route %s: rewriteBody.targets[%q]: this is the route's own origin",
+					r.Host, rawOrigin)
+			}
+			if target == selfHost {
+				return fmt.Errorf(
+					"route %s: rewriteBody.targets[%q]: target %q is this route's own public host",
+					r.Host, rawOrigin, rawTarget)
+			}
+			if err := mergeRewriteTarget(targets, origin, target); err != nil {
+				return fmt.Errorf(
+					"route %s: rewriteBody.targets[%q]: %v",
+					r.Host, rawOrigin, err)
+			}
+		}
+
+		// followRoutes: select declared routes by their PUBLIC host,
+		// then derive origin → public host from each selected route.
+		seenPatterns := make(map[string]bool, len(rb.FollowRoutes))
+		for idx, raw := range rb.FollowRoutes {
+			pattern, err := validateFollowPattern(raw)
+			if err != nil {
+				return fmt.Errorf(
+					"route %s: rewriteBody.followRoutes[%d]: %v",
+					r.Host, idx, err)
+			}
+			if seenPatterns[pattern] {
+				continue
+			}
+			seenPatterns[pattern] = true
+
+			matched, matchedOther := 0, 0
+			for j := range c.Routes {
+				tr := &c.Routes[j]
+				if !matchRouteHost(pattern, normalizeHostName(tr.Host)) {
+					continue
+				}
+				matched++
+				if tr == r {
+					continue
+				}
+				matchedOther++
+				target := normalizeHostName(tr.Host)
+				if target == selfHost {
+					continue
+				}
+				for _, origin := range rewriteOriginHosts(tr) {
+					if selfOrigins[origin] {
+						continue // shared/alias origin: self keeps its semantics
+					}
+					if err := mergeRewriteTarget(targets, origin, target); err != nil {
+						return fmt.Errorf(
+							"route %s: rewriteBody.followRoutes[%d] (%q) via %s: %v",
+							r.Host, idx, raw, tr.Host, err)
+					}
+				}
+			}
+			if matched == 0 {
+				return fmt.Errorf(
+					"route %s: rewriteBody.followRoutes[%d] (%q): matches no declared route",
+					r.Host, idx, raw)
+			}
+			if matchedOther == 0 {
+				return fmt.Errorf(
+					"route %s: rewriteBody.followRoutes[%d] (%q): matches only this route",
+					r.Host, idx, raw)
+			}
+		}
+
+		if len(targets) > maxRewriteTargets {
+			return fmt.Errorf(
+				"route %s: %d compiled rewrite targets (max %d)",
+				r.Host, len(targets), maxRewriteTargets)
+		}
+		if len(targets) == 0 {
+			targets = nil
+		}
+		r.rewriteTargets = targets
+	}
+
+	return nil
+}
+
+// mergeRewriteTarget adds origin → target, refusing a conflicting
+// mapping. Same origin + same target is a harmless duplicate (an
+// explicit target can repeat an automatic wildcard sibling).
+func mergeRewriteTarget(m map[string]string, origin, target string) error {
+	if prev, ok := m[origin]; ok {
+		if prev != target {
+			return fmt.Errorf(
+				"origin %s already targets %s (conflict with %s)",
+				origin, prev, target)
+		}
+		return nil
+	}
+	m[origin] = target
+	return nil
+}
+
+// validateRewriteHost: a bare hostname for targets/selectors —
+// lowercase, no scheme, no port, no path, max 253 bytes, DNS labels
+// (a-z0-9, hyphen; no underscore, no empty label). The gateway
+// derives the scheme and port from the request.
+func validateRewriteHost(raw, what string) (string, error) {
+	h := strings.ToLower(strings.TrimSpace(raw))
+	if h == "" {
+		return "", fmt.Errorf("%s: empty host", what)
+	}
+	if strings.Contains(h, "://") || strings.ContainsAny(h, "/\\?#@") {
+		return "", fmt.Errorf(
+			"%s: %q must be a bare host (no scheme, port or path)",
+			what, raw)
+	}
+	if strings.Contains(h, ":") {
+		return "", fmt.Errorf(
+			"%s: %q must not contain a port", what, raw)
+	}
+	if len(h) > maxRewriteHostLen {
+		return "", fmt.Errorf(
+			"%s: %q is %d bytes (max %d)",
+			what, raw, len(h), maxRewriteHostLen)
+	}
+	if strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") ||
+		strings.Contains(h, "..") {
+		return "", fmt.Errorf(
+			"%s: %q has an empty label", what, raw)
+	}
+	for _, label := range strings.Split(h, ".") {
+		if len(label) > 63 || !wildcardLabel.MatchString(label) {
+			return "", fmt.Errorf(
+				"%s: %q is not a valid hostname", what, raw)
+		}
+	}
+	return h, nil
+}
+
+// validateFollowPattern: exact public host or "*.suffix" (any depth,
+// subdomains only — not the bare suffix itself). A bare "*" is refused:
+// it would silently map every route and hide ambiguity.
+func validateFollowPattern(raw string) (string, error) {
+	p := strings.ToLower(strings.TrimSpace(raw))
+	if p == "" {
+		return "", fmt.Errorf("empty selector")
+	}
+	if p == "*" {
+		return "", fmt.Errorf(
+			"%q: bare * is refused; use *.suffix or exact hosts", raw)
+	}
+	if strings.HasPrefix(p, "*.") {
+		suffix, err := validateRewriteHost(
+			p[2:], "followRoutes suffix")
+		if err != nil {
+			return "", err
+		}
+		return "*." + suffix, nil
+	}
+	if strings.ContainsAny(p, "*?") {
+		return "", fmt.Errorf(
+			"%q: wildcard only allowed as a leading *. (e.g. *.example.com)",
+			raw)
+	}
+	h, err := validateRewriteHost(p, "followRoutes selector")
+	if err != nil {
+		return "", err
+	}
+	return h, nil
+}
+
+// matchRouteHost: exact host or suffix selector. "*.example.com"
+// matches a.example.com and a.b.example.com, not example.com.
+func matchRouteHost(pattern, host string) bool {
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := pattern[1:] // ".example.com"
+		return strings.HasSuffix(host, suffix) && len(host) > len(suffix)
+	}
+	return pattern == host
+}
+
+// normalizeHostName: lowercase, no port (route hosts are hostnames;
+// this mirrors the proxy-side normalizeHost without importing proxy).
+func normalizeHostName(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	if i := strings.IndexByte(h, ':'); i >= 0 {
+		h = h[:i]
+	}
+	return h
 }
 
 // AsciiJSON marshals v and escapes EVERY non-ASCII character as

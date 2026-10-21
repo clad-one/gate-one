@@ -48,7 +48,7 @@
       ORIGINS[REWRITE.origins[oi]] = true;
     }
     var EXCEPT = REWRITE.except || [];
-    var SIBLINGS = REWRITE.siblings || {};
+    var TARGETS = REWRITE.targets || {};
     var OUR_SW = REWRITE.sw || '/__gate-one_pwa/sw.js';
     var rwAbort = false; // third-party SW detected: cancels diagnostic/claim
 
@@ -71,13 +71,13 @@
         pathStart += port.length + 1;
       }
       var rest = u.slice(pathStart);
-      // sibling edition of the same wildcard: rewrite toward its
-      // PUBLIC host, on this page's scheme and port. Route-local
-      // exceptions do not apply to a sibling's paths.
-      var sibling = SIBLINGS[host.toLowerCase()];
-      if (sibling) {
+      // cross-route target (wildcard sibling or explicit mapping):
+      // rewrite toward its PUBLIC host, on this page's scheme and
+      // port. Route-local exceptions do not apply to a target's paths.
+      var targetHost = TARGETS[host.toLowerCase()];
+      if (targetHost) {
         var alt = new URL(location.origin);
-        alt.hostname = sibling;
+        alt.hostname = targetHost;
         return alt.origin + rest;
       }
       for (var i = 0; i < EXCEPT.length; i++) {

@@ -55,16 +55,17 @@ func apiCachePolicyJSON(c any) []byte {
 // upstream.rewriteBody), serialized into the generated service
 // worker. Origins are the origin hosts whose absolute URLs are
 // intercepted; Target the default replacement base
-// ("https://public.host"); Siblings the wildcard-expansion map
-// origin-host → sibling public host (rewritten on the SW's own
-// scheme/port, before the exceptions); Except the path-prefix
-// exceptions (sorted: longest prefix first), whose entries without
-// To remain at the origin.
+// ("https://public.host"); Targets the compiled cross-route map
+// origin-host → target public host (wildcard siblings, explicit
+// targets and followRoutes; rewritten on the SW's own scheme/port,
+// before the exceptions); Except the path-prefix exceptions (sorted:
+// longest prefix first), whose entries without To remain at the
+// origin.
 type RewriteSpec struct {
-	Origins  []string             `json:"origins"`
-	Target   string               `json:"target"`
-	Siblings map[string]string    `json:"siblings,omitempty"`
-	Except   []core.RewriteExcept `json:"except,omitempty"`
+	Origins []string             `json:"origins"`
+	Target  string               `json:"target"`
+	Targets map[string]string    `json:"targets,omitempty"`
+	Except  []core.RewriteExcept `json:"except,omitempty"`
 }
 
 type Handler struct {
@@ -302,12 +303,13 @@ const RW = ` + h.rwData() + `;
 
 function rwMatch(url) {
   if (RW.origins.indexOf(url.hostname) === -1) return null;
-  // sibling edition of the same wildcard: its PUBLIC host, on the
-  // SW's own scheme/port (the gateway serves them on one listener).
-  var sibling = RW.siblings && RW.siblings[url.hostname];
-  if (sibling) {
+  // cross-route target (wildcard sibling or explicit mapping): its
+  // PUBLIC host, on the SW's own scheme/port (the gateway serves all
+  // routes on one listener).
+  var target = RW.targets && RW.targets[url.hostname];
+  if (target) {
     var alt = new URL(self.location.origin);
-    alt.hostname = sibling;
+    alt.hostname = target;
     return alt.origin;
   }
   for (var i = 0; i < RW.except.length; i++) {
@@ -355,12 +357,13 @@ const RW = ` + h.rwData() + `
 
 function rwMatch(url) {
   if (RW.origins.indexOf(url.hostname) === -1) return null;
-  // sibling edition of the same wildcard: its PUBLIC host, on the
-  // SW's own scheme/port (the gateway serves them on one listener).
-  var sibling = RW.siblings && RW.siblings[url.hostname];
-  if (sibling) {
+  // cross-route target (wildcard sibling or explicit mapping): its
+  // PUBLIC host, on the SW's own scheme/port (the gateway serves all
+  // routes on one listener).
+  var target = RW.targets && RW.targets[url.hostname];
+  if (target) {
     var alt = new URL(self.location.origin);
-    alt.hostname = sibling;
+    alt.hostname = target;
     return alt.origin;
   }
   for (var i = 0; i < RW.except.length; i++) {

@@ -102,6 +102,27 @@ func TestServiceWorker(t *testing.T) {
 	}
 }
 
+func TestServiceWorkerRewriteTargets(t *testing.T) {
+	h := New(nil, &RewriteSpec{
+		Origins: []string{"origin.example"},
+		Target:  "https://public.example",
+		Targets: map[string]string{
+			"fr.origin.example": "fr.public.example",
+		},
+	})
+
+	body := h.swJS()
+	if !strings.Contains(body, `"targets":{"fr.origin.example":"fr.public.example"}`) {
+		t.Errorf("sw.js missing the targets map:\n%s", body)
+	}
+	if strings.Contains(body, `"siblings"`) {
+		t.Error("sw.js still uses the old siblings key")
+	}
+	if !strings.Contains(body, "RW.targets") {
+		t.Error("sw.js runtime does not read RW.targets")
+	}
+}
+
 func TestServiceWorkerApiCache(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCache = &core.PWAApiCache{

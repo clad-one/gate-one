@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,7 +37,7 @@ func rewriteTestPlan() *rewritePlan {
 			maxExcept = len(e.Path)
 		}
 	}
-	siblings := map[string]string{
+	targets := map[string]string{
 		"de.origin.example": "de.public.test",
 		"fr.origin.example": "fr.public.test",
 		"ja.origin.example": "ja.public.test",
@@ -55,7 +56,7 @@ func rewriteTestPlan() *rewritePlan {
 	}
 	return &rewritePlan{
 		origins:   origins,
-		siblings:  siblings,
+		targets:   targets,
 		pub:       "https://public.test",
 		pubHost:   "public.test",
 		except:    except,
@@ -131,27 +132,27 @@ func rewriteTextCases() []rwCase {
 			Input: `<a href="https://origin.example:9/lecture/bonpapa">p</a>`,
 		},
 		{
-			Name:   "sibling https: its own public host",
+			Name:   "target https: its own public host",
 			Input:  `<a href="https://fr.origin.example/wiki/Chat">fr</a>`,
 			Expect: `<a href="https://fr.public.test/wiki/Chat">fr</a>`,
 		},
 		{
-			Name:   "sibling http: scheme follows the request",
+			Name:   "target http: scheme follows the request",
 			Input:  `<a href="http://de.origin.example/x">de</a>`,
 			Expect: `<a href="https://de.public.test/x">de</a>`,
 		},
 		{
-			Name:   "sibling protocol-relative",
+			Name:   "target protocol-relative",
 			Input:  `<img src="//ja.origin.example/y.png">`,
 			Expect: `<img src="https://ja.public.test/y.png">`,
 		},
 		{
-			Name:   "sibling: route-local exception does not apply",
+			Name:   "target: route-local exception does not apply",
 			Input:  `<a href="https://fr.origin.example/lecture/bonpapa/ch1">l</a>`,
 			Expect: `<a href="https://fr.public.test/lecture/bonpapa/ch1">l</a>`,
 		},
 		{
-			Name:   "sibling explicit port: dropped, like self",
+			Name:   "target explicit port: dropped, like self",
 			Input:  `<a href="https://fr.origin.example:4443/x">p</a>`,
 			Expect: `<a href="https://fr.public.test/x">p</a>`,
 		},
@@ -278,10 +279,10 @@ func rewriteReference(body []byte, plan *rewritePlan) string {
 		}
 
 		keep, repl := false, plan.pub
-		if sibling, ok := plan.siblings[host]; ok {
-			// sibling expansion: its public host, no route-local
+		if target, ok := plan.targets[host]; ok {
+			// target expansion: its public host, no route-local
 			// exceptions
-			repl = "https://" + sibling
+			repl = "https://" + target
 		} else {
 			// exceptions: longest prefix wins (sorted upstream)
 			end := len(body)
@@ -353,14 +354,14 @@ func TestRewriteStreamRequestHostPort(t *testing.T) {
 	}
 }
 
-// Sibling rewriting keeps the request's listener: the Spanish public
+// Target rewriting keeps the request's listener: the Spanish public
 // host in the demo is reachable on the same :3000 as the English page
-// that links to it (an https-only or port-less sibling target would
+// that links to it (an https-only or port-less target target would
 // throw the browser out of the proxy).
 func TestRewriteStreamSiblingKeepsRequestPort(t *testing.T) {
 	plan := rewriteTestPlan()
 	plan.pubHost = "en.wikipedia.demo.localhost"
-	plan.siblings["fr.origin.example"] = "fr.wikipedia.demo.localhost"
+	plan.targets["fr.origin.example"] = "fr.wikipedia.demo.localhost"
 	rs := newRewriteStreamForRequest(
 		io.NopCloser(bytes.NewReader(
 			[]byte(`<a href="https://fr.origin.example/wiki/Chat">fr</a>`+
@@ -478,11 +479,11 @@ func TestRewriteStreamRawFlushThenError(t *testing.T) {
 	}
 }
 
-// Wildcard sibling wiring: the rewrite plan of an expanded route
+// Wildcard target wiring: the rewrite plan of an expanded route
 // carries the OTHER variants' backend origins and their public hosts,
 // so the server engine can rewrite an interlanguage link without any
 // per-request route lookup.
-func TestRewritePlanWildcardSiblings(t *testing.T) {
+func TestRewritePlanWildcardTargets(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "routes.json")
 	cfg := `{
@@ -524,23 +525,97 @@ func TestRewritePlanWildcardSiblings(t *testing.T) {
 			t.Fatalf("%s: nil rewrite plan", r.Host)
 		}
 		if len(plan.origins) != 2 {
-			t.Errorf("%s: origins = %v, want self + sibling",
+			t.Errorf("%s: origins = %v, want self + target",
 				r.Host, plan.origins)
 		}
 		for origin, public := range want[r.Host] {
-			if plan.siblings[origin] != public {
-				t.Errorf("%s: sibling %s -> %q, want %q",
-					r.Host, origin, plan.siblings[origin], public)
+			if plan.targets[origin] != public {
+				t.Errorf("%s: target %s -> %q, want %q",
+					r.Host, origin, plan.targets[origin], public)
 			}
-			if spec := plan.clientSpec(); spec.Siblings[origin] != public {
-				t.Errorf("%s: SW sibling %s -> %q, want %q",
-					r.Host, origin, spec.Siblings[origin], public)
+			if spec := plan.clientSpec(); spec.Targets[origin] != public {
+				t.Errorf("%s: SW target %s -> %q, want %q",
+					r.Host, origin, spec.Targets[origin], public)
 			}
-			if dto := rewriteGuardDTOFor(r, u); dto.Siblings[origin] != public {
-				t.Errorf("%s: guard sibling %s -> %q, want %q",
-					r.Host, origin, dto.Siblings[origin], public)
+			if dto := rewriteGuardDTOFor(r, u); dto.Targets[origin] != public {
+				t.Errorf("%s: guard target %s -> %q, want %q",
+					r.Host, origin, dto.Targets[origin], public)
 			}
 		}
+	}
+}
+
+// Explicit cross-route targets: a route with no wildcard can still
+// rewrite another declared route's backend origin. The plan, the SW
+// spec and the guard DTO must all carry the same compiled map.
+func TestRewritePlanExplicitTargets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"oidc": {"loginUrl": "http://login.test/login"},
+		"routes": [
+			{
+				"host": "a.public.localhost", "path": "/*", "frontend": true,
+				"backend": "https://a.backend.example",
+				"upstream": {"host": true, "rewriteBody": {
+					"enabled": true,
+					"targets": {"b.backend.example": "b.public.localhost"}
+				}}
+			},
+			{
+				"host": "b.public.localhost", "path": "/*", "frontend": true,
+				"backend": "https://b.backend.example",
+				"upstream": {"host": true}
+			}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := core.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a *core.Route
+	for i := range c.Routes {
+		if c.Routes[i].Host == "a.public.localhost" {
+			a = &c.Routes[i]
+		}
+	}
+	if a == nil {
+		t.Fatal("route a not found")
+	}
+	u, err := url.Parse(a.Backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := rewritePlanFor(a, u)
+	if plan == nil {
+		t.Fatal("nil rewrite plan")
+	}
+	if plan.targets["b.backend.example"] != "b.public.localhost" {
+		t.Errorf("targets = %v, want b.backend.example -> b.public.localhost",
+			plan.targets)
+	}
+	if len(plan.origins) != 2 {
+		t.Errorf("origins = %v, want self + explicit target", plan.origins)
+	}
+	if spec := plan.clientSpec(); spec.Targets["b.backend.example"] != "b.public.localhost" {
+		t.Errorf("SW targets = %v", spec.Targets)
+	}
+	if dto := rewriteGuardDTOFor(a, u); dto.Targets["b.backend.example"] != "b.public.localhost" {
+		t.Errorf("guard targets = %v", dto.Targets)
+	}
+	dto := rewriteGuardDTOFor(a, u)
+	blob, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), `"targets":{`) {
+		t.Errorf("guard DTO missing the targets key: %s", blob)
+	}
+	if strings.Contains(string(blob), `"siblings"`) {
+		t.Errorf("guard DTO still uses the old siblings key: %s", blob)
 	}
 }
 

@@ -35,10 +35,11 @@ import (
 // (descending sort); string entry = stay at the origin,
 // {path,to} entry = "to" replacement base.
 //
-// Sibling origins (another concrete route from the same wildcard
-// expansion) are rewritten toward THAT route's public host, keeping
-// the request's scheme and port; the route's exceptions apply to its
-// own origin only. The map is compiled once at load.
+// Cross-route targets (a wildcard sibling or another declared route
+// selected by rewriteBody.targets/followRoutes) are rewritten toward
+// THAT route's public host, keeping the request's scheme and port; the
+// route's exceptions apply to its own origin only. The map is compiled
+// once at load.
 //
 // Bounded sliding window: the engine never waits for more than
 // "https://" + longest host + longest exception prefix (config:
@@ -58,14 +59,14 @@ type rewritePlan struct {
 	// origin hosts whose absolute URLs are rewritten — hostname
 	// without port, lowercased (plausible self-references of the
 	// origin HTML: backend host + optional hostOverride, plus the
-	// backend origins of sibling routes from the same wildcard
-	// expansion).
+	// backend origins of cross-route targets).
 	origins []string
-	// siblings: sibling-origin hostname → sibling PUBLIC host (no
-	// scheme/port), compiled from the wildcard expansion. A hit here
-	// is rewritten toward that public host, never toward this
-	// route's own host. nil when there is no unambiguous mapping.
-	siblings map[string]string
+	// targets: target-origin hostname → target PUBLIC host (no
+	// scheme/port), compiled from the wildcard expansion, explicit
+	// rewriteBody.targets and followRoutes. A hit here is rewritten
+	// toward that public host, never toward this route's own host.
+	// nil when there is no mapping.
+	targets map[string]string
 	// pub: default replacement base in https ("https://host.public")
 	// — the form handed to the client SW (which uses it as
 	// documentation; at runtime it rewrites toward ITS origin) and
@@ -96,7 +97,7 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 
 	up := route.Upstream
 	origins := make([]string, 0, 2)
-	siblings := make(map[string]string, len(route.RewriteSiblings()))
+	targets := make(map[string]string, len(route.RewriteTargets()))
 	addOrigin := func(h string) {
 		h = normalizeHost(h)
 		if h == "" {
@@ -114,10 +115,11 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 		addOrigin(up.HostOverride)
 	}
 
-	// Sibling routes expanded from the same wildcard: their backend
-	// origins are rewritten toward their public hosts. A sibling
-	// origin never shadows one of this route's own origins.
-	for origin, publicHost := range route.RewriteSiblings() {
+	// Cross-route targets (wildcard siblings, explicit targets,
+	// followRoutes): their backend origins are rewritten toward their
+	// public hosts. A target origin never shadows one of this route's
+	// own origins.
+	for origin, publicHost := range route.RewriteTargets() {
 		origin = normalizeHost(origin)
 		if origin == "" {
 			continue
@@ -132,11 +134,11 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 		if self {
 			continue
 		}
-		siblings[origin] = normalizeHost(publicHost)
+		targets[origin] = normalizeHost(publicHost)
 		addOrigin(origin)
 	}
-	if len(siblings) == 0 {
-		siblings = nil
+	if len(targets) == 0 {
+		targets = nil
 	}
 	sort.Strings(origins)
 
@@ -166,7 +168,7 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 
 	return &rewritePlan{
 		origins:   origins,
-		siblings:  siblings,
+		targets:   targets,
 		pub:       "https://" + normalizeHost(route.Host),
 		pubHost:   normalizeHost(route.Host),
 		except:    except,
@@ -178,10 +180,10 @@ func rewritePlanFor(route *core.Route, backend *url.URL) *rewritePlan {
 // clientSpec: adapter for the client SW (pwa.RewriteSpec).
 func (p *rewritePlan) clientSpec() *pwa.RewriteSpec {
 	return &pwa.RewriteSpec{
-		Origins:  p.origins,
-		Target:   p.pub,
-		Siblings: p.siblings,
-		Except:   p.except,
+		Origins: p.origins,
+		Target:  p.pub,
+		Targets: p.targets,
+		Except:  p.except,
 	}
 }
 
@@ -192,11 +194,11 @@ func (p *rewritePlan) clientSpec() *pwa.RewriteSpec {
 // never in a "scheme://origin" form that would be rewritten in its
 // own transport.
 type rewriteGuardDTO struct {
-	Sw       string               `json:"sw"`
-	Target   string               `json:"target"`
-	Origins  []string             `json:"origins"`
-	Siblings map[string]string    `json:"siblings,omitempty"`
-	Except   []core.RewriteExcept `json:"except"`
+	Sw      string               `json:"sw"`
+	Target  string               `json:"target"`
+	Origins []string             `json:"origins"`
+	Targets map[string]string    `json:"targets,omitempty"`
+	Except  []core.RewriteExcept `json:"except"`
 }
 
 // rewriteGuardDTOFor: version for the guard script; nil when the
@@ -207,11 +209,11 @@ func rewriteGuardDTOFor(route *core.Route, backend *url.URL) *rewriteGuardDTO {
 		return nil
 	}
 	return &rewriteGuardDTO{
-		Sw:       pwa.SwURL,
-		Target:   plan.pub,
-		Origins:  plan.origins,
-		Siblings: plan.siblings,
-		Except:   plan.except,
+		Sw:      pwa.SwURL,
+		Target:  plan.pub,
+		Origins: plan.origins,
+		Targets: plan.targets,
+		Except:  plan.except,
 	}
 }
 
@@ -417,7 +419,7 @@ const (
 
 type cand struct {
 	state     candKind
-	host      string // matched origin host (self or sibling)
+	host      string // matched origin host (self or target)
 	formStart int    // pattern start (https:// … or //)
 	formEnd   int    // host end (exclusive) = path start
 	portEnd   int    // after the optional port (:digits) — otherwise formEnd
@@ -515,9 +517,9 @@ func (s *rewriteStream) evaluate(h int, host string) cand {
 		return cand{state: candPending, host: host, formStart: formStart, formEnd: formEnd, portEnd: portEnd}
 	}
 
-	// right context: path (for the exceptions). Sibling origins are
+	// right context: path (for the exceptions). Target origins are
 	// not subject to this route's exceptions, so they settle here.
-	if _, sibling := s.cfg.siblings[host]; !sibling {
+	if _, target := s.cfg.targets[host]; !target {
 		pathStart := portEnd
 		stop := -1
 		for i := pathStart; i < len(s.buf) && i < pathStart+s.cfg.maxExcept; i++ {
@@ -540,11 +542,12 @@ func (s *rewriteStream) evaluate(h int, host string) cand {
 // scheme://host[:port] (the path, starting at portEnd, follows).
 func (s *rewriteStream) decision(m cand) (replacement string, keep bool) {
 
-	// Sibling expansion: the origin belongs to another concrete route
-	// of the same wildcard. Rewrite toward THAT route's public host,
-	// on the current listener (same scheme and port as the request).
-	// This route's path exceptions do not apply to a sibling's paths.
-	if publicHost, sibling := s.cfg.siblings[m.host]; sibling {
+	// Cross-route target: the origin belongs to a wildcard sibling
+	// or to an explicitly selected declared route. Rewrite toward THAT
+	// route's public host, on the current listener (same scheme and
+	// port as the request). This route's path exceptions do not apply
+	// to a target's paths.
+	if publicHost, target := s.cfg.targets[m.host]; target {
 		return s.altBase(publicHost), false
 	}
 
@@ -585,9 +588,9 @@ func (s *rewriteStream) decision(m cand) (replacement string, keep bool) {
 	return s.scheme + "://" + host, false
 }
 
-// altBase: absolute base of a sibling public host, keeping the
+// altBase: absolute base of a target public host, keeping the
 // request's scheme and non-standard port (demo :3000). The gateway
-// serves every route on the same listener, so the sibling lives on
+// serves every route on the same listener, so the target lives on
 // the same port as the page that links to it.
 func (s *rewriteStream) altBase(publicHost string) string {
 	host := publicHost
