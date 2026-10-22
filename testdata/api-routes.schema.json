@@ -480,7 +480,7 @@
         "stripPrefix": {
           "type": "string",
           "maxLength": 256,
-          "description": "Exact PUBLIC path prefix removed from the request before it reaches the backend. Path only (no query, fragment or wildcard), matched on segment boundaries and normalized at load (trailing slash removed; root \"/\" forbidden). Example: path \"/api/*\", stripPrefix \"/api\", backend \"http://api:8080/v1\" turns /api/foo into /v1/foo. The backend also receives X-Forwarded-Prefix when the ingress did not set one. Response paths (Location, HTML links) are NOT rewritten: the backend must emit relative or prefix-aware URLs, or a response path rewrite can be added later."
+          "description": "Exact PUBLIC path prefix removed from the request before it reaches the backend. Path only (no query, fragment or wildcard), matched on segment boundaries and normalized at load (trailing slash removed; root \"/\" forbidden). Example: path \"/api/*\", stripPrefix \"/api\", backend \"http://api:8080/v1\" turns /api/foo into /v1/foo. The backend also receives X-Forwarded-Prefix when the ingress did not set one. Response paths are rewritten symmetrically: Location, Content-Location, Refresh/Link headers, Set-Cookie Path, and HTML URL attributes (href/src/action/srcset/poster, style url(), meta refresh) are brought back under /api; relative references and other origins are left untouched. Script strings and CSS @import are out of scope."
         },
         "backend": { "type": "string" },
         "inject": {

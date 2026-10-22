@@ -1,20 +1,22 @@
 package proxy
 
 // Injector registry — the single extension point for modifications
-// made to PROXIFIED RESPONSES. Each feature (decompression, 401/403
-// guard, body rewrite, upstream adjustments, PWA, custom injections)
-// implements the interface; the chain is built once per route at
+// made to PROXIFIED RESPONSES. Each feature (decompression, stripPrefix
+// response paths, 401/403 guard, body rewrite, upstream adjustments,
+// PWA, custom injections) implements the interface; the chain is built
+// once per route at
 // config load, in execution order. End of wiring through nested
 // closures in proxy.go: adding a feature = adding an injector.
 //
 // Execution order (the slice order) — strict equivalent of the
 // historical chaining, proven by unchanged tests:
 //
-//	gzip → guard → rewriteBody → upstream(headers) → pwa → custom
+//	gzip → pathRewrite → guard → rewriteBody → upstream(headers) → pwa → custom
 //
 // Headers only or a streaming resp.Body wrapper: both mechanisms go
 // through the same interface — no buffering, memory stays O(1)
-// regardless of the page size.
+// regardless of the page size (a single HTML tag is rewritten in
+// place).
 
 import (
 	"errors"
@@ -59,13 +61,24 @@ func buildInjectors(
 	route *core.Route,
 	u *url.URL,
 	rwPlan *rewritePlan,
+	pathPlan *pathRewritePlan,
 	injectsBody bool,
 ) []injector {
 
-	injectors := make([]injector, 0, 5)
+	injectors := make([]injector, 0, 6)
 
 	if injectsBody {
 		injectors = append(injectors, &gzipDecodeInjector{host: route.Host})
+	}
+
+	if pathPlan != nil {
+		log.Printf(
+			"PATH rewrite enabled host=%s public=%s backend=%s",
+			route.Host,
+			pathPlan.publicPrefix,
+			pathPlan.backendBase,
+		)
+		injectors = append(injectors, &pathRewriteInjector{plan: pathPlan})
 	}
 
 	if guardEnabledFor(route) {

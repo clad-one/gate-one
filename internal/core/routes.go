@@ -579,11 +579,11 @@ type Route struct {
 	// Path only (no query/fragment/wildcard), matched on segment
 	// boundaries, normalized at load (trailing slash removed).
 	//
-	// This is a REQUEST-side transformation. Response paths
-	// (Location, HTML links) are intentionally not rewritten yet:
-	// the backend must emit URLs relative to its own deployment, or
-	// a response path rewrite can be added later without changing
-	// this field.
+	// The SAME mapping is applied to response paths: Location,
+	// Content-Location, Refresh/Link headers, Set-Cookie Path, and
+	// HTML URL attributes (href/src/action/srcset/style url()…)
+	// are brought back under the public prefix. Relative references
+	// and other origins are left untouched.
 	StripPrefix string `json:"stripPrefix,omitempty"`
 
 	// Upstream: connection to a backend outside the internal network

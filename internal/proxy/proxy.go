@@ -155,20 +155,23 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		upstream := route.Upstream
 		stripPrefix := route.StripPrefix
 
-		// Body injections (401/403 guard, PWA, origin URL rewrite)
-		// require PLAIN HTML: the Go stdlib decodes neither brotli
-		// nor zstd — if the browser offers them and the origin
-		// answers with one, a manipulated compressed body +
-		// Content-Encoding removed = unreadable page. We therefore
+		// Body injections (401/403 guard, PWA, origin URL rewrite,
+		// stripPrefix response paths) require PLAIN HTML: the Go
+		// stdlib decodes neither brotli nor zstd — if the browser
+		// offers them and the origin answers with one, a manipulated
+		// compressed body + Content-Encoding removed = unreadable
+		// page. We therefore
 		// force gzip upstream (decodable); decompression happens in
 		// ModifyResponse, before the injection chain. Without
 		// injection: the client's Accept-Encoding goes through as-is
 		// (optimal passthrough).
 		rwPlan := rewritePlanFor(route, u)
+		pathPlan := pathRewritePlanFor(route, u)
 
 		injectsBody := guardEnabledFor(route) ||
 			(route.PWA != nil && route.PWA.Enabled) ||
 			rwPlan != nil ||
+			pathPlan != nil ||
 			route.InjectionBundle() != nil
 
 		rp.Director = func(req *http.Request) {
@@ -257,11 +260,11 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		}
 
 		// Route injection chain: the registry (injector.go) carries
-		// each feature and their order — gzip → guard →
-		// rewriteBody → upstream(headers) → pwa → custom. The guard
-		// JS lives in guard/guard.js.tmpl (go:embed); custom
-		// injections (bundle) are data, not code.
-		if injectors := buildInjectors(cfg, route, u, rwPlan, injectsBody); len(injectors) > 0 {
+		// each feature and their order — gzip → pathRewrite →
+		// guard → rewriteBody → upstream(headers) → pwa → custom.
+		// The guard JS lives in guard/guard.js.tmpl (go:embed);
+		// custom injections (bundle) are data, not code.
+		if injectors := buildInjectors(cfg, route, u, rwPlan, pathPlan, injectsBody); len(injectors) > 0 {
 			rp.ModifyResponse = chainInjectors(injectors)
 		}
 
