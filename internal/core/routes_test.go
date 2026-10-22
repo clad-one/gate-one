@@ -114,6 +114,39 @@ func TestLoadAllowsSchemaKey(t *testing.T) {
 	}
 }
 
+func TestInjectBundleAllowsSchemaKey(t *testing.T) {
+	dir := t.TempDir()
+	bundle := `{
+		"$schema": "./inject-bundle.schema.json",
+		"patch": [
+			{"selector": "#action", "attrs": {"data-gtw-auth": ""}}
+		]
+	}`
+	if err := os.WriteFile(
+		filepath.Join(dir, "bundle.json"), []byte(bundle), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"routes": [
+			{"host": "a.local", "path": "/*", "backend": "http://x",
+			 "inject": "bundle.json"}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("bundle $schema must be accepted: %v", err)
+	}
+	b := c.Routes[0].InjectionBundle()
+	if b == nil || len(b.Patch) != 1 {
+		t.Fatalf("bundle patch not loaded: %#v", b)
+	}
+}
+
 // The upstream policy (proxified external site — e.g. Cloudflare) must
 // fully deserialize from api-routes.json.
 func TestUpstreamDeserialization(t *testing.T) {

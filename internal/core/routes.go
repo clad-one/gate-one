@@ -911,10 +911,11 @@ type InjectContent struct {
 }
 
 // InjectPatch: a patch rule — the attributes (typically data-gtw-*)
-// are set on the elements matched by the selector. Applies at every
-// evaluation cycle of the guard (dynamic elements
-// covered); a pre-existing markup attribute is OVERWRITTEN (the patch
-// declares the target, the selector finds it).
+// are added or their value updated on the elements matched by the
+// selector. Applies at every evaluation cycle of the guard (dynamic
+// elements covered). Other attributes are left untouched; an existing
+// attribute with the same exact name is updated (the patch declares
+// the target, the selector finds it).
 type InjectPatch struct {
 	Selector string            `json:"selector"`
 	Attrs    map[string]string `json:"attrs,omitempty"`
@@ -1082,6 +1083,10 @@ const (
 // rawInjectBundle: serialized form of the bundle (before resolving
 // the file: entries).
 type rawInjectBundle struct {
+	// Schema: optional reference to inject-bundle.schema.json (editor
+	// autocompletion/validation) — ignored at runtime.
+	Schema string `json:"$schema,omitempty"`
+
 	Injects []struct {
 		Name   string `json:"name"`
 		Target string `json:"target,omitempty"`

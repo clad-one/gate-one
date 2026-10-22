@@ -1,0 +1,111 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cladone.com/schemas/inject-bundle.schema.json",
+  "title": "Cladone gateway injection bundle",
+  "description": "Formal grammar of a route's injection bundle (the JSON file referenced by route.inject in api-routes.json). Complementary source of truth: gate-one-src/internal/core/routes.go. Loading is strict: unknown fields are rejected and a faulty bundle refuses startup/reload.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional reference to this schema (autocompletion and validation in the editor; ignored at runtime)."
+    },
+    "injects": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "HTML/JS/CSS insertions, sorted by increasing order within the same target.",
+      "items": { "$ref": "#/definitions/injectContent" }
+    },
+    "patch": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "Attribute patch rules applied client-side by the guard on every evaluation cycle.",
+      "items": { "$ref": "#/definitions/injectPatch" }
+    }
+  },
+  "definitions": {
+    "injectContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "anyOf": [
+        {
+          "required": ["html"],
+          "properties": { "html": { "minLength": 1 } }
+        },
+        {
+          "required": ["style"],
+          "properties": { "style": { "minLength": 1 } }
+        },
+        {
+          "required": ["script"],
+          "properties": { "script": { "minLength": 1 } }
+        },
+        {
+          "required": ["file"],
+          "properties": { "file": { "minLength": 1 } }
+        }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique identifier within the bundle (used in logs)."
+        },
+        "target": {
+          "type": "string",
+          "enum": ["", "head", "body-end"],
+          "default": "head",
+          "description": "Named insertion target: head (default, after <head>/meta charset) or body-end (before </body>); an empty string means head."
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 10000,
+          "default": 30,
+          "description": "Position within the same target (30+; the guard is 10, the PWA 20)."
+        },
+        "when": {
+          "type": "string",
+          "description": "Path prefix of the pages to target (same grammar as route.path; absent = the whole site)."
+        },
+        "html": {
+          "type": "string",
+          "description": "HTML inserted as-is."
+        },
+        "style": {
+          "type": "string",
+          "description": "CSS wrapped in <style>…</style>."
+        },
+        "script": {
+          "type": "string",
+          "description": "JavaScript wrapped in <script>…</script>."
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path relative to the bundle (never absolute or containing '..'); read at load and injected as-is."
+        }
+      }
+    },
+    "injectPatch": {
+      "type": "object",
+      "description": "A patch rule. The listed attributes are added or its value updated on the matched elements (typically data-gtw-*), client-side, on every guard evaluation cycle (dynamic elements covered). Other attributes are left untouched; an existing attribute with the same exact name is updated.",
+      "additionalProperties": false,
+      "required": ["selector", "attrs"],
+      "properties": {
+        "selector": {
+          "type": "string",
+          "minLength": 1,
+          "description": "CSS selector (querySelectorAll); an invalid selector = rule ignored, nothing broken."
+        },
+        "attrs": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string" },
+          "description": "Exact attribute names to set and their string values (e.g. {\"data-gtw-logout\": \"\", \"data-gtw-auth-hidden\": \"after\"}). No wildcard or prefix matching; no attribute removal."
+        }
+      }
+    }
+  }
+}

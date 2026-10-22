@@ -396,7 +396,7 @@
     },
     "rewriteCookiesPolicy": {
       "type": "object",
-      "description": "Translation of the Set-Cookie set by the origin: a Domain attribute targeting its own namespace (\"Domain=jacquelot…workers.dev\") would be rejected by the browser from the public host — the cookie would be silently lost. Active: a Domain targeting the origin host (equal or parent) is rewritten to the public host in \"rewrite\" mode (the sharing scope — host + subdomains — is transposed as-is), or the attribute is removed in \"strip\" mode (host-only on the public host). Other cookies pass intact (surgery of the Domain attribute only: Path/Secure/HttpOnly/SameSite/Expires come out byte-exact). Auth protection: an origin Set-Cookie bearing a name reserved for the gateway session (access_token, refresh_token, id_token, session) is removed with a warning — set on the same public host, it would overwrite the session cookies. Default: absent (no cookie rewriting).",
+      "description": "Translation of the Set-Cookie set by the origin: a Domain attribute targeting its own namespace (\"Domain=original…domain.dev\") would be rejected by the browser from the public host — the cookie would be silently lost. Active: a Domain targeting the origin host (equal or parent) is rewritten to the public host in \"rewrite\" mode (the sharing scope — host + subdomains — is transposed as-is), or the attribute is removed in \"strip\" mode (host-only on the public host). Other cookies pass intact (surgery of the Domain attribute only: Path/Secure/HttpOnly/SameSite/Expires come out byte-exact). Auth protection: an origin Set-Cookie bearing a name reserved for the gateway session (access_token, refresh_token, id_token, session) is removed with a warning — set on the same public host, it would overwrite the session cookies. Default: absent (no cookie rewriting).",
       "additionalProperties": false,
       "required": ["domain"],
       "properties": {
@@ -459,23 +459,6 @@
         }
       ]
     },
-    "injectPatch": {
-      "type": "object",
-      "description": "A patch rule: the attributes (typically data-gtw-*) are set on the matched elements, client-side, on every guard evaluation cycle (dynamic elements covered). A pre-existing markup attribute is overwritten.",
-      "additionalProperties": false,
-      "required": ["selector", "attrs"],
-      "properties": {
-        "selector": {
-          "type": "string",
-          "description": "CSS selector (querySelectorAll); invalid = rule ignored + nothing broken."
-        },
-        "attrs": {
-          "type": "object",
-          "additionalProperties": { "type": "string" },
-          "description": "Attributes to set (e.g. {\"data-gtw-logout\": \"\", \"data-gtw-auth-hidden\": \"after\"})."
-        }
-      }
-    },
     "route": {
       "type": "object",
       "additionalProperties": false,
@@ -497,7 +480,7 @@
         "backend": { "type": "string" },
         "inject": {
           "type": "string",
-          "description": "Path of the route's custom injection bundle (JSON), relative to the config file. The bundle declares HTML/JS/CSS insertions by named target (\"head\" = after <head>/meta charset, \"body-end\" = before </body>) with per-page targeting (when = path prefix) and data-* attribute patches applied client-side by the guard. Inline content or file: (relative to the bundle, read at load — a faulty bundle refuses startup). See the doc's § upstream.inject."
+          "description": "Path of the route's custom injection bundle (JSON), relative to the config file. The bundle declares HTML/JS/CSS insertions by named target (\"head\" = after <head>/meta charset, \"body-end\" = before </body>) with per-page targeting (when = path prefix) and data-* attribute patches applied client-side by the guard. Inline content or file: (relative to the bundle, read at load — a faulty bundle refuses startup). Its formal grammar is inject-bundle.schema.json. See the doc's § upstream.inject."
         },
         "upstream": { "$ref": "#/definitions/upstreamPolicy" },
         "frontend": {
