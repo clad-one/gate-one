@@ -245,7 +245,7 @@
     "mcpPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "operations"],
+      "required": ["enabled"],
       "properties": {
         "enabled": { "type": "boolean" },
         "path": { "type": "string", "description": "Default: /mcp." },
@@ -255,8 +255,38 @@
         },
         "operations": {
           "type": "array",
-          "description": "REST operations exposed as MCP tools. Empty = no tool (the MCP endpoint still serves metadata and initialization).",
+          "description": "REST operations exposed as MCP tools. Empty = no tool (the MCP endpoint still serves metadata and initialization). Mutually exclusive with upstream.",
           "items": { "$ref": "#/definitions/mcpOperation" }
+        },
+        "upstream": { "$ref": "#/definitions/mcpUpstreamPolicy" }
+      }
+    },
+    "mcpUpstreamPolicy": {
+      "type": "object",
+      "description": "Proxy an external MCP server over Streamable HTTP instead of deriving local REST tools. The upstream receives the per-user token of upstream.delegated (or static upstream.headers), never the Gate One bearer. Tool filtering is enforced on both tools/list and tools/call.",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Full upstream Streamable HTTP endpoint. Default: the route backend. The incoming /mcp path is not appended automatically."
+        },
+        "tools": { "$ref": "#/definitions/mcpToolFilter" }
+      }
+    },
+    "mcpToolFilter": {
+      "type": "object",
+      "description": "Glob patterns (path.Match syntax) over MCP tool names. Include non-empty = only matching tools are exposed; Exclude always wins. Hidden tools are also refused on tools/call.",
+      "additionalProperties": false,
+      "properties": {
+        "include": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allow-list patterns (e.g. \"list_*\", \"get_*\")."
+        },
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Deny-list patterns (e.g. \"delete_*\", \"*_secret\")."
         }
       }
     },

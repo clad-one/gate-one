@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -418,8 +419,57 @@ type MCPPolicy struct {
 	// at load time against the host's OpenAPI document (JSON,
 	// OpenAPI 3.x); an unresolvable operationId refuses the config.
 	// Empty = no tool, but the MCP endpoint (metadata, initialize)
-	// stays available.
+	// stays available. Mutually exclusive with Upstream.
 	Operations []MCPOperation `json:"operations"`
+	// Upstream: proxy an EXTERNAL MCP server (Streamable HTTP)
+	// instead of deriving local REST tools. Tool names are filtered
+	// on both tools/list and tools/call; the upstream receives the
+	// per-user token of upstream.delegated (or static upstream
+	// headers) — never the Gate One bearer.
+	Upstream *MCPUpstreamPolicy `json:"upstream,omitempty"`
+}
+
+// MCPUpstreamPolicy: external MCP server proxied by the gateway.
+type MCPUpstreamPolicy struct {
+	// URL: upstream Streamable HTTP endpoint. Empty = route backend.
+	URL string `json:"url,omitempty"`
+	// Tools: allow/deny filter applied to tools/list and enforced on
+	// tools/call. Absent = all upstream tools exposed.
+	Tools *MCPToolFilter `json:"tools,omitempty"`
+}
+
+// MCPToolFilter: glob patterns (path.Match syntax) over tool names.
+// Include non-empty = only matching names are exposed; Exclude always
+// wins. Filtering is enforced at call time too, so a hidden tool
+// cannot be invoked by guessing its name.
+type MCPToolFilter struct {
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// Allows reports whether a tool name passes the filter.
+func (f *MCPToolFilter) Allows(name string) bool {
+	if f == nil {
+		return true
+	}
+	if len(f.Include) > 0 {
+		matched := false
+		for _, p := range f.Include {
+			if ok, _ := path.Match(p, name); ok {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	for _, p := range f.Exclude {
+		if ok, _ := path.Match(p, name); ok {
+			return false
+		}
+	}
+	return true
 }
 
 // PWAApiCache declares a size-bounded offline cache for API responses
@@ -1478,6 +1528,10 @@ func (c *Config) validate() error {
 			return fmt.Errorf("route %s: %v", host, err)
 		}
 
+		if err := validateMCPUpstream(route); err != nil {
+			return fmt.Errorf("route %s: %v", host, err)
+		}
+
 		if p := route.PWA; p != nil {
 			for _, pat := range p.networkOnlyPatterns() {
 				if _, err := regexp.Compile(pat); err != nil {
@@ -1634,6 +1688,84 @@ func validateDelegatedCredentials(route *Route) error {
 			"upstream.delegated.prefix: control characters forbidden")
 	}
 
+	return nil
+}
+
+// validateMCPUpstream checks the external MCP proxy policy. The
+// URL may be empty (route backend); static upstream headers must not
+// override the MCP transport or the gateway identity.
+func validateMCPUpstream(route *Route) error {
+	if route.MCP == nil || !route.MCP.Enabled || route.MCP.Upstream == nil {
+		return nil
+	}
+	up := route.MCP.Upstream
+
+	if len(route.MCP.Operations) > 0 {
+		return fmt.Errorf(
+			"mcp.upstream and mcp.operations are mutually exclusive")
+	}
+
+	if up.URL != "" {
+		u, err := url.Parse(up.URL)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("mcp.upstream.url %q: invalid URL", up.URL)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf(
+				"mcp.upstream.url %q: scheme must be http or https",
+				up.URL)
+		}
+		if u.Fragment != "" {
+			return fmt.Errorf(
+				"mcp.upstream.url %q: fragment forbidden", up.URL)
+		}
+		if u.User != nil {
+			return fmt.Errorf(
+				"mcp.upstream.url %q: userinfo forbidden (use upstream.headers)", up.URL)
+		}
+	}
+
+	if up.Tools != nil {
+		for _, p := range append(
+			append([]string{}, up.Tools.Include...),
+			up.Tools.Exclude...,
+		) {
+			if p == "" {
+				return fmt.Errorf(
+					"mcp.upstream.tools: empty pattern")
+			}
+			if _, err := path.Match(p, ""); err != nil {
+				return fmt.Errorf(
+					"mcp.upstream.tools: invalid pattern %q: %v", p, err)
+			}
+		}
+	}
+
+	if route.Upstream == nil {
+		return nil
+	}
+	for name := range route.Upstream.Headers {
+		lower := strings.ToLower(name)
+		switch lower {
+		case "host", "content-length", "transfer-encoding",
+			"connection", "cookie", "content-type", "accept",
+			"accept-encoding", "content-encoding", "expect",
+			"proxy-authorization", "proxy-authenticate", "te",
+			"trailer", "upgrade", "keep-alive", "forwarded",
+			"x-user-id", "x-username", "x-email", "x-roles",
+			"x-scopes", "mcp-session-id", "mcp-protocol-version",
+			"mcp-method", "mcp-name", "last-event-id":
+			return fmt.Errorf(
+				"upstream.headers[%q] is reserved for the MCP proxy",
+				name)
+		}
+		if strings.HasPrefix(lower, "x-forwarded-") ||
+			strings.HasPrefix(lower, "x-gate-one-") {
+			return fmt.Errorf(
+				"upstream.headers[%q] is reserved for the MCP proxy",
+				name)
+		}
+	}
 	return nil
 }
 

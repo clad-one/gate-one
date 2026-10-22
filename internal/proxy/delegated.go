@@ -89,7 +89,20 @@ func (g *Gateway) writeDelegatedError(
 	}
 
 	if connectURL != "" {
-		connectURL = withReturnTo(connectURL, absoluteRequestURL(r))
+		returnTo := absoluteRequestURL(r)
+		// An MCP client cannot use the MCP endpoint as a browser
+		// landing page: after authorizing, send the browser to the
+		// connections page, where the user can see the new link and
+		// retry the tool call.
+		if cr != nil && (cr.mcp != nil || cr.mcpUpstream != nil) {
+			if u, err := url.Parse(connectURL); err == nil {
+				u.Path = "/connections"
+				u.RawQuery = ""
+				u.Fragment = ""
+				returnTo = u.String()
+			}
+		}
+		connectURL = withReturnTo(connectURL, returnTo)
 	}
 
 	if cr != nil && cr.pageRoute &&

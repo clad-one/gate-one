@@ -282,6 +282,68 @@ func TestDelegatedUnknownProviderRefusesStartup(t *testing.T) {
 	}
 }
 
+func TestDelegatedMCPConnectURLReturnsToConnections(t *testing.T) {
+	t.Setenv("DELEGATED_TEST_SECRET", "delegated-secret")
+
+	upstream := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			t.Error("upstream must not be called without a token")
+		},
+	))
+	t.Cleanup(upstream.Close)
+
+	broker := delegatedBroker(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{
+			"error":"not_connected",
+			"provider":"github",
+			"connect_url":"https://login.test/connect/github"
+		}`))
+	})
+	bridge := delegatedBridge(t)
+	clearAuthCache()
+	t.Cleanup(clearAuthCache)
+
+	cfg := loadForTest(t, fmt.Sprintf(`{
+		"tokenBroker": {"url": %q, "secretEnv": "DELEGATED_TEST_SECRET"},
+		"routes": [{
+			"host": "mcp.test", "path": "/mcp", "backend": %q,
+			"auth": {},
+			"mcp": {"enabled": true, "path": "/mcp", "upstream": {}},
+			"upstream": {"delegated": {"provider": "github"}}
+		}]
+	}`, broker.URL, upstream.URL))
+
+	gw, err := New(cfg, WithAuthBridgeURL(bridge.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost,
+		"http://mcp.test/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+	req.Host = "mcp.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Authorization", "Bearer gate-one")
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	connect, _ := body["connect_url"].(string)
+	if !strings.Contains(connect, "returnTo=") ||
+		!strings.Contains(connect, "%2Fconnections") {
+		t.Fatalf("connect_url = %q, want connections returnTo", connect)
+	}
+}
+
 func TestDelegatedMCPInjectsToken(t *testing.T) {
 	t.Setenv("DELEGATED_TEST_SECRET", "delegated-secret")
 

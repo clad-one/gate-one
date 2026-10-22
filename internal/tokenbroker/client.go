@@ -26,10 +26,11 @@ const (
 	// not exhaust the gateway's memory.
 	maxResponse = 1 << 20
 
-	// defaultTimeout bounds one broker call. Token refreshes happen
-	// in the broker (single-flight); the gateway must not freeze a
-	// request for longer than a browser will wait.
-	defaultTimeout = 5 * time.Second
+	// defaultTimeout bounds one broker call. The broker's own provider
+	// timeout is 15 s (TOKEN_BROKER_HTTP_TIMEOUT_SECONDS): leave room
+	// for a refresh + storage, otherwise the gateway would report a
+	// false outage while the broker is still refreshing.
+	defaultTimeout = 20 * time.Second
 )
 
 // ErrorKind classifies a broker failure so callers can choose the

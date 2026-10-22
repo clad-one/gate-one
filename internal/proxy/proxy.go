@@ -33,6 +33,10 @@ type compiledRoute struct {
 
 	mcp *mcpserver.Server
 
+	// mcpUpstream: external MCP server proxy (mcp.upstream). Exactly
+	// one of mcp / mcpUpstream is non-nil on an MCP route.
+	mcpUpstream *mcpUpstream
+
 	// non-nil when the route declares a pwa policy: serves
 	// /__gate-one_pwa/* and injects PWA tags into HTML responses
 	pwa *pwa.Handler
@@ -296,57 +300,72 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			delegated:   route.DelegatedCredentials(),
 		}
 
-		if route.MCP != nil &&
-			route.MCP.Enabled {
+		if route.MCPActive() {
 
-			specs := make(
-				[]mcpserver.OperationSpec,
-				0,
-				len(route.MCP.Operations),
-			)
-			for _, op := range route.MCP.Operations {
-				specs = append(specs,
-					mcpserver.OperationSpec{
-						Name:        op.Name,
-						OperationID: op.OperationID,
-					})
-			}
-
-			openapiURL := ""
-			if route.OpenAPI != nil {
-				openapiURL = route.OpenAPI.URL
-			}
-			if openapiURL == "" {
-				openapiURL =
-					openapiByHost[normalizeHost(route.Host)]
-			}
-
-			ops, err := mcpserver.ResolveOperations(
-				nil,
-				openapiURL,
-				route.Backend,
-				specs,
-			)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"route %s: mcp: %w", route.Host, err)
-			}
-
-			var delegated *mcpserver.DelegatedCredentials
-			if d := route.DelegatedCredentials(); d != nil {
-				delegated = &mcpserver.DelegatedCredentials{
-					Header: d.HeaderValue(),
-					Prefix: d.PrefixValue(),
+			if route.MCP.Upstream != nil {
+				up, err := newMCPUpstream(route)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"route %s: mcp: %w", route.Host, err)
 				}
-			}
-			cr.mcp = mcpserver.New(route.Backend, ops, delegated)
+				cr.mcpUpstream = up
+				log.Printf(
+					"MCP upstream enabled host=%s path=%s endpoint=%s tools=%d",
+					route.Host,
+					route.MCP.Path,
+					up.endpoint.Scheme+"://"+up.endpoint.Host,
+					toolFilterSize(route.MCP.Upstream.Tools),
+				)
+			} else {
+				specs := make(
+					[]mcpserver.OperationSpec,
+					0,
+					len(route.MCP.Operations),
+				)
+				for _, op := range route.MCP.Operations {
+					specs = append(specs,
+						mcpserver.OperationSpec{
+							Name:        op.Name,
+							OperationID: op.OperationID,
+						})
+				}
 
-			log.Printf(
-				"MCP enabled host=%s path=%s tools=%d",
-				route.Host,
-				route.MCP.Path,
-				len(ops),
-			)
+				openapiURL := ""
+				if route.OpenAPI != nil {
+					openapiURL = route.OpenAPI.URL
+				}
+				if openapiURL == "" {
+					openapiURL =
+						openapiByHost[normalizeHost(route.Host)]
+				}
+
+				ops, err := mcpserver.ResolveOperations(
+					nil,
+					openapiURL,
+					route.Backend,
+					specs,
+				)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"route %s: mcp: %w", route.Host, err)
+				}
+
+				var delegated *mcpserver.DelegatedCredentials
+				if d := route.DelegatedCredentials(); d != nil {
+					delegated = &mcpserver.DelegatedCredentials{
+						Header: d.HeaderValue(),
+						Prefix: d.PrefixValue(),
+					}
+				}
+				cr.mcp = mcpserver.New(route.Backend, ops, delegated)
+
+				log.Printf(
+					"MCP enabled host=%s path=%s tools=%d",
+					route.Host,
+					route.MCP.Path,
+					len(ops),
+				)
+			}
 		}
 
 		if route.PWA != nil && route.PWA.Enabled ||
@@ -925,7 +944,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if cr.delegated != nil {
 			token, err := g.fetchDelegatedToken(r, ctx, cr.delegated)
 			if err != nil {
-				g.writeDelegatedError(w, r, cr, err)
+				// MCP clients expect JSON, never a browser redirect
+				// to the connect page — even on a frontend route.
+				mcpCR := *cr
+				mcpCR.pageRoute = false
+				g.writeDelegatedError(w, r, &mcpCR, err)
 				return
 			}
 			r.Header.Set(mcpserver.DelegatedTokenHeader, token)
@@ -954,10 +977,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			strings.Join(ctx.Roles, ","),
 		)
 
-		cr.mcp.HTTPHandler.ServeHTTP(
-			w,
-			r,
-		)
+		if cr.mcpUpstream != nil {
+			cr.mcpUpstream.ServeHTTP(w, r)
+		} else {
+			cr.mcp.HTTPHandler.ServeHTTP(w, r)
+		}
 
 		return
 	}
@@ -1238,7 +1262,7 @@ func (g *Gateway) findMCP(
 
 	for _, r := range g.routes {
 
-		if r.mcp == nil {
+		if r.mcp == nil && r.mcpUpstream == nil {
 			continue
 		}
 

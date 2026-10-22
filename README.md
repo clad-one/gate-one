@@ -90,6 +90,50 @@ serialized or logged. `tokenBroker.url` defaults to the Docker service
 name `http://token-broker:4000` (or `TOKEN_BROKER_URL`); the broker has
 no Traefik route and is reachable only from the internal network.
 
+## External MCP proxy
+
+`mcp.upstream` exposes an **external** MCP server (Streamable HTTP)
+through the same Gate One authentication. Instead of deriving tools
+from an OpenAPI document, Gate One proxies the MCP exchange and filters
+tool names:
+
+```json
+{
+  "host": "github-mcp.example.com",
+  "path": "/mcp",
+  "backend": "https://api.githubcopilot.com/mcp/",
+  "auth": {},
+  "mcp": {
+    "enabled": true,
+    "path": "/mcp",
+    "upstream": {
+      "tools": { "exclude": ["delete_*", "merge_*"] }
+    }
+  },
+  "upstream": {
+    "delegated": { "provider": "github" }
+  }
+}
+```
+
+- `mcp.upstream.url` defaults to the route backend and must be the full
+  upstream endpoint (the incoming `/mcp` path is not appended).
+- `tools.include` is an allow-list and `tools.exclude` a deny-list;
+  patterns use `path.Match` syntax (`*`, `?`, `[...]`). Exclude wins.
+  Filtering is applied to `tools/list` **and** enforced on `tools/call`:
+  a hidden tool is answered locally and never reaches the upstream.
+- `mcp.upstream` and `mcp.operations` are mutually exclusive.
+- `upstream.delegated` injects the caller's broker token. Without it,
+  `upstream.headers` can carry a static service credential (resolved
+  with `${VAR}` at load). The Gate One bearer, cookies and identity
+  headers are never forwarded upstream.
+- The upstream's `Mcp-Session-Id` is relayed, and Gate One binds each
+  session to the authenticated user. Upstream 401/403 answers become a
+  `502 upstream_mcp_authentication_failed` instead of a Gate One 401.
+- Supported upstream transport: MCP Streamable HTTP (POST/GET SSE and
+  session DELETE). Tool filtering is applied to JSON and SSE
+  `tools/list` responses.
+
 ## Releasing to the infrastructure repository
 
 From `cladone-it-infra`:
