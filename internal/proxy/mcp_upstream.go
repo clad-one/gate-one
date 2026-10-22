@@ -113,10 +113,11 @@ func (p *mcpUpstream) rememberSession(sessionID, userID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.sessions) >= maxMCPUPSessions {
-		// Bounded memory: unknown ids are still passed to the
-		// upstream (the source of truth); only the local ownership
-		// cache is reset.
-		p.sessions = make(map[string]string)
+		// Bounded memory. Do NOT clear the map: resetting it would
+		// erase the ownership of existing sessions and let another
+		// user reuse them. New ids stay unknown (the upstream is the
+		// source of truth) until entries are deleted.
+		return
 	}
 	p.sessions[sessionID] = userID
 }
@@ -228,7 +229,10 @@ func (p *mcpUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp, err := p.client.Do(upReq)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			log.Printf("MCP upstream: %v", err)
+			// A *url.Error carries the full URL (possibly with a
+			// query-string credential): log only the cause.
+			log.Printf("MCP upstream: request failed host=%s: %s",
+				r.Host, mcpTransportError(err))
 		}
 		writeMCPProxyError(w, http.StatusBadGateway,
 			"upstream_mcp_unavailable")
@@ -271,6 +275,14 @@ func (p *mcpUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p.writeUpstreamResponse(w, resp)
+}
+
+func mcpTransportError(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err.Error()
+	}
+	return err.Error()
 }
 
 func readMCPBody(r io.Reader) ([]byte, error) {
