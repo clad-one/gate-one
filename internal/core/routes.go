@@ -573,6 +573,19 @@ type Route struct {
 	Frontend bool   `json:"frontend,omitempty"`
 	Backend  string `json:"backend"`
 
+	// StripPrefix: exact public path prefix removed from the request
+	// before it reaches the backend. "/api" turns "/api/foo" into
+	// "/foo"; the backend base path is then prepended as usual.
+	// Path only (no query/fragment/wildcard), matched on segment
+	// boundaries, normalized at load (trailing slash removed).
+	//
+	// This is a REQUEST-side transformation. Response paths
+	// (Location, HTML links) are intentionally not rewritten yet:
+	// the backend must emit URLs relative to its own deployment, or
+	// a response path rewrite can be added later without changing
+	// this field.
+	StripPrefix string `json:"stripPrefix,omitempty"`
+
 	// Upstream: connection to a backend outside the internal network
 	// (proxified external site — e.g. Cloudflare): Host, static
 	// headers (basic auth, service tokens), rewriting of redirects
@@ -1365,6 +1378,10 @@ func (c *Config) validate() error {
 				host)
 		}
 
+		if err := validateStripPrefix(route); err != nil {
+			return fmt.Errorf("route %s: %v", host, err)
+		}
+
 		if p := route.PWA; p != nil {
 			for _, pat := range p.networkOnlyPatterns() {
 				if _, err := regexp.Compile(pat); err != nil {
@@ -1399,6 +1416,74 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
+}
+
+// maxStripPrefixLen: same bound as the other path-prefix settings.
+const maxStripPrefixLen = 256
+
+// validateStripPrefix normalizes and validates route.StripPrefix.
+// The prefix is a PUBLIC path prefix: it must overlap the route's
+// declared path, otherwise no request could ever be stripped.
+func validateStripPrefix(route *Route) error {
+
+	p := route.StripPrefix
+	if p == "" {
+		return nil
+	}
+
+	if !strings.HasPrefix(p, "/") {
+		return fmt.Errorf("stripPrefix %q does not start with '/'", p)
+	}
+	if p == "/" {
+		return fmt.Errorf("stripPrefix %q: root prefix forbidden", p)
+	}
+	if strings.ContainsAny(p, "?#*") {
+		return fmt.Errorf("stripPrefix %q contains '?', '#' or '*' (exact path prefix only)", p)
+	}
+	if len(p) > maxStripPrefixLen {
+		return fmt.Errorf("stripPrefix %d bytes (max %d)", len(p), maxStripPrefixLen)
+	}
+	if strings.Contains(p, "//") {
+		return fmt.Errorf("stripPrefix %q contains an empty path segment", p)
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("stripPrefix %q contains a control character", p)
+		}
+	}
+
+	p = strings.TrimRight(p, "/")
+	if p == "" || p == "/" {
+		return fmt.Errorf("stripPrefix %q: root prefix forbidden", route.StripPrefix)
+	}
+
+	for _, seg := range strings.Split(strings.TrimPrefix(p, "/"), "/") {
+		if seg == "." || seg == ".." {
+			return fmt.Errorf("stripPrefix %q contains a relative segment", p)
+		}
+	}
+
+	if !routePathOverlapsPrefix(route.Path, p) {
+		return fmt.Errorf(
+			"stripPrefix %q is outside route.path %q (no matched request would be stripped)",
+			p, route.Path)
+	}
+
+	route.StripPrefix = p
+	return nil
+}
+
+// routePathOverlapsPrefix: does a route path (exact or "/*" form)
+// cover at least one path under prefix? "/*" covers everything.
+func routePathOverlapsPrefix(routePath, prefix string) bool {
+	if routePath == "/*" {
+		return true
+	}
+	base := routePath
+	if strings.HasSuffix(base, "/*") {
+		base = strings.TrimSuffix(base, "/*")
+	}
+	return base == prefix || strings.HasPrefix(base, prefix+"/")
 }
 
 // UpstreamRewriteBody: accessor of a route's rewriteBody policy

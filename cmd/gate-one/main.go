@@ -167,6 +167,9 @@ func printRoutes(cfg *core.Config) {
 		if r.Auth != nil {
 			p = append(p, "auth")
 		}
+		if r.StripPrefix != "" {
+			p = append(p, "stripPrefix")
+		}
 		if r.Upstream != nil {
 			p = append(p, "upstream")
 			if r.UpstreamRewriteBody() != nil {

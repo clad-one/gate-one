@@ -477,6 +477,11 @@
           "type": "string",
           "description": "Prefix; \"/*\" = wildcard (whole host)."
         },
+        "stripPrefix": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Exact PUBLIC path prefix removed from the request before it reaches the backend. Path only (no query, fragment or wildcard), matched on segment boundaries and normalized at load (trailing slash removed; root \"/\" forbidden). Example: path \"/api/*\", stripPrefix \"/api\", backend \"http://api:8080/v1\" turns /api/foo into /v1/foo. The backend also receives X-Forwarded-Prefix when the ingress did not set one. Response paths (Location, HTML links) are NOT rewritten: the backend must emit relative or prefix-aware URLs, or a response path rewrite can be added later."
+        },
         "backend": { "type": "string" },
         "inject": {
           "type": "string",

@@ -22,6 +22,10 @@ type compiledRoute struct {
 	proxy  *httputil.ReverseProxy
 	prefix string
 
+	// stripPrefix: exact public path prefix removed before the
+	// backend join (normalized/validated at load). Empty = disabled.
+	stripPrefix string
+
 	// true when this route is intended to return HTML pages
 	pageRoute bool
 
@@ -149,6 +153,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		original := rp.Director
 
 		upstream := route.Upstream
+		stripPrefix := route.StripPrefix
 
 		// Body injections (401/403 guard, PWA, origin URL rewrite)
 		// require PLAIN HTML: the Go stdlib decodes neither brotli
@@ -173,6 +178,15 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			// ModifyResponse and the rewritten URLs keep the browser
 			// on the origin it called (demo :3000 included).
 			clientHost := req.Host
+			if stripPrefix != "" {
+				stripRequestPrefix(req.URL, stripPrefix)
+				// Standard hint for frameworks that build links
+				// from the external mount point. Never overwrite a
+				// value already set by the ingress.
+				if req.Header.Get("X-Forwarded-Prefix") == "" {
+					req.Header.Set("X-Forwarded-Prefix", stripPrefix)
+				}
+			}
 			original(req)
 			// freezes the CLIENT scheme (X-Forwarded-Proto from the
 			// ingress, still intact here — ReverseProxy overwrites
@@ -197,10 +211,11 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		}
 
 		cr := &compiledRoute{
-			route:     route,
-			proxy:     rp,
-			prefix:    normalizePath(route.Path),
-			pageRoute: route.Frontend,
+			route:       route,
+			proxy:       rp,
+			prefix:      normalizePath(route.Path),
+			stripPrefix: stripPrefix,
+			pageRoute:   route.Frontend,
 		}
 
 		if route.MCP != nil &&
@@ -310,6 +325,28 @@ func normalizePath(p string) string {
 	}
 
 	return p
+}
+
+// stripRequestPrefix removes an exact, segment-bounded path prefix
+// from u.Path before the backend URL is joined. "/api/foo" with
+// prefix "/api" becomes "/foo"; the bare prefix and "/api/" become
+// "/". The query string and fragment are untouched. RawPath is
+// cleared so the rewritten Path is the single source of truth.
+func stripRequestPrefix(u *url.URL, prefix string) {
+	if u == nil || prefix == "" {
+		return
+	}
+
+	switch {
+	case u.Path == prefix:
+		u.Path = "/"
+	case strings.HasPrefix(u.Path, prefix+"/"):
+		u.Path = strings.TrimPrefix(u.Path, prefix)
+	default:
+		return
+	}
+
+	u.RawPath = ""
 }
 
 func matchPath(routePath, reqPath string) bool {

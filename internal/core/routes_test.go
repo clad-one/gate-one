@@ -114,6 +114,59 @@ func TestLoadAllowsSchemaKey(t *testing.T) {
 	}
 }
 
+func TestStripPrefixValidation(t *testing.T) {
+	valid := `{
+		"routes": [
+			{"host": "a.local", "path": "/api/*", "backend": "http://x",
+			 "stripPrefix": "/api/"}
+		]
+	}`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	if err := os.WriteFile(path, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("valid stripPrefix rejected: %v", err)
+	}
+	if got := c.Routes[0].StripPrefix; got != "/api" {
+		t.Errorf("stripPrefix normalized to %q, want /api", got)
+	}
+
+	bad := []struct {
+		name string
+		path string
+		pre  string
+	}{
+		{"no leading slash", "/api/*", "api"},
+		{"root", "/*", "/"},
+		{"query", "/api/*", "/api?x=1"},
+		{"fragment", "/api/*", "/api#x"},
+		{"wildcard", "/api/*", "/api/*"},
+		{"empty segment", "/api/*", "/api//v1"},
+		{"dot segment", "/api/*", "/api/../v1"},
+		{"control character", "/api/*", "/api\nx"},
+		{"outside route path", "/api/*", "/other"},
+		{"segment boundary", "/apix", "/api"},
+		{"too long", "/*", "/" + strings.Repeat("a", maxStripPrefixLen)},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := fmt.Sprintf(`{"routes":[{"host":"a.local","path":%q,"backend":"http://x","stripPrefix":%q}]}`,
+				tc.path, tc.pre)
+			if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("stripPrefix %q with path %q accepted", tc.pre, tc.path)
+			} else if !strings.Contains(err.Error(), "stripPrefix") {
+				t.Errorf("error lacks stripPrefix context: %v", err)
+			}
+		})
+	}
+}
+
 func TestInjectBundleAllowsSchemaKey(t *testing.T) {
 	dir := t.TempDir()
 	bundle := `{
