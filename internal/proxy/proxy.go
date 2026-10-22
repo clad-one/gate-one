@@ -708,7 +708,9 @@ func (g *Gateway) mcpResourceURLForHost(
 		path = "/" + path
 	}
 
-	return scheme + "://" + normalizeHost(route.Host) + path, true
+	// Keep the request host as-is (normalizeHost strips the port):
+	// the resource identifier must be the URL clients actually call.
+	return scheme + "://" + strings.TrimSpace(host) + path, true
 }
 
 // mcpScopeForHost returns the MCP scope required for a host (the
@@ -730,7 +732,7 @@ func (g *Gateway) mcpResourceMetadataURL(
 	}
 
 	return scheme + "://" +
-		normalizeHost(host) +
+		strings.TrimSpace(host) +
 		"/.well-known/oauth-protected-resource", true
 }
 

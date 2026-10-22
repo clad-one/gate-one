@@ -64,6 +64,14 @@ func New(
 			// JSON responses: easier to inspect and to test with
 			// curl.
 			JSONResponse: true,
+
+			// The SDK refuses non-loopback Host headers when the
+			// TCP connection's local address is loopback (DNS
+			// rebinding guard for a local server). Gate One is a
+			// reverse proxy: its Host is a public vhost by design
+			// and every route is matched (and authenticated) on
+			// it — unknown hosts never reach the MCP handler.
+			DisableLocalhostProtection: true,
 		},
 	)
 
