@@ -16,12 +16,27 @@ type Server struct {
 	HTTPHandler http.Handler
 }
 
+// DelegatedTokenHeader is set by the gateway (never by the MCP
+// client) on the MCP HTTP request after it obtained the user's
+// upstream token from the broker. The tool handler relays its value
+// to the backend under DelegatedCredentials.Header.
+const DelegatedTokenHeader = "X-Gate-One-Delegated-Token"
+
+// DelegatedCredentials describes how the gateway injects the
+// per-user backend token into REST calls produced by tools/call.
+// nil = no delegated credentials on this route.
+type DelegatedCredentials struct {
+	Header string
+	Prefix string
+}
+
 // New builds the MCP server for one route. ops is the resolved
 // operation list (may be empty: the server then exposes no tool, but
 // still answers initialize/tools/list).
 func New(
 	backend string,
 	ops []Operation,
+	delegated *DelegatedCredentials,
 ) *Server {
 
 	server := mcp.NewServer(
@@ -37,9 +52,10 @@ func New(
 
 	for i := range ops {
 		h := &toolHandler{
-			backend: backend,
-			op:      ops[i],
-			client:  client,
+			backend:   backend,
+			op:        ops[i],
+			client:    client,
+			delegated: delegated,
 		}
 
 		server.AddTool(

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -337,6 +338,46 @@ type UpstreamPolicy struct {
 	// origin serves its assets with no Cache-Control (see
 	// BrowserCachePolicy). Default: headers preserved as-is.
 	BrowserCache *BrowserCachePolicy `json:"browserCache,omitempty"`
+	// Delegated: per-user credentials fetched from the token broker
+	// for the authenticated caller and injected into the backend
+	// request. Provider names are broker-owned; Gate One never
+	// stores a provider secret. Requires route.auth (a user must be
+	// authenticated to have a delegated token).
+	Delegated *DelegatedCredentialPolicy `json:"delegated,omitempty"`
+}
+
+// DelegatedCredentialPolicy: how a per-user upstream token is
+// obtained and injected. The token broker returns the access token
+// for the authenticated user; the gateway sets the configured header
+// on the backend request (default Authorization: Bearer …).
+type DelegatedCredentialPolicy struct {
+	// Provider: broker provider name (e.g. "github"). Validated
+	// against GET /providers at startup.
+	Provider string `json:"provider"`
+	// Header: request header receiving the token. Default
+	// Authorization. Header names reserved for the gateway identity
+	// or the HTTP transport are refused at load.
+	Header string `json:"header,omitempty"`
+	// Prefix: value prepended to the access token. Default
+	// "Bearer ". An explicit empty string sends the raw token.
+	Prefix *string `json:"prefix,omitempty"`
+}
+
+// HeaderValue returns the normalized header name (default
+// Authorization).
+func (d *DelegatedCredentialPolicy) HeaderValue() string {
+	if d == nil || d.Header == "" {
+		return "Authorization"
+	}
+	return d.Header
+}
+
+// PrefixValue returns the value prepended to the access token.
+func (d *DelegatedCredentialPolicy) PrefixValue() string {
+	if d == nil || d.Prefix == nil {
+		return "Bearer "
+	}
+	return *d.Prefix
 }
 
 // RewriteCookiesPolicy: translation of the origin's Set-Cookie to
@@ -958,7 +999,26 @@ type Config struct {
 	// LoginURLFor / OIDC.Issuer).
 	OIDC *OIDCConfig `json:"oidc,omitempty"`
 
+	// TokenBroker: internal per-user credential broker, used only
+	// by routes declaring upstream.delegated. The shared secret is
+	// read from the named environment variable at load; it is never
+	// serialized.
+	TokenBroker *TokenBrokerConfig `json:"tokenBroker,omitempty"`
+
 	Routes []Route `json:"routes"`
+}
+
+// TokenBrokerConfig: connection to the internal token broker.
+type TokenBrokerConfig struct {
+	// URL: broker base URL (default http://token-broker:4000 —
+	// Docker network service name).
+	URL string `json:"url,omitempty"`
+	// SecretEnv: name of the environment variable carrying the
+	// X-Broker-Secret shared secret (default
+	// TOKEN_BROKER_SHARED_SECRET).
+	SecretEnv string `json:"secretEnv,omitempty"`
+	// SecretValue: resolved secret — never serialized.
+	SecretValue string `json:"-"`
 }
 
 // OIDCConfig: the platform's IdP (top-level block). loginUrl =
@@ -988,6 +1048,16 @@ func (r *Route) GuardActive() bool {
 // MCPActive: does the route expose an MCP server?
 func (r *Route) MCPActive() bool {
 	return r.MCP != nil && r.MCP.Enabled
+}
+
+// DelegatedCredentials returns the route's per-user upstream
+// credential policy, if any. Delegation is declared under upstream
+// because it describes how the backend is called.
+func (r *Route) DelegatedCredentials() *DelegatedCredentialPolicy {
+	if r == nil || r.Upstream == nil {
+		return nil
+	}
+	return r.Upstream.Delegated
 }
 
 // LoginURLFor: a route's login URL — authGuard.loginUrl
@@ -1059,6 +1129,14 @@ func Load(path string) (*Config, error) {
 	// Upstream secrets (${VAR} in headers) resolved BEFORE the
 	// validation: missing variable = startup refused.
 	if err := cfg.expandUpstreamEnv(); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
+	// Token broker shared secret resolved from the environment
+	// BEFORE validation. A delegated route without a usable broker
+	// configuration refuses startup instead of serving requests
+	// without credentials.
+	if err := cfg.resolveTokenBroker(); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 
@@ -1396,6 +1474,10 @@ func (c *Config) validate() error {
 			return fmt.Errorf("route %s: %v", host, err)
 		}
 
+		if err := validateDelegatedCredentials(route); err != nil {
+			return fmt.Errorf("route %s: %v", host, err)
+		}
+
 		if p := route.PWA; p != nil {
 			for _, pat := range p.networkOnlyPatterns() {
 				if _, err := regexp.Compile(pat); err != nil {
@@ -1429,6 +1511,129 @@ func (c *Config) validate() error {
 			}
 		}
 	}
+	return nil
+}
+
+// resolveTokenBroker loads the shared secret for routes that use
+// delegated upstream credentials. No delegated route = no broker
+// dependency (the service remains optional in deployments).
+func (c *Config) resolveTokenBroker() error {
+	needs := false
+	for i := range c.Routes {
+		if c.Routes[i].DelegatedCredentials() != nil {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return nil
+	}
+
+	if c.TokenBroker == nil {
+		return fmt.Errorf(
+			"tokenBroker block required by upstream.delegated")
+	}
+	tb := c.TokenBroker
+
+	if tb.URL == "" {
+		tb.URL = strings.TrimSpace(os.Getenv("TOKEN_BROKER_URL"))
+		if tb.URL == "" {
+			tb.URL = "http://token-broker:4000"
+		}
+	}
+	u, err := url.Parse(tb.URL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("tokenBroker.url %q: invalid URL", tb.URL)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf(
+			"tokenBroker.url %q: scheme must be http or https", tb.URL)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf(
+			"tokenBroker.url %q: query and fragment forbidden", tb.URL)
+	}
+
+	if tb.SecretEnv == "" {
+		tb.SecretEnv = "TOKEN_BROKER_SHARED_SECRET"
+	}
+	if !envVarName.MatchString(tb.SecretEnv) {
+		return fmt.Errorf(
+			"tokenBroker.secretEnv %q: invalid environment variable name",
+			tb.SecretEnv)
+	}
+	secret, ok := os.LookupEnv(tb.SecretEnv)
+	if !ok || secret == "" {
+		return fmt.Errorf(
+			"tokenBroker: environment variable %s is empty",
+			tb.SecretEnv)
+	}
+	tb.SecretValue = secret
+	return nil
+}
+
+var envVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+var delegatedProviderName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// RFC 7230 token characters (header field name).
+var headerFieldName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+// validateDelegatedCredentials normalizes and validates the
+// upstream.delegated policy. The constraints keep the gateway in
+// control of its own identity headers and of hop-by-hop headers.
+func validateDelegatedCredentials(route *Route) error {
+	d := route.DelegatedCredentials()
+	if d == nil {
+		return nil
+	}
+
+	if route.Auth == nil {
+		return fmt.Errorf(
+			"upstream.delegated requires auth (a user token is needed)")
+	}
+	if !delegatedProviderName.MatchString(d.Provider) {
+		return fmt.Errorf(
+			"upstream.delegated.provider %q (expected lowercase name)",
+			d.Provider)
+	}
+
+	header := d.HeaderValue()
+	if !headerFieldName.MatchString(header) {
+		return fmt.Errorf(
+			"upstream.delegated.header %q: invalid header name", header)
+	}
+	header = http.CanonicalHeaderKey(header)
+	d.Header = header
+
+	lower := strings.ToLower(header)
+	switch lower {
+	case "host", "cookie", "content-length", "transfer-encoding",
+		"connection", "proxy-authorization", "proxy-authenticate",
+		"te", "trailer", "upgrade", "keep-alive", "forwarded",
+		"x-user-id", "x-username", "x-email", "x-roles", "x-scopes":
+		return fmt.Errorf(
+			"upstream.delegated.header %q is reserved", header)
+	}
+	if strings.HasPrefix(lower, "x-forwarded-") ||
+		strings.HasPrefix(lower, "x-gate-one-") {
+		return fmt.Errorf(
+			"upstream.delegated.header %q is reserved", header)
+	}
+
+	for name := range route.Upstream.Headers {
+		if strings.EqualFold(name, header) {
+			return fmt.Errorf(
+				"upstream.headers[%q] conflicts with upstream.delegated.header",
+				name)
+		}
+	}
+
+	if strings.ContainsAny(d.PrefixValue(), "\r\n") {
+		return fmt.Errorf(
+			"upstream.delegated.prefix: control characters forbidden")
+	}
+
 	return nil
 }
 

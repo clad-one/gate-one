@@ -4,6 +4,7 @@ import (
 	"cladone/gate-one/internal/core"
 	mcpserver "cladone/gate-one/internal/mcp"
 	"cladone/gate-one/internal/pwa"
+	"cladone/gate-one/internal/tokenbroker"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,10 @@ type compiledRoute struct {
 	// route rateLimit/quota limiters (fixed windows), built
 	// lazily on first need
 	limiters *routeLimiters
+
+	// delegated: per-user upstream credentials (nil = no broker
+	// call on this route).
+	delegated *core.DelegatedCredentialPolicy
 }
 
 type Gateway struct {
@@ -49,6 +54,10 @@ type Gateway struct {
 	// auth-bridge base URL, overridable in tests to stub the
 	// service (default: authBridgeBaseURL)
 	authBridgeBaseURL string
+
+	// tokenBroker is non-nil only when at least one route uses
+	// upstream.delegated.
+	tokenBroker *tokenbroker.Client
 }
 
 func routeKey(host, path string) string {
@@ -138,6 +147,59 @@ func (h *Reloadable) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 	var routes []*compiledRoute
+
+	// Delegated upstream credentials: the broker is contacted at
+	// load time to validate every provider name referenced by a
+	// route. A misconfigured provider must refuse startup, not fail
+	// on the first user request.
+	var broker *tokenbroker.Client
+	needsDelegated := false
+	for i := range cfg.Routes {
+		if cfg.Routes[i].DelegatedCredentials() != nil {
+			needsDelegated = true
+			break
+		}
+	}
+	if needsDelegated {
+		if cfg.TokenBroker == nil ||
+			cfg.TokenBroker.URL == "" ||
+			cfg.TokenBroker.SecretValue == "" {
+			return nil, fmt.Errorf(
+				"upstream.delegated requires tokenBroker configuration")
+		}
+
+		c, err := tokenbroker.New(
+			cfg.TokenBroker.URL,
+			cfg.TokenBroker.SecretValue,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		ctx, cancel := context.WithTimeout(
+			context.Background(), 5*time.Second)
+		providers, err := c.Providers(ctx)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf(
+				"token broker provider validation: %w", err)
+		}
+
+		known := make(map[string]bool, len(providers))
+		for _, p := range providers {
+			known[p.Name] = true
+		}
+		for i := range cfg.Routes {
+			r := &cfg.Routes[i]
+			d := r.DelegatedCredentials()
+			if d != nil && !known[d.Provider] {
+				return nil, fmt.Errorf(
+					"route %s: upstream.delegated.provider %q: unknown or disabled provider",
+					r.Host, d.Provider)
+			}
+		}
+		broker = c
+	}
 
 	// OpenAPI documents are declared on the page route (openapi
 	// policy) and consumed by the MCP route of the same host: build
@@ -231,6 +293,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			prefix:      normalizePath(route.Path),
 			stripPrefix: stripPrefix,
 			pageRoute:   route.Frontend,
+			delegated:   route.DelegatedCredentials(),
 		}
 
 		if route.MCP != nil &&
@@ -269,7 +332,14 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 					"route %s: mcp: %w", route.Host, err)
 			}
 
-			cr.mcp = mcpserver.New(route.Backend, ops)
+			var delegated *mcpserver.DelegatedCredentials
+			if d := route.DelegatedCredentials(); d != nil {
+				delegated = &mcpserver.DelegatedCredentials{
+					Header: d.HeaderValue(),
+					Prefix: d.PrefixValue(),
+				}
+			}
+			cr.mcp = mcpserver.New(route.Backend, ops, delegated)
 
 			log.Printf(
 				"MCP enabled host=%s path=%s tools=%d",
@@ -315,8 +385,9 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 	}
 
 	gw := &Gateway{
-		routes: routes,
-		config: cfg,
+		routes:      routes,
+		config:      cfg,
+		tokenBroker: broker,
 		client: &http.Client{
 			// Timeout: auth-bridge calls must never freeze request
 			// handling (see authBridgeClientTimeout).
@@ -845,6 +916,22 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		//
+		// Delegated upstream credentials: fetch the user's token
+		// once per MCP HTTP request and hand it to the tool handler
+		// through an internal header. The client-supplied value is
+		// always discarded.
+		//
+		r.Header.Del(mcpserver.DelegatedTokenHeader)
+		if cr.delegated != nil {
+			token, err := g.fetchDelegatedToken(r, ctx, cr.delegated)
+			if err != nil {
+				g.writeDelegatedError(w, r, cr, err)
+				return
+			}
+			r.Header.Set(mcpserver.DelegatedTokenHeader, token)
+		}
+
+		//
 		// Identity available to the MCP handler.
 		//
 		r.Header.Set(
@@ -990,6 +1077,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//
 	if enforceLimits(w, r, cr, ctx) {
 		return
+	}
+
+	//
+	// Delegated upstream credentials (per-user token from the
+	// broker). A missing connection never reaches the backend.
+	//
+	if cr.delegated != nil {
+		if err := g.injectDelegated(r, ctx, cr.delegated); err != nil {
+			g.writeDelegatedError(w, r, cr, err)
+			return
+		}
 	}
 
 	//

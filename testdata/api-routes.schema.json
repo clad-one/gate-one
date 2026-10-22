@@ -26,6 +26,21 @@
         }
       }
     },
+    "tokenBroker": {
+      "type": "object",
+      "description": "Internal per-user credential broker. Required only when a route declares upstream.delegated. The shared secret is read from the named environment variable at load (never from this file) and is never logged.",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Broker base URL (default http://token-broker:4000, the Docker internal service name). Never expose it through Traefik."
+        },
+        "secretEnv": {
+          "type": "string",
+          "description": "Environment variable holding the X-Broker-Secret shared secret (default TOKEN_BROKER_SHARED_SECRET)."
+        }
+      }
+    },
     "routes": {
       "type": "array",
       "items": { "$ref": "#/definitions/route" }
@@ -379,7 +394,29 @@
         "responseHeaders": { "$ref": "#/definitions/upstreamResponseHeaders" },
         "rewriteBody": { "$ref": "#/definitions/rewriteBodyPolicy" },
         "rewriteCookies": { "$ref": "#/definitions/rewriteCookiesPolicy" },
-        "browserCache": { "$ref": "#/definitions/browserCachePolicy" }
+        "browserCache": { "$ref": "#/definitions/browserCachePolicy" },
+        "delegated": { "$ref": "#/definitions/delegatedCredentialPolicy" }
+      }
+    },
+    "delegatedCredentialPolicy": {
+      "type": "object",
+      "description": "Per-user credentials supplied by the token broker for the authenticated caller. Requires route.auth (the broker needs an authenticated user id). A missing connection produces a 401/409 with a connect_url (or a redirect for frontend routes), never a request without credentials. The same policy applies to REST tool calls produced by an MCP route.",
+      "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "description": "Broker provider name (e.g. github). Validated against GET /providers at startup; Gate One never stores the provider's client secret."
+        },
+        "header": {
+          "type": "string",
+          "description": "Backend request header receiving the access token. Default Authorization. Host, Cookie, X-User-*, X-Forwarded-* and X-Gate-One-* names are refused."
+        },
+        "prefix": {
+          "type": "string",
+          "description": "Value prepended to the access token. Default \"Bearer \". An explicit empty string sends the raw token."
+        }
       }
     },
     "browserCachePolicy": {

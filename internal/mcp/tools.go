@@ -9,7 +9,11 @@
 //   - header parameters are set as-is (reserved headers refused);
 //   - the "body" argument is sent verbatim as application/json;
 //   - the gateway identity (X-User-*) established for the MCP
-//     request is forwarded to the backend.
+//     request is forwarded to the backend;
+//   - when the route declares delegated credentials, the per-user
+//     token fetched by the gateway from the token broker is injected
+//     into the configured backend header (default Authorization:
+//     Bearer …).
 //
 // The response is returned as MCP text content. SSE payloads are
 // joined (data: lines) so an LLM sees the events, not the framing.
@@ -50,9 +54,10 @@ var reservedHeaders = map[string]bool{
 }
 
 type toolHandler struct {
-	backend string
-	op      Operation
-	client  *http.Client
+	backend   string
+	op        Operation
+	client    *http.Client
+	delegated *DelegatedCredentials
 }
 
 func (h *toolHandler) call(
@@ -254,6 +259,20 @@ func (h *toolHandler) forwardIdentity(
 	} {
 		if v := req.Extra.Header.Get(name); v != "" {
 			httpReq.Header.Set(name, v)
+		}
+	}
+
+	// Per-user upstream token: the gateway fetched it from the
+	// broker for the authenticated caller and placed it in an
+	// internal header (the client-supplied value is stripped by the
+	// gateway before the MCP handler runs). Never accept it from
+	// tool arguments: Authorization and X-Gate-One-* are reserved.
+	if h.delegated != nil {
+		if v := req.Extra.Header.Get(DelegatedTokenHeader); v != "" {
+			httpReq.Header.Set(
+				h.delegated.Header,
+				h.delegated.Prefix+v,
+			)
 		}
 	}
 }
