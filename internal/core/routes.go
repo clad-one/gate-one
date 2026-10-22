@@ -154,8 +154,12 @@ type AuthPolicy struct {
 }
 
 type OpenAPIPolicy struct {
-	URL    string `json:"url"`
-	Public bool   `json:"public,omitempty"`
+	// URL: the OpenAPI document (JSON, OpenAPI 3.x) of the host.
+	// Absolute (production), or relative to the route backend.
+	// Also the source used to resolve the mcp policy's operations.
+	URL string `json:"url"`
+	// Public: when false, /openapi.json is forbidden on this host.
+	Public bool `json:"public,omitempty"`
 }
 
 // AuthGuardPolicy controls the injection of the gateway's 401/403 guard
@@ -350,7 +354,12 @@ type RewriteCookiesPolicy struct {
 }
 
 type MCPOperation struct {
-	Name        string `json:"name"`
+	// Name: the tool name exposed to MCP clients.
+	Name string `json:"name"`
+	// OperationID: the operationId to resolve in the OpenAPI
+	// document of the same host (openapi policy). The gateway
+	// derives the method, path, parameters and request body from
+	// it — no per-operation code.
 	OperationID string `json:"operationId"`
 }
 
@@ -363,7 +372,12 @@ type MCPPolicy struct {
 	// auth-bridge (passed via the internal X-MCP-Scope header).
 	// Default: defaultMCPScope. The realm must grant the same scope
 	// (optional client scope of the same name in cladone-realm.json).
-	Scope      string         `json:"scope,omitempty"`
+	Scope string `json:"scope,omitempty"`
+	// Operations: the REST operations exposed as MCP tools. Resolved
+	// at load time against the host's OpenAPI document (JSON,
+	// OpenAPI 3.x); an unresolvable operationId refuses the config.
+	// Empty = no tool, but the MCP endpoint (metadata, initialize)
+	// stays available.
 	Operations []MCPOperation `json:"operations"`
 }
 

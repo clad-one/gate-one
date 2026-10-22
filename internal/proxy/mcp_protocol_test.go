@@ -10,23 +10,46 @@ import (
 
 // newMCPProtocolGateway builds a gateway with an MCP route whose
 // auth-bridge is stubbed (200, fake identity): MCP requests pass
-// authentication and reach the embedded MCP server. The backend must
-// never be contacted by the tested methods (discover / initialize /
-// tools/list).
+// authentication and reach the embedded MCP server. One operation is
+// declared and resolved from a stubbed OpenAPI document.
 func newMCPProtocolGateway(t *testing.T) *Gateway {
 	t.Helper()
 
-	backend := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
+	gw, _ := newMCPGatewayWithOpenAPI(t, nil)
+	return gw
+}
+
+// newMCPGatewayWithOpenAPI is the parameterizable helper: backend
+// receives the REST calls produced by tools/call (nil = inert
+// 200 handler), the OpenAPI document is served locally.
+func newMCPGatewayWithOpenAPI(
+	t *testing.T,
+	backendHandler http.HandlerFunc,
+) (*Gateway, *httptest.Server) {
+	t.Helper()
+
+	if backendHandler == nil {
+		backendHandler = func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
+		}
+	}
+
+	backend := httptest.NewServer(backendHandler)
+	t.Cleanup(backend.Close)
+
+	openapi := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(testOpenAPIDoc))
 		},
 	))
-	t.Cleanup(backend.Close)
+	t.Cleanup(openapi.Close)
 
 	bridge := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-User-Id", "user-1")
 			w.Header().Set("X-Username", "user-1")
+			w.Header().Set("X-Roles", "admin")
 			w.WriteHeader(http.StatusOK)
 		},
 	))
@@ -38,7 +61,15 @@ func newMCPProtocolGateway(t *testing.T) *Gateway {
 			"path": "/mcp",
 			"backend": "` + backend.URL + `",
 			"auth": {},
-			"mcp": {"enabled": true, "path": "/mcp", "scope": "mcp-tools", "operations": []}
+			"mcp": {"enabled": true, "path": "/mcp", "scope": "mcp-tools",
+				"operations": [
+					{"name": "get_item", "operationId": "get_item"}
+				]}
+		}, {
+			"host": "gram.test",
+			"path": "/*",
+			"backend": "` + backend.URL + `",
+			"openapi": {"url": "` + openapi.URL + `"}
 		}]
 	}`
 
@@ -50,8 +81,30 @@ func newMCPProtocolGateway(t *testing.T) *Gateway {
 	}
 	gw.authBridgeBaseURL = bridge.URL
 
-	return gw
+	return gw, backend
 }
+
+// testOpenAPIDoc is the upstream description the gateway resolves
+// the declared operation from.
+const testOpenAPIDoc = `{
+  "openapi": "3.0.3",
+  "info": {"title": "test", "version": "1"},
+  "paths": {
+    "/items/{id}": {
+      "get": {
+        "operationId": "get_item",
+        "summary": "Fetch one item",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true,
+           "schema": {"type": "string"}},
+          {"name": "verbose", "in": "query",
+           "schema": {"type": "boolean"}}
+        ],
+        "responses": {"200": {"description": "ok"}}
+      }
+    }
+  }
+}`
 
 // postMCP sends a JSON-RPC request on the MCP route and returns the
 // decoded (generic JSON-RPC) response. headers allows adding the
@@ -181,8 +234,9 @@ func TestMCPDiscover20260728(t *testing.T) {
 }
 
 // TestMCPToolsList20260728 checks a business operation in 2026-07-28
-// stateless mode (no prior handshake): the tool list exposes
-// processStream and advertises ttlMs/cacheScope.
+// stateless mode (no prior handshake): the tool list exposes the
+// operations declared in the mcp policy (resolved from OpenAPI) and
+// advertises ttlMs/cacheScope.
 func TestMCPToolsList20260728(t *testing.T) {
 	gw := newMCPProtocolGateway(t)
 
@@ -221,11 +275,11 @@ func TestMCPToolsList20260728(t *testing.T) {
 
 	found := false
 	for _, n := range names {
-		if n == "processStream" {
+		if n == "get_item" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("tools = %v, want processStream", names)
+		t.Errorf("tools = %v, want get_item", names)
 	}
 }

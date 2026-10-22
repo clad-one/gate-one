@@ -1,7 +1,13 @@
+// MCP server construction.
+//
+// The set of tools is entirely derived from the route's mcp policy
+// (operations) and the upstream OpenAPI document — see openapi.go.
+// Behaviour notes live in tools.go.
 package mcpserver
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -10,8 +16,12 @@ type Server struct {
 	HTTPHandler http.Handler
 }
 
+// New builds the MCP server for one route. ops is the resolved
+// operation list (may be empty: the server then exposes no tool, but
+// still answers initialize/tools/list).
 func New(
 	backend string,
+	ops []Operation,
 ) *Server {
 
 	server := mcp.NewServer(
@@ -22,29 +32,37 @@ func New(
 		nil,
 	)
 
-	process := NewProcessStreamServer(
-		backend,
-	)
+	client := &http.Client{Timeout: backendTimeout}
+	backend = strings.TrimRight(backend, "/")
 
-	mcp.AddTool(
-		server,
-		&mcp.Tool{
-			Name:        "processStream",
-			Description: "Process French text and stream the processing results.",
-		},
-		process.Tool,
-	)
+	for i := range ops {
+		h := &toolHandler{
+			backend: backend,
+			op:      ops[i],
+			client:  client,
+		}
+
+		server.AddTool(
+			&mcp.Tool{
+				Name:        ops[i].Name,
+				Description: ops[i].Description,
+				InputSchema: ops[i].InputSchema,
+			},
+			h.call,
+		)
+	}
 
 	handler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server {
 			return server
 		},
 		&mcp.StreamableHTTPOptions{
-			// Important for this first version:
-			// each request is independent.
+			// Stateless: each request is independent (no session
+			// state to keep between calls).
 			Stateless: true,
 
-			// Easier to test with curl.
+			// JSON responses: easier to inspect and to test with
+			// curl.
 			JSONResponse: true,
 		},
 	)

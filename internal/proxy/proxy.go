@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -138,6 +139,17 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 	var routes []*compiledRoute
 
+	// OpenAPI documents are declared on the page route (openapi
+	// policy) and consumed by the MCP route of the same host: build
+	// the host → document index once.
+	openapiByHost := map[string]string{}
+	for i := range cfg.Routes {
+		r := &cfg.Routes[i]
+		if r.OpenAPI != nil && r.OpenAPI.URL != "" {
+			openapiByHost[normalizeHost(r.Host)] = r.OpenAPI.URL
+		}
+	}
+
 	for i := range cfg.Routes {
 
 		route := &cfg.Routes[i]
@@ -224,16 +236,46 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		if route.MCP != nil &&
 			route.MCP.Enabled {
 
-			mcpServer := mcpserver.New(
-				route.Backend,
+			specs := make(
+				[]mcpserver.OperationSpec,
+				0,
+				len(route.MCP.Operations),
 			)
+			for _, op := range route.MCP.Operations {
+				specs = append(specs,
+					mcpserver.OperationSpec{
+						Name:        op.Name,
+						OperationID: op.OperationID,
+					})
+			}
 
-			cr.mcp = mcpServer
+			openapiURL := ""
+			if route.OpenAPI != nil {
+				openapiURL = route.OpenAPI.URL
+			}
+			if openapiURL == "" {
+				openapiURL =
+					openapiByHost[normalizeHost(route.Host)]
+			}
+
+			ops, err := mcpserver.ResolveOperations(
+				nil,
+				openapiURL,
+				route.Backend,
+				specs,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"route %s: mcp: %w", route.Host, err)
+			}
+
+			cr.mcp = mcpserver.New(route.Backend, ops)
 
 			log.Printf(
-				"MCP enabled host=%s path=%s",
+				"MCP enabled host=%s path=%s tools=%d",
 				route.Host,
 				route.MCP.Path,
+				len(ops),
 			)
 		}
 
