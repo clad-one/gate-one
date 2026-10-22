@@ -214,7 +214,7 @@
       "additionalProperties": false,
       "required": ["url"],
       "properties": {
-        "url": { "type": "string" },
+        "url": { "type": "string", "description": "OpenAPI 3.x JSON document of the host (absolute URL, or path relative to the route backend). Also the document used to resolve the mcp policy's operations." },
         "public": { "type": "boolean", "description": "false = the openapi.json is only served authenticated." }
       }
     },
@@ -223,8 +223,8 @@
       "additionalProperties": false,
       "required": ["name", "operationId"],
       "properties": {
-        "name": { "type": "string" },
-        "operationId": { "type": "string" }
+        "name": { "type": "string", "description": "Tool name exposed to MCP clients (unique per route)." },
+        "operationId": { "type": "string", "description": "operationId resolved in the host's OpenAPI document; the tool method, path, parameters and body schema are derived from it. An unresolved operationId refuses the configuration load." }
       }
     },
     "mcpPolicy": {
@@ -236,10 +236,11 @@
         "path": { "type": "string", "description": "Default: /mcp." },
         "scope": {
           "type": "string",
-          "description": "Keycloak client scope required from MCP clients (bearer `scope` claim), announced in /.well-known/oauth-protected-resource and checked by auth-bridge (internal X-MCP-Scope header). Default: mcp-tools."
+          "description": "Keycloak client scope required from MCP clients (bearer `scope` claim), announced in /.well-known/oauth-protected-resource and checked by auth-bridge (internal X-MCP-Scope header). The realm must grant it. Default: mcp-tools."
         },
         "operations": {
           "type": "array",
+          "description": "REST operations exposed as MCP tools. Empty = no tool (the MCP endpoint still serves metadata and initialization).",
           "items": { "$ref": "#/definitions/mcpOperation" }
         }
       }

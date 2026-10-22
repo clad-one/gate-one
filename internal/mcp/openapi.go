@@ -99,7 +99,7 @@ func FetchOpenAPI(
 ) (*Document, error) {
 
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = &http.Client{Timeout: 5 * time.Second}
 	}
 
 	resp, err := client.Get(openapiURL)
@@ -247,9 +247,10 @@ func resolveOpenAPIURL(openapiURL, backend string) string {
 // fetchRetryDelays: a cold start (compose up) may bring the gateway
 // up before the upstream is listening. Fail-fast is kept — the
 // gateway must expose the declared tools — but a few short retries
-// absorb the startup race. A wrong URL still fails after ~3.5 s.
+// absorb the startup race. A wrong URL still fails in ~15 s at worst
+// (3 attempts x 5 s client timeout).
 var fetchRetryDelays = []time.Duration{
-	0, 500 * time.Millisecond, time.Second, 2 * time.Second,
+	0, 500 * time.Millisecond, time.Second,
 }
 
 func fetchOpenAPIWithRetry(
