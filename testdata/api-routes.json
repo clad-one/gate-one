@@ -102,7 +102,9 @@
           "method":"POST",
           "body":{
             "coupes":true
-          },
+          }
+        },
+        "identity":{
           "roles":["offline_access"],
           "scopes":["profile"],
           "claims":{
@@ -125,7 +127,9 @@
       "backend":"http://versifier:9292",
       "auth":{
         "when":{
-          "method":"GET",
+          "method":"GET"
+        },
+        "identity":{
           "claims":{
             "email_verified":"true"
           }

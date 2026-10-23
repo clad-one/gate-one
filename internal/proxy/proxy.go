@@ -1085,8 +1085,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// trigger a login invitation (loop).
 		//
 		if route.Auth != nil &&
-			hasIdentityConditions(route.Auth.When) &&
-			!matchesIdentity(route.Auth.When, ctx) {
+			hasIdentityConditions(route.Auth.Identity) &&
+			!matchesIdentity(route.Auth.Identity, ctx) {
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -1231,7 +1231,7 @@ func matchesIdentity(m *core.Match, ctx *RequestContext) bool {
 	return true
 }
 
-// hasIdentityConditions: does the when carry identity conditions
+// hasIdentityConditions: does the identity clause carry conditions
 // (post-authentication evaluation required)?
 func hasIdentityConditions(m *core.Match) bool {
 	return m != nil &&
@@ -1244,16 +1244,23 @@ func (g *Gateway) needsAuthentication(route *core.Route, ctx *RequestContext) bo
 		return false
 	}
 
-	// auth: true => always required
-	if route.Auth.When == nil {
+	// Absent/empty when => always required.
+	if len(route.Auth.When) == 0 {
 		return true
 	}
 
-	// Conditions TECHNICAL only (method/query/header/body): identity
-	// conditions (roles/scopes/claims/user) are only evaluable after
-	// authentication (the token does not exist yet) — see
-	// matchesIdentity, applied post-auth as 403.
-	return matchesBasic(route.Auth.When, ctx)
+	// Technical conditions only (method/query/header/body), combined
+	// as an OR of ANDs: authentication is required as soon as ONE
+	// element matches. Identity conditions live in auth.identity —
+	// they are only evaluable after authentication (the token does
+	// not exist yet), see matchesIdentity, applied post-auth as 403.
+	for i := range route.Auth.When {
+		if matchesBasic(&route.Auth.When[i], ctx) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (g *Gateway) findMCP(

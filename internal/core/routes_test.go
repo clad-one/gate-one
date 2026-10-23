@@ -1016,3 +1016,103 @@ func TestWildcardAliasForm(t *testing.T) {
 		}
 	}
 }
+
+// TestAuthWhenIdentitySplit: auth.when holds technical conditions only
+// (object = AND of its conditions, array = OR of ANDs), auth.identity
+// holds identity conditions (checked after authentication). Mixing the
+// two families is refused at load rather than silently reinterpreted.
+func TestAuthWhenIdentitySplit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+
+	load := func(cfg string) (*Config, error) {
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(path)
+	}
+
+	t.Run("object when + identity", func(t *testing.T) {
+		c, err := load(`{"routes":[{"host":"a.local","path":"/x","backend":"http://x",
+			"auth":{"when":{"method":"POST","body":{"k":true}},
+			        "identity":{"roles":["r"],"claims":{"email":"*"}}}}]}`)
+		if err != nil {
+			t.Fatalf("valid auth rejected: %v", err)
+		}
+		a := c.Routes[0].Auth
+		if a == nil || len(a.When) != 1 || a.When[0].Method != "POST" {
+			t.Fatalf("when not deserialized: %+v", a)
+		}
+		if a.Identity == nil || len(a.Identity.Roles) != 1 ||
+			a.Identity.Claims["email"] != "*" {
+			t.Fatalf("identity not deserialized: %+v", a.Identity)
+		}
+	})
+
+	t.Run("array when (OR of ANDs)", func(t *testing.T) {
+		c, err := load(`{"routes":[{"host":"a.local","path":"/x","backend":"http://x",
+			"auth":{"when":[{"method":"POST"},{"method":"DELETE","body":{"k":true}}]}}]}`)
+		if err != nil {
+			t.Fatalf("valid when array rejected: %v", err)
+		}
+		if got := len(c.Routes[0].Auth.When); got != 2 {
+			t.Fatalf("when elements = %d, want 2", got)
+		}
+	})
+
+	t.Run("identity-only (always required)", func(t *testing.T) {
+		c, err := load(`{"routes":[{"host":"a.local","path":"/x","backend":"http://x",
+			"auth":{"identity":{"user":"alice"}}}]}`)
+		if err != nil {
+			t.Fatalf("identity-only rejected: %v", err)
+		}
+		a := c.Routes[0].Auth
+		if len(a.When) != 0 || a.Identity == nil || a.Identity.User != "alice" {
+			t.Fatalf("identity-only not deserialized: %+v", a)
+		}
+	})
+
+	t.Run("empty auth stays always-required", func(t *testing.T) {
+		c, err := load(`{"routes":[{"host":"a.local","path":"/x","backend":"http://x",
+			"auth":{}}]}`)
+		if err != nil {
+			t.Fatalf("empty auth rejected: %v", err)
+		}
+		a := c.Routes[0].Auth
+		if a == nil || len(a.When) != 0 || a.Identity != nil {
+			t.Fatalf("empty auth not deserialized: %+v", a)
+		}
+	})
+
+	t.Run("identity in when refused", func(t *testing.T) {
+		_, err := load(`{"routes":[{"host":"a.local","path":"/x","backend":"http://x",
+			"auth":{"when":{"method":"GET","roles":["r"]}}}]}`)
+		if err == nil || !strings.Contains(err.Error(), "auth.identity") {
+			t.Fatalf("identity in when accepted or wrong error: %v", err)
+		}
+	})
+
+	t.Run("identity in when array element refused", func(t *testing.T) {
+		_, err := load(`{"routes":[{"host":"a.local","path":"/x","backend":"http://x",
+			"auth":{"when":[{"method":"GET"},{"scopes":["s"]}]}}]}`)
+		if err == nil || !strings.Contains(err.Error(), "auth.when[1]") {
+			t.Fatalf("identity in when array accepted or wrong error: %v", err)
+		}
+	})
+
+	t.Run("technical in identity refused", func(t *testing.T) {
+		_, err := load(`{"routes":[{"host":"a.local","path":"/x","backend":"http://x",
+			"auth":{"when":{"method":"GET"},"identity":{"method":"POST"}}}]}`)
+		if err == nil || !strings.Contains(err.Error(), "auth.when") {
+			t.Fatalf("technical in identity accepted or wrong error: %v", err)
+		}
+	})
+
+	t.Run("unknown field in when element refused", func(t *testing.T) {
+		_, err := load(`{"routes":[{"host":"a.local","path":"/x","backend":"http://x",
+			"auth":{"when":[{"mothod":"GET"}]}}]}`)
+		if err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Fatalf("unknown field in when accepted or wrong error: %v", err)
+		}
+	})
+}

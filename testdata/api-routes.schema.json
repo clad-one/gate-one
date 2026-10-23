@@ -49,7 +49,7 @@
   "definitions": {
     "match": {
       "type": "object",
-      "description": "Policy triggering conditions. Two families: technical (method/query/header/body — evaluated BEFORE authentication, decide whether auth is required) and identity (roles/scopes/claims/user — evaluated AFTER authentication on the verified token; failure = 403 forbidden). All conditions combine with AND.",
+      "description": "Rate-limit / quota triggering conditions (rateLimit.when, quota.when). Two families: technical (method/query/header/body — evaluated BEFORE authentication) and identity (roles/scopes/claims/user — evaluated AFTER authentication on the verified token). All conditions combine with AND. NB: the authentication policy (auth) does NOT use this type: auth.when takes technical conditions only, auth.identity takes identity conditions only.",
       "additionalProperties": false,
       "properties": {
         "method": {
@@ -92,12 +92,73 @@
         }
       }
     },
-    "authPolicy": {
+    "technicalMatch": {
       "type": "object",
-      "description": "Authentication policy: when empty ({}) authentication is ALWAYS required; with a when, it is required when the technical conditions match, and the identity conditions are checked afterwards (403 otherwise).",
+      "description": "Technical policy conditions, evaluated BEFORE authentication: they decide WHETHER authentication is required (the only family allowed in auth.when). All conditions of one object combine with AND.",
       "additionalProperties": false,
       "properties": {
-        "when": { "$ref": "#/definitions/match" }
+        "method": {
+          "type": "string",
+          "description": "Exact HTTP method (e.g. \"POST\")."
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Exact equality of URL parameters."
+        },
+        "header": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Exact equality of headers. Caution: a header is forgeable by the client — never put an authorization there (use roles instead)."
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Exact equality of fields of the parsed JSON body (flattened one level)."
+        }
+      }
+    },
+    "identityMatch": {
+      "type": "object",
+      "description": "Identity policy conditions, evaluated AFTER authentication on the verified token (failure = 403 forbidden). All conditions combine with AND.",
+      "additionalProperties": false,
+      "properties": {
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required Keycloak roles (realm roles + flattened client roles, see auth-bridge's X-Roles). AND between them. Example of a fixed name: offline_access (realm role granted to every user via default-roles-<realm>)."
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required granted scopes (token `scope` claim, see auth-bridge's X-Scopes). AND between them. Example of a fixed name: profile (default client scope, always present)."
+        },
+        "claims": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Token claims: value \"*\" = mere presence, otherwise comparison of the stringified value (JSON boolean → \"true\"/\"false\", numbers → Go format). AND between them. NB: client_credentials tokens (service accounts) have neither email nor profile claims."
+        },
+        "user": {
+          "type": "string",
+          "description": "Exact username required (preferred_username)."
+        }
+      }
+    },
+    "authPolicy": {
+      "type": "object",
+      "description": "Authentication policy. Empty ({}) = authentication ALWAYS required. auth.when holds TECHNICAL conditions (method/query/header/body) deciding when authentication is required: one object (AND of its conditions) or an array (OR of ANDs — required if ANY element matches); absent/empty = always required. auth.identity holds IDENTITY conditions (roles/scopes/claims/user), checked after successful authentication (403 otherwise) and only on requests that were actually authenticated.",
+      "additionalProperties": false,
+      "properties": {
+        "when": {
+          "oneOf": [
+            { "$ref": "#/definitions/technicalMatch" },
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/technicalMatch" }
+            }
+          ]
+        },
+        "identity": { "$ref": "#/definitions/identityMatch" }
       }
     },
     "userBadgePolicy": {
@@ -128,7 +189,7 @@
               "items": { "type": "string" }
             }
           ],
-          "description": "Session roles displayed as chips in the expanded badge: true = every role, false = none, a list = only these (same data as the when.roles conditions, served by the /__gate-one/auth probe)."
+          "description": "Session roles displayed as chips in the expanded badge: true = every role, false = none, a list = only these (same data as the auth.identity.roles conditions, served by the /__gate-one/auth probe)."
         },
         "scopes": {
           "oneOf": [

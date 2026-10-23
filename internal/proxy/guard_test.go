@@ -412,11 +412,11 @@ func contains(list []string, want string) bool {
 	return false
 }
 
-// TestWhenIdentityConditions checks the two-step model: identity
+// TestIdentityConditions checks the two-step model: identity
 // conditions (roles/scopes/claims) are evaluated AFTER
 // authentication — anonymous → 401, authenticated insufficient → 403,
 // authenticated conforming → proxified (200).
-func TestWhenIdentityConditions(t *testing.T) {
+func TestIdentityConditions(t *testing.T) {
 	bridge := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "Bearer ok" {
@@ -440,8 +440,8 @@ func TestWhenIdentityConditions(t *testing.T) {
 			"path": "/api/y",
 			"backend": "BACKEND",
 			"auth": {
-				"when": {
-					"method": "GET",
+				"when": { "method": "GET" },
+				"identity": {
 					"roles": ["offline_access"],
 					"scopes": ["profile"],
 					"claims": { "email": "*" }
@@ -497,10 +497,72 @@ func TestWhenIdentityConditions(t *testing.T) {
 	}
 }
 
-// TestWhenClaimsPresenceAndValue checks the claims matcher
+// TestWhenListOrSemantics: auth.when as an array is an OR of ANDs —
+// authentication is required as soon as ONE element matches; a request
+// matching no element stays public (and identity is then not
+// evaluated: there is no token).
+func TestWhenListOrSemantics(t *testing.T) {
+	bridge := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer ok" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("X-User-Id", "u1")
+			w.Header().Set("X-Username", "alice")
+			w.Header().Set("X-Roles", "offline_access")
+			w.WriteHeader(http.StatusOK)
+		},
+	))
+	t.Cleanup(bridge.Close)
+
+	gw, hosts := testGatewayWithAuthBridge(t, `{
+		"routes": [{
+			"host": "api.test",
+			"path": "/api/y",
+			"backend": "BACKEND",
+			"auth": {
+				"when": [ { "method": "GET" }, { "method": "DELETE" } ],
+				"identity": { "roles": ["offline_access"] }
+			}
+		}]
+	}`, bridge.URL)
+	host := hosts["api.test"]
+
+	do := func(method, auth string) int {
+		req := httptest.NewRequest(method, "http://"+host+"/api/y", nil)
+		req.Host = host
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		return rec.Result().StatusCode
+	}
+
+	// GET matches the first element → auth required.
+	if got := do(http.MethodGet, ""); got != http.StatusUnauthorized {
+		t.Errorf("GET anonymous: status = %d, want 401", got)
+	}
+	if got := do(http.MethodGet, "Bearer ok"); got != http.StatusOK {
+		t.Errorf("GET authenticated: status = %d, want 200", got)
+	}
+
+	// DELETE matches the second element → auth required.
+	if got := do(http.MethodDelete, ""); got != http.StatusUnauthorized {
+		t.Errorf("DELETE anonymous: status = %d, want 401", got)
+	}
+
+	// POST matches NO element → public: no auth, no identity.
+	if got := do(http.MethodPost, ""); got != http.StatusOK {
+		t.Errorf("POST anonymous: status = %d, want 200 (public, no when match)", got)
+	}
+}
+
+// TestIdentityClaimsPresenceAndValue checks the claims matcher
 // semantics: "*" = presence, otherwise stringified comparison
 // (JSON boolean → "true"/"false", number → Go format).
-func TestWhenClaimsPresenceAndValue(t *testing.T) {
+func TestIdentityClaimsPresenceAndValue(t *testing.T) {
 	bridge := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-User-Id", "u1")
@@ -518,7 +580,7 @@ func TestWhenClaimsPresenceAndValue(t *testing.T) {
 				"host": "api.test",
 				"path": "/api/y",
 				"backend": "BACKEND",
-				"auth": { "when": { "claims": `+claimsJSON+` } }
+				"auth": { "identity": { "claims": `+claimsJSON+` } }
 			}]
 		}`, bridge.URL)
 

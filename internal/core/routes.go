@@ -38,6 +38,52 @@ type Match struct {
 	User string `json:"user,omitempty"`
 }
 
+// WhenList: the auth.when policy — technical conditions
+// (method/query/header/body) deciding WHEN authentication is
+// required. Accepts one object (AND of its conditions) or an array
+// (OR of ANDs, DNF): the request triggers the authentication
+// requirement if ANY element matches. Absent or empty = always
+// required. Identity conditions (roles/scopes/claims/user) do NOT
+// belong here — they go to auth.identity (see validateAuth).
+type WhenList []Match
+
+// UnmarshalJSON accepts both the object and the array forms, with
+// the same strictness as the top-level decode (unknown fields are
+// rejected rather than silently ignored).
+func (w *WhenList) UnmarshalJSON(b []byte) error {
+
+	raw := bytes.TrimSpace(b)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		*w = nil
+		return nil
+	}
+
+	if raw[0] == '[' {
+		var list []Match
+		if err := strictUnmarshal(raw, &list); err != nil {
+			return fmt.Errorf("auth.when: %w", err)
+		}
+		*w = list
+		return nil
+	}
+
+	var one Match
+	if err := strictUnmarshal(raw, &one); err != nil {
+		return fmt.Errorf("auth.when: %w", err)
+	}
+	*w = WhenList{one}
+	return nil
+}
+
+// strictUnmarshal decodes with DisallowUnknownFields — used by the
+// custom UnmarshalJSON methods, which would otherwise lose the
+// strictness set on the top-level decoder.
+func strictUnmarshal(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
+}
+
 type RateLimitPolicy struct {
 	Requests int    `json:"requests"`
 	Period   string `json:"period"`
@@ -150,9 +196,18 @@ func (b BadgeList) MarshalJSON() ([]byte, error) {
 }
 
 type AuthPolicy struct {
-	When *Match `json:"when,omitempty"`
+	// When: technical conditions (method/query/header/body) deciding
+	// WHEN authentication is required. One object = AND of its
+	// conditions; an array = OR of ANDs. Absent/empty = always
+	// required.
+	When WhenList `json:"when,omitempty"`
 
-	//Roles []string `json:"roles,omitempty"`
+	// Identity: identity conditions (roles/scopes/claims/user)
+	// enforced AFTER successful authentication (403 otherwise). A
+	// single AND clause, applied only to requests that were actually
+	// authenticated (when the gate did not trigger, identity is not
+	// evaluated: there is no token).
+	Identity *Match `json:"identity,omitempty"`
 }
 
 type OpenAPIPolicy struct {
@@ -1520,6 +1575,10 @@ func (c *Config) validate() error {
 				host)
 		}
 
+		if err := validateAuth(route); err != nil {
+			return fmt.Errorf("route %s: %v", host, err)
+		}
+
 		if err := validateStripPrefix(route); err != nil {
 			return fmt.Errorf("route %s: %v", host, err)
 		}
@@ -1632,6 +1691,40 @@ var delegatedProviderName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // RFC 7230 token characters (header field name).
 var headerFieldName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+// validateAuth enforces the strict split between the two condition
+// families of the authentication policy: auth.when accepts technical
+// conditions only (method/query/header/body — they decide WHETHER
+// authentication is required), auth.identity accepts identity
+// conditions only (roles/scopes/claims/user — checked after
+// authentication). Mixing them is refused at load rather than
+// silently reinterpreted.
+func validateAuth(route *Route) error {
+
+	a := route.Auth
+	if a == nil {
+		return nil
+	}
+
+	for i := range a.When {
+		if m := a.When[i]; len(m.Roles) > 0 || len(m.Scopes) > 0 ||
+			len(m.Claims) > 0 || m.User != "" {
+			return fmt.Errorf(
+				"auth.when[%d]: identity conditions (roles/scopes/claims/user) belong in auth.identity, not auth.when",
+				i)
+		}
+	}
+
+	if id := a.Identity; id != nil {
+		if id.Method != "" || len(id.Query) > 0 || len(id.Header) > 0 ||
+			len(id.Body) > 0 {
+			return fmt.Errorf(
+				"auth.identity: technical conditions (method/query/header/body) belong in auth.when, not auth.identity")
+		}
+	}
+
+	return nil
+}
 
 // validateDelegatedCredentials normalizes and validates the
 // upstream.delegated policy. The constraints keep the gateway in

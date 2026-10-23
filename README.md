@@ -43,6 +43,44 @@ go test ./...
 `test/ui` contains the jsdom harness for the injected guard script
 (`npm install && npm test`).
 
+## Authentication policy
+
+The two condition families are kept strictly apart. `auth.when` holds
+**technical** conditions (`method`/`query`/`header`/`body`) that decide
+*whether* authentication is required; `auth.identity` holds **identity**
+conditions (`roles`/`scopes`/`claims`/`user`) checked *after* a
+successful authentication (failure = `403`). Mixing them is refused at
+load.
+
+```json
+{
+  "host": "vers.example.com",
+  "path": "/api/process",
+  "backend": "http://versifier:9292",
+  "auth": {
+    "when": [
+      { "method": "POST", "body": { "coupes": true } },
+      { "method": "DELETE" }
+    ],
+    "identity": {
+      "roles": ["offline_access"],
+      "scopes": ["profile"],
+      "claims": { "email": "*" }
+    }
+  }
+}
+```
+
+- `auth` absent → the route is **public**.
+- `auth: {}` (or `identity` only) → authentication is **always** required.
+- `when` accepts one object (AND of its conditions) or an array (OR of
+  ANDs): authentication is required as soon as **one** element matches.
+  A request matching no element stays public.
+- `identity` is a single AND clause, evaluated **only** on requests that
+  were actually authenticated (no token = no identity check).
+- `frontend` routes redirect to the login on `401`; API routes get a
+  JSON `401`.
+
 ## Delegated upstream credentials
 
 A route may call its backend with a **per-user token** supplied by the
