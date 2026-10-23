@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -500,6 +501,26 @@ func TestLoadRealConfigStrict(t *testing.T) {
 
 	for _, m := range envVarPattern.FindAllStringSubmatch(string(data), -1) {
 		t.Setenv(m[1], "test-"+m[1])
+	}
+
+	// tokenBroker.secretEnv names the variable holding the broker
+	// shared secret — a name, not a ${VAR} interpolation, so the loop
+	// above misses it. Pre-set it too: a genuinely missing secret must
+	// fail the load (resolveTokenBroker), not this test.
+	var probe struct {
+		TokenBroker *struct {
+			SecretEnv string `json:"secretEnv"`
+		} `json:"tokenBroker"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.TokenBroker != nil {
+		name := probe.TokenBroker.SecretEnv
+		if name == "" {
+			name = "TOKEN_BROKER_SHARED_SECRET"
+		}
+		t.Setenv(name, "test-"+name)
 	}
 
 	c, err := Load("../../testdata/api-routes.json")

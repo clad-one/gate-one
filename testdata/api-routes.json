@@ -4,6 +4,10 @@
     "loginUrl": "https://login.cladone.com/login",
     "issuer": "https://auth.cladone.com/realms/cladone"
   },
+  "tokenBroker": {
+    "url": "http://token-broker:4000",
+    "secretEnv": "TOKEN_BROKER_SHARED_SECRET"
+  },
   "routes": [    
     {
       "host": "gram.cladone.com",
@@ -51,7 +55,7 @@
       ],
       "pwa": {
         "enabled": true,
-        "name": "Versifier",
+        "name": "Solveur poétique",
         "themeColor": "#4285f4",
         "icons": ["/icon-192.png", "/icon-512.png"],
         "apiGETCache": {
@@ -152,6 +156,19 @@
         },
         "browserCache": {
           "imagesMaxAgeSeconds": 604800
+        }
+      }
+    },
+    {
+      "host": "api.cladone.com",
+      "path": "/github/*",
+      "stripPrefix": "/github",
+      "backend": "https://api.github.com",
+      "auth": {},
+      "upstream": {
+        "host": true,
+        "delegated": {
+          "provider": "github"
         }
       }
     }
