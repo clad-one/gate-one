@@ -230,6 +230,7 @@ func (g *Gateway) checkMCPAuth(
 	w http.ResponseWriter,
 	r *http.Request,
 	ctx *RequestContext,
+	resource string,
 	resourceMetadataURL string,
 	scope string,
 ) (*RequestContext, error) {
@@ -251,6 +252,14 @@ func (g *Gateway) checkMCPAuth(
 	// mcp policy (X-MCP-Scope). The request is built here, never
 	// copied from input headers: an external client cannot forge it.
 	req.Header.Set("X-MCP-Scope", scope)
+
+	// Internal header: the protected-resource identifier of THIS MCP
+	// endpoint (host + mcp.path), so auth-bridge verifies the token
+	// audience per endpoint rather than against a single global
+	// resource. Also built here, never copied from the client.
+	if resource != "" {
+		req.Header.Set("X-MCP-Resource", resource)
+	}
 
 	resp, err := g.client.Do(req)
 	if err != nil {

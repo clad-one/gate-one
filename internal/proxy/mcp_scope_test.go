@@ -158,3 +158,40 @@ func TestMCPProtectedResourceAnnouncesConfiguredScope(t *testing.T) {
 		t.Errorf("scopes_supported[0] = %v, want custom-scope", scopes[0])
 	}
 }
+
+// TestMCPResourceHeaderSentToBridge: the gateway hands auth-bridge the
+// protected-resource identifier of the endpoint it is gating (host +
+// mcp.path), so the token audience is verified per endpoint.
+func TestMCPResourceHeaderSentToBridge(t *testing.T) {
+	var seenResource string
+
+	bridge := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			seenResource = r.Header.Get("X-MCP-Resource")
+			w.WriteHeader(http.StatusUnauthorized)
+		},
+	))
+	t.Cleanup(bridge.Close)
+
+	cfg := loadForTest(t, `{
+		"routes": [{
+			"host": "gram.test",
+			"path": "/mcp",
+			"backend": "http://backend.test",
+			"auth": {},
+			"mcp": {"enabled": true, "path": "/mcp"}
+		}]
+	}`)
+
+	gw, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.authBridgeBaseURL = bridge.URL
+
+	doGet(t, gw, "gram.test", "/mcp")
+
+	if seenResource != "https://gram.test/mcp" {
+		t.Errorf("X-MCP-Resource = %q, want https://gram.test/mcp", seenResource)
+	}
+}

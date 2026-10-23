@@ -905,10 +905,14 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			mcpResource, _ := g.mcpResourceURLForHost(
+				ctx.Host, clientScheme(r))
+
 			ctx, err = g.checkMCPAuth(
 				w,
 				r,
 				ctx,
+				mcpResource,
 				resourceMetadataURL,
 				g.mcpScopeForHost(ctx.Host),
 			)
