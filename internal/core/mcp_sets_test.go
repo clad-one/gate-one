@@ -164,7 +164,7 @@ func TestValidateMCPSetsErrorsCarryHints(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 	for _, want := range []string{
-		"unknown service", "hint:", `mcpSets["git"].enabled=false`,
+		"unknown service", "hint:", "members[].enabled=false",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %v, want it to contain %q", err, want)

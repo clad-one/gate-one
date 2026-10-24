@@ -389,3 +389,30 @@ func TestProviderUnknownErrorIsActionable(t *testing.T) {
 		}
 	}
 }
+
+func TestDisabledMemberIsNotCompiledNorProviderChecked(t *testing.T) {
+	t.Setenv("TB", "x")
+
+	// Both the broker and the OpenAPI document are unreachable: a
+	// non-live service (all its members disabled) must not contact
+	// either, and must not block startup.
+	routesJSON := `{
+		"tokenBroker": {"url": "http://127.0.0.1:1", "secretEnv": "TB"},
+		"routes": [{
+			"host": "mcp.test", "path": "/internal-gitlab",
+			"backend": "https://gitlab.example/api/v4", "auth": {},
+			"upstream": {"delegated": {"provider": "gitlab"}},
+			"openapi": {"url": "http://127.0.0.1:1/openapi.json"},
+			"mcp": {"enabled": true, "name": "gitlab", "standalone": false,
+				"operations": [{"name":"list","operationId":"list"}]}
+		}],
+		"mcpSets": {"git": {"host": "mcp.test", "endpoint": "/git",
+			"members": [{"service": "gitlab", "path": "/gitlab",
+				"enabled": false}]}}
+	}`
+	cfg := loadForTest(t, routesJSON)
+
+	if _, err := New(cfg); err != nil {
+		t.Fatalf("a disabled member must not be compiled/validated: %v", err)
+	}
+}

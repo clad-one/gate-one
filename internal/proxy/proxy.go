@@ -175,9 +175,17 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 	// route. A misconfigured provider must refuse startup, not fail
 	// on the first user request.
 	var broker *tokenbroker.Client
+
+	// live: named MCP services actually exposed. A non-standalone
+	// service whose members are all disabled is a prepared definition,
+	// not a live endpoint — it must not be compiled (no OpenAPI fetch)
+	// nor provider-validated.
+	live := liveServices(cfg)
+
 	needsDelegated := false
 	for i := range cfg.Routes {
-		if cfg.Routes[i].DelegatedCredentials() != nil {
+		if cfg.Routes[i].DelegatedCredentials() != nil &&
+			routeExposed(&cfg.Routes[i], live) {
 			needsDelegated = true
 			break
 		}
@@ -219,14 +227,14 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		for i := range cfg.Routes {
 			r := &cfg.Routes[i]
 			d := r.DelegatedCredentials()
-			if d != nil && !known[d.Provider] {
+			if d != nil && !known[d.Provider] && routeExposed(r, live) {
 				return nil, fmt.Errorf(
 					"route %s: upstream.delegated.provider %q: unknown or disabled provider\n"+
 						"hint: this route delegates the user's auth to the token broker: "+
-						"configure a %q provider (see docs/MCP.adoc#token-broker-provider), "+
+						"configure a %q provider (docs/MCP.adoc#token-broker-provider), "+
 						"or stop delegating / use a shared service token where supported "+
-						"(docs/MCP.adoc#static-service-token), or disable this source "+
-						"(mcp.enabled=false)%s",
+						"(docs/MCP.adoc#static-service-token), or disable the member that "+
+						"exposes it (member enabled=false)%s",
 					r.Host, d.Provider, d.Provider, setsHint(cfg, r))
 			}
 		}
@@ -251,6 +259,12 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 	for i := range cfg.Routes {
 
 		route := &cfg.Routes[i]
+
+		if !routeExposed(route, live) {
+			// Prepared service definition (all its members disabled):
+			// not compiled, not registered.
+			continue
+		}
 
 		u, err := url.Parse(route.Backend)
 		if err != nil {
@@ -464,6 +478,9 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		setScope := mcpScopeOrDefault(set.Scope, cfg)
 		setPath := normalizeMCPPath(set.Endpoint)
 		for _, member := range set.Members {
+			if !member.IsEnabled() {
+				continue
+			}
 			svc, ok := services[member.Service]
 			if !ok {
 				return nil, fmt.Errorf(
@@ -641,10 +658,36 @@ func setsHint(cfg *core.Config, r *core.Route) string {
 		return ""
 	}
 	sort.Strings(names)
-	return fmt.Sprintf(
-		" (and the mcpSets referencing it: %s — remove the member or set "+
-			"mcpSets[<name>].enabled=false)",
-		strings.Join(names, ", "))
+	return fmt.Sprintf(" (mcpSets: %s)", strings.Join(names, ", "))
+}
+
+// liveServices returns the named MCP services actually exposed: a
+// non-standalone service is live only when an enabled member of an
+// enabled set references it.
+func liveServices(cfg *core.Config) map[string]bool {
+	live := map[string]bool{}
+	for _, set := range cfg.MCPSets {
+		if set == nil || !set.IsEnabled() {
+			continue
+		}
+		for _, m := range set.Members {
+			if m.IsEnabled() {
+				live[m.Service] = true
+			}
+		}
+	}
+	return live
+}
+
+// routeExposed reports whether a route is actually served. A named
+// non-standalone MCP service that no enabled member references is a
+// prepared definition, not a live endpoint.
+func routeExposed(r *core.Route, live map[string]bool) bool {
+	if r == nil || r.MCP == nil || !r.MCP.Enabled ||
+		r.MCP.IsStandalone() || r.MCP.Name == "" {
+		return true
+	}
+	return live[r.MCP.Name]
 }
 
 // filterMCPOperations keeps the operations allowed by a set member's

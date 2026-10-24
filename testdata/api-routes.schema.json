@@ -384,6 +384,10 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Optional glob allow-list restricting the service's tools inside this set."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Expose this member (default true). false = not materialized, and its service is neither compiled (no OpenAPI fetch) nor provider-validated."
         }
       }
     },

@@ -1205,6 +1205,18 @@ type MCPSetMember struct {
 	// Tools: optional glob allow-list restricting the service's tools
 	// inside this set.
 	Tools []string `json:"tools,omitempty"`
+	// Enabled: expose this member (default true). false = the member is
+	// not materialized, and its service is neither compiled (no OpenAPI
+	// fetch) nor provider-validated — a safe way to prepare a source
+	// whose provider or document is not available yet. The member's
+	// structure is still validated, so enabling it later is a one-line
+	// change.
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// IsEnabled reports whether the member is exposed (default true).
+func (m *MCPSetMember) IsEnabled() bool {
+	return m == nil || m.Enabled == nil || *m.Enabled
 }
 
 // TokenBrokerConfig: connection to the internal token broker.
@@ -1824,6 +1836,18 @@ func (c *Config) validateMCPSets() error {
 		if ep == "" {
 			return fmt.Errorf("mcpSets[%q]: endpoint required", name)
 		}
+
+		// hasLive: at least one enabled member. A set whose members are
+		// all disabled is a placeholder: no endpoint, no resource
+		// reservation, no host count.
+		hasLive := false
+		for _, m := range set.Members {
+			if m.IsEnabled() {
+				hasLive = true
+				break
+			}
+		}
+
 		if set.Resource != "" {
 			if u, err := url.Parse(set.Resource); err != nil ||
 				u.Scheme == "" || u.Host == "" {
@@ -1831,12 +1855,14 @@ func (c *Config) validateMCPSets() error {
 					"mcpSets[%q]: resource %q must be an absolute URL",
 					name, set.Resource)
 			}
-			if other, dup := resources[set.Resource]; dup {
-				return fmt.Errorf(
-					"mcpSets[%q]: resource %q already used by %s",
-					name, set.Resource, other)
+			if hasLive {
+				if other, dup := resources[set.Resource]; dup {
+					return fmt.Errorf(
+						"mcpSets[%q]: resource %q already used by %s",
+						name, set.Resource, other)
+				}
+				resources[set.Resource] = "set " + name
 			}
-			resources[set.Resource] = "set " + name
 		}
 		if id := set.Identity; id != nil &&
 			(id.Method != "" || len(id.Query) > 0 ||
@@ -1849,7 +1875,9 @@ func (c *Config) validateMCPSets() error {
 			return fmt.Errorf(
 				"mcpSets[%q]: at least one member required", name)
 		}
-		setsByHost[normalizeHostName(set.Host)]++
+		if hasLive {
+			setsByHost[normalizeHostName(set.Host)]++
+		}
 
 		memberPaths := map[string]bool{}
 		for _, m := range set.Members {
@@ -1857,8 +1885,8 @@ func (c *Config) validateMCPSets() error {
 				return fmt.Errorf(
 					"mcpSets[%q]: unknown service %q\n"+
 						"hint: declare a route whose mcp.name is %q with mcp.enabled=true, "+
-						"or remove this member / disable the set (mcpSets[%q].enabled=false)",
-					name, m.Service, m.Service, name)
+						"or remove this member / disable it (members[].enabled=false)",
+					name, m.Service, m.Service)
 			}
 			referenced[m.Service] = true
 
@@ -1883,6 +1911,12 @@ func (c *Config) validateMCPSets() error {
 				}
 			}
 
+			if !m.IsEnabled() {
+				// Prepared but not exposed: the structure above is
+				// validated, no endpoint collision (not materialized).
+				continue
+			}
+
 			full := joinMCPEndpoint(ep, mp)
 			key := normalizeHostName(set.Host) + "|" + full
 			if other, dup := composed[key]; dup {
@@ -1903,8 +1937,8 @@ func (c *Config) validateMCPSets() error {
 		if !standalone[name] && !referenced[name] {
 			return fmt.Errorf(
 				"MCP service %q is not standalone and belongs to no mcpSet\n"+
-					"hint: give it its own rights (mcp.standalone=true with auth), "+
-					"reference it from an enabled mcpSet member, or disable it (mcp.enabled=false)",
+					"hint: give it its own rights (mcp.standalone=true with auth) or "+
+					"reference it from an mcpSet member",
 				name)
 		}
 	}
