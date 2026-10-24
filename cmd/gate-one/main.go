@@ -77,6 +77,17 @@ func main() {
 	// invalid config is REFUSED: the old one stays active (never an
 	// outage over a typo).
 	handler := &proxy.Reloadable{}
+
+	// First gateway: reuse the config loaded/validated above (no second
+	// load, hence no duplicated startup warnings).
+	g, err := proxy.New(cfg, opts...)
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler.Store(g)
+
+	// SIGHUP reload: re-read, validate, then swap (the previous config
+	// stays active if the new one is refused).
 	load := func() error {
 		c, err := core.Load(*configPath)
 		if err != nil {
@@ -88,9 +99,6 @@ func main() {
 		}
 		handler.Store(g)
 		return nil
-	}
-	if err := load(); err != nil {
-		log.Fatal(err)
 	}
 
 	// Server timeouts: ReadHeaderTimeout cuts slowloris;
