@@ -361,6 +361,10 @@
         "resource": { "type": "string", "description": "OAuth protected-resource identifier (audience) of the set. Empty = the set endpoint URL." },
         "scope": { "type": "string", "description": "MCP scope required from clients of this set. Default: mcpDefaults.scope, else mcp-tools." },
         "identity": { "$ref": "#/definitions/identityMatch" },
+        "enabled": {
+          "type": "boolean",
+          "description": "Expose the set (default true). false = the whole set is skipped (no endpoint, no validation)."
+        },
         "members": {
           "type": "array",
           "minItems": 1,

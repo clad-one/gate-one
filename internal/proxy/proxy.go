@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -203,7 +204,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		cancel()
 		if err != nil {
 			return nil, fmt.Errorf(
-				"token broker provider validation: %w", err)
+				"token broker provider validation: %w\n"+
+					"hint: start the broker first (make broker-up), or remove the "+
+					"upstream.delegated routes and their mcpSets members",
+				err)
 		}
 
 		known := make(map[string]bool, len(providers))
@@ -215,8 +219,11 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			d := r.DelegatedCredentials()
 			if d != nil && !known[d.Provider] {
 				return nil, fmt.Errorf(
-					"route %s: upstream.delegated.provider %q: unknown or disabled provider",
-					r.Host, d.Provider)
+					"route %s: upstream.delegated.provider %q: unknown or disabled provider\n"+
+						"hint: enable %q in the token broker (providers.json: "+
+						"\"enabled\": true + client_secret_env), or disable this source "+
+						"(mcp.enabled=false on this route)%s",
+					r.Host, d.Provider, d.Provider, setsHint(cfg, r))
 			}
 		}
 		broker = c
@@ -447,6 +454,9 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 	// at set.host + set.endpoint + member.path, with the set's access
 	// unit (resource/scope/identity) and the member's tool filter.
 	for setName, set := range cfg.MCPSets {
+		if !set.IsEnabled() {
+			continue
+		}
 		setScope := mcpScopeOrDefault(set.Scope, cfg)
 		setPath := normalizeMCPPath(set.Endpoint)
 		for _, member := range set.Members {
@@ -603,6 +613,34 @@ func mcpScopeOrDefault(scope string, cfg *core.Config) string {
 		return cfg.MCPDefaults.Scope
 	}
 	return defaultMCPScope
+}
+
+// setsHint names the enabled mcpSets that reference a service, for
+// actionable startup errors. Empty when none.
+func setsHint(cfg *core.Config, r *core.Route) string {
+	if r.MCP == nil || r.MCP.Name == "" {
+		return ""
+	}
+	var names []string
+	for name, set := range cfg.MCPSets {
+		if set == nil || !set.IsEnabled() {
+			continue
+		}
+		for _, m := range set.Members {
+			if m.Service == r.MCP.Name {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return fmt.Sprintf(
+		" (and the mcpSets referencing it: %s — remove the member or set "+
+			"mcpSets[<name>].enabled=false)",
+		strings.Join(names, ", "))
 }
 
 // filterMCPOperations keeps the operations allowed by a set member's

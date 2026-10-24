@@ -345,3 +345,46 @@ func TestMCPSetMemberHidesToolAtCallTime(t *testing.T) {
 		t.Errorf("hidden tool call was not refused: %s", s)
 	}
 }
+
+func TestProviderUnknownErrorIsActionable(t *testing.T) {
+	t.Setenv("TB", "x")
+
+	broker := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/providers" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(
+					`{"providers":[{"name":"github"}]}`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		},
+	))
+	t.Cleanup(broker.Close)
+
+	routesJSON := `{
+		"tokenBroker": {"url": "` + broker.URL + `", "secretEnv": "TB"},
+		"routes": [{
+			"host": "mcp.test", "path": "/internal-gitlab",
+			"backend": "https://gitlab.example/api/v4", "auth": {},
+			"upstream": {"delegated": {"provider": "gitlab"}},
+			"mcp": {"enabled": true, "name": "gitlab",
+				"standalone": false, "operations": []}
+		}],
+		"mcpSets": {"git": {"host": "mcp.test", "endpoint": "/git",
+			"members": [{"service": "gitlab", "path": "/gitlab"}]}}
+	}`
+	cfg := loadForTest(t, routesJSON)
+
+	_, err := New(cfg)
+	if err == nil {
+		t.Fatal("expected a startup error for the unknown provider")
+	}
+	for _, want := range []string{
+		"unknown or disabled provider", "hint:", "git",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want it to contain %q", err, want)
+		}
+	}
+}

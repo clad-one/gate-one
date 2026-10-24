@@ -1175,14 +1175,24 @@ type MCPSet struct {
 	// Endpoint: mount path of the set on that host ("/" allowed).
 	Endpoint string `json:"endpoint"`
 	// Resource: OAuth protected-resource identifier (audience) of the
-	// set — explicit, never derived.
-	Resource string `json:"resource"`
+	// set. Empty = the set endpoint URL.
+	Resource string `json:"resource,omitempty"`
 	// Scope: MCP scope required from clients of this set.
 	Scope string `json:"scope,omitempty"`
 	// Identity: post-auth conditions applied to every member.
 	Identity *Match `json:"identity,omitempty"`
+	// Enabled: expose the set (default true). false = the whole set is
+	// skipped — no endpoint, no validation — an easy way to disable a
+	// group without removing it (its services then need another set or
+	// their own rights).
+	Enabled *bool `json:"enabled,omitempty"`
 	// Members: services exposed under this set.
 	Members []MCPSetMember `json:"members"`
+}
+
+// IsEnabled reports whether the set is active (default true).
+func (s *MCPSet) IsEnabled() bool {
+	return s == nil || s.Enabled == nil || *s.Enabled
 }
 
 // MCPSetMember: one service mounted under a set.
@@ -1798,6 +1808,11 @@ func (c *Config) validateMCPSets() error {
 		if set == nil {
 			return fmt.Errorf("mcpSets[%q]: empty set", name)
 		}
+		if !set.IsEnabled() {
+			// A disabled set is skipped entirely: no endpoint, no
+			// member validation, and it does not reference services.
+			continue
+		}
 		if strings.TrimSpace(set.Host) == "" {
 			return fmt.Errorf("mcpSets[%q]: host required", name)
 		}
@@ -1840,8 +1855,10 @@ func (c *Config) validateMCPSets() error {
 		for _, m := range set.Members {
 			if _, ok := services[m.Service]; !ok {
 				return fmt.Errorf(
-					"mcpSets[%q]: unknown service %q",
-					name, m.Service)
+					"mcpSets[%q]: unknown service %q\n"+
+						"hint: declare a route whose mcp.name is %q with mcp.enabled=true, "+
+						"or remove this member / disable the set (mcpSets[%q].enabled=false)",
+					name, m.Service, m.Service, name)
 			}
 			referenced[m.Service] = true
 
@@ -1885,7 +1902,9 @@ func (c *Config) validateMCPSets() error {
 	for name := range services {
 		if !standalone[name] && !referenced[name] {
 			return fmt.Errorf(
-				"MCP service %q is not standalone and belongs to no mcpSet",
+				"MCP service %q is not standalone and belongs to no mcpSet\n"+
+					"hint: give it its own rights (mcp.standalone=true with auth), "+
+					"reference it from an enabled mcpSet member, or disable it (mcp.enabled=false)",
 				name)
 		}
 	}
@@ -1895,7 +1914,10 @@ func (c *Config) validateMCPSets() error {
 			log.Printf(
 				"WARNING: host %s carries %d MCP sets; clients that "+
 					"only support origin-based RFC 9728 metadata will "+
-					"only see one — prefer one host per set",
+					"only see one.\n"+
+					"hint: serve each set from its own host (one host per "+
+					"set); per-endpoint metadata lives at "+
+					"/.well-known/oauth-protected-resource<set endpoint>",
 				host, n)
 		}
 	}

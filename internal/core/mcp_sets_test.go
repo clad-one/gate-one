@@ -139,3 +139,35 @@ func TestValidateMCPSetsRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateMCPSetsDisabledSetIsSkipped(t *testing.T) {
+	c := validMCPSetConfig()
+	c.MCPSets["git"].Enabled = boolPtr(false)
+
+	// The set is skipped entirely: its non-standalone service is now
+	// unreferenced, and the error carries an actionable hint.
+	err := c.validate()
+	if err == nil || !strings.Contains(err.Error(), "belongs to no mcpSet") {
+		t.Fatalf("err = %v, want the service to be unreferenced", err)
+	}
+	if !strings.Contains(err.Error(), "hint:") {
+		t.Errorf("error lacks an actionable hint: %v", err)
+	}
+}
+
+func TestValidateMCPSetsErrorsCarryHints(t *testing.T) {
+	c := validMCPSetConfig()
+	c.MCPSets["git"].Members[0].Service = "nope"
+
+	err := c.validate()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, want := range []string{
+		"unknown service", "hint:", `mcpSets["git"].enabled=false`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want it to contain %q", err, want)
+		}
+	}
+}
