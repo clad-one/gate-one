@@ -30,6 +30,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -46,11 +47,14 @@ const (
 )
 
 type mcpUpstream struct {
-	endpoint  *url.URL
-	client    *http.Client
-	filter    *core.MCPToolFilter
-	upstream  *core.UpstreamPolicy
-	delegated *core.DelegatedCredentialPolicy
+	endpoint *url.URL
+	client   *http.Client
+	filter   *core.MCPToolFilter
+	// memberTools: optional per-set glob allow-list, applied in
+	// addition to filter (a tool must pass both).
+	memberTools []string
+	upstream    *core.UpstreamPolicy
+	delegated   *core.DelegatedCredentialPolicy
 
 	// sessions binds upstream Mcp-Session-Id values to the Gate One
 	// user who created them. A downstream client cannot reuse another
@@ -102,6 +106,55 @@ func toolFilterSize(f *core.MCPToolFilter) int {
 		return 0
 	}
 	return len(f.Include) + len(f.Exclude)
+}
+
+// filtersTools reports whether any tool filter is active.
+func (p *mcpUpstream) filtersTools() bool {
+	return p != nil &&
+		((p.filter != nil && toolFilterSize(p.filter) > 0) ||
+			len(p.memberTools) > 0)
+}
+
+// allowsTool reports whether a tool passes both the service filter and
+// the set member allow-list.
+func (p *mcpUpstream) allowsTool(name string) bool {
+	if p == nil {
+		return true
+	}
+	if p.filter != nil && !p.filter.Allows(name) {
+		return false
+	}
+	return memberAllows(p.memberTools, name)
+}
+
+// memberAllows: glob allow-list of a set member (empty = all).
+func memberAllows(globs []string, name string) bool {
+	if len(globs) == 0 {
+		return true
+	}
+	for _, g := range globs {
+		if ok, _ := path.Match(g, name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// cloneWithTools returns a copy of the upstream proxy with an
+// additional per-set tool allow-list (sessions are not shared).
+func (p *mcpUpstream) cloneWithTools(tools []string) *mcpUpstream {
+	if p == nil {
+		return nil
+	}
+	return &mcpUpstream{
+		endpoint:    p.endpoint,
+		client:      p.client,
+		filter:      p.filter,
+		memberTools: tools,
+		upstream:    p.upstream,
+		delegated:   p.delegated,
+		sessions:    make(map[string]string),
+	}
 }
 
 func (p *mcpUpstream) rememberSession(sessionID, userID string) {
@@ -178,8 +231,7 @@ func (p *mcpUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if method == "tools/call" &&
-			p.filter != nil && !p.filter.Allows(toolName) {
+		if method == "tools/call" && !p.allowsTool(toolName) {
 			log.Printf(
 				"MCP upstream: blocked tool=%q host=%s",
 				toolName, r.Host)
@@ -187,9 +239,7 @@ func (p *mcpUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		buffered = method == "tools/list" &&
-			p.filter != nil &&
-			(len(p.filter.Include)+len(p.filter.Exclude) > 0)
+		buffered = method == "tools/list" && p.filtersTools()
 	}
 
 	ctx := r.Context()
@@ -399,10 +449,10 @@ func (p *mcpUpstream) writeFilteredList(
 	var out []byte
 
 	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		out, err = filterMCPToolsSSE(raw, p.filter)
+		out, err = filterMCPToolsSSE(raw, p.filter, p.memberTools)
 	} else {
 		var changed bool
-		out, changed, err = filterMCPToolsJSON(raw, p.filter)
+		out, changed, err = filterMCPToolsJSON(raw, p.filter, p.memberTools)
 		if err == nil && changed {
 			outType = "application/json"
 		}
@@ -505,6 +555,7 @@ func writeMCPToolUnavailable(w http.ResponseWriter, id json.RawMessage) {
 func filterMCPToolsJSON(
 	raw []byte,
 	f *core.MCPToolFilter,
+	memberTools []string,
 ) ([]byte, bool, error) {
 	var msg map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
@@ -535,7 +586,7 @@ func filterMCPToolsJSON(
 		if err := json.Unmarshal(tool, &meta); err != nil {
 			return nil, false, err
 		}
-		if f.Allows(meta.Name) {
+		if f.Allows(meta.Name) && memberAllows(memberTools, meta.Name) {
 			filtered = append(filtered, tool)
 		}
 	}
@@ -562,6 +613,7 @@ func filterMCPToolsJSON(
 func filterMCPToolsSSE(
 	raw []byte,
 	f *core.MCPToolFilter,
+	memberTools []string,
 ) ([]byte, error) {
 	s := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	events := strings.Split(s, "\n\n")
@@ -587,7 +639,7 @@ func filterMCPToolsSSE(
 
 		if len(data) > 0 {
 			filtered, changed, err := filterMCPToolsJSON(
-				[]byte(strings.Join(data, "\n")), f)
+				[]byte(strings.Join(data, "\n")), f, memberTools)
 			if err != nil {
 				// Fail closed: an unparseable tools/list
 				// payload could hide tool names from the filter.

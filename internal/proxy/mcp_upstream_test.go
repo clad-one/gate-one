@@ -23,7 +23,7 @@ func TestFilterMCPToolsJSON(t *testing.T) {
 			],
 			"nextCursor":"page-2"
 		}
-	}`), f)
+	}`), f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestFilterMCPToolsSSE(t *testing.T) {
 		`data: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}` +
 		"\n\n"
 
-	out, err := filterMCPToolsSSE([]byte(raw), f)
+	out, err := filterMCPToolsSSE([]byte(raw), f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestFilterMCPToolsSSE(t *testing.T) {
 	// Fail closed: an unparseable tools/list payload could contain
 	// tool names the filter cannot inspect.
 	if _, err := filterMCPToolsSSE(
-		[]byte("data: not-json\n\n"), f); err == nil {
+		[]byte("data: not-json\n\n"), f, nil); err == nil {
 		t.Fatal("expected an error for unparseable SSE data")
 	}
 }

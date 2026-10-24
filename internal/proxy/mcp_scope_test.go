@@ -80,7 +80,7 @@ func TestMCPChallengeUsesConfiguredScope(t *testing.T) {
 	}
 	if !strings.Contains(
 		wwwAuth,
-		`resource_metadata="https://gram.test/.well-known/oauth-protected-resource"`,
+		`resource_metadata="https://gram.test/.well-known/oauth-protected-resource/mcp"`,
 	) {
 		t.Errorf("challenge = %q, missing resource_metadata", wwwAuth)
 	}
@@ -131,7 +131,7 @@ func TestMCPInsufficientScopeChallenge(t *testing.T) {
 	}
 	if !strings.Contains(
 		wwwAuth,
-		`resource_metadata="https://gram.test/.well-known/oauth-protected-resource"`,
+		`resource_metadata="https://gram.test/.well-known/oauth-protected-resource/mcp"`,
 	) {
 		t.Errorf("challenge = %q, missing resource_metadata", wwwAuth)
 	}

@@ -463,6 +463,21 @@ type MCPOperation struct {
 type MCPPolicy struct {
 	Enabled bool   `json:"enabled"`
 	Path    string `json:"path,omitempty"`
+
+	// Name: service name, referenced by mcpSets members. Empty = the
+	// route cannot be a set member.
+	Name string `json:"name,omitempty"`
+
+	// Standalone: expose this service on its own endpoint (default
+	// true). false = the service is served only through the mcpSets
+	// that reference it (the set carries the access rights).
+	Standalone *bool `json:"standalone,omitempty"`
+
+	// Resource: OAuth protected-resource identifier (audience) of the
+	// standalone service. Empty = the endpoint URL. Ignored when the
+	// service is reached through a set (the set's resource applies).
+	Resource string `json:"resource,omitempty"`
+
 	// Scope: the Keycloak client scope required from MCP clients
 	// (carried by the bearer's `scope` claim). Advertised in
 	// /.well-known/oauth-protected-resource and verified by
@@ -482,6 +497,31 @@ type MCPPolicy struct {
 	// per-user token of upstream.delegated (or static upstream
 	// headers) — never the Gate One bearer.
 	Upstream *MCPUpstreamPolicy `json:"upstream,omitempty"`
+}
+
+// IsStandalone reports whether the service is exposed on its own
+// endpoint (default true).
+func (m *MCPPolicy) IsStandalone() bool {
+	return m == nil || m.Standalone == nil || *m.Standalone
+}
+
+// AccessPath returns the public path of the MCP endpoint (mcp.path,
+// else the route path, else /mcp), with a leading slash.
+func (m *MCPPolicy) AccessPath(routePath string) string {
+	p := ""
+	if m != nil {
+		p = m.Path
+	}
+	if p == "" {
+		p = routePath
+	}
+	if p == "" {
+		p = "/mcp"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
 }
 
 // MCPUpstreamPolicy: external MCP server proxied by the gateway.
@@ -1110,7 +1150,51 @@ type Config struct {
 	// serialized.
 	TokenBroker *TokenBrokerConfig `json:"tokenBroker,omitempty"`
 
+	// MCPDefaults: optional defaults shared by every MCP access unit
+	// (currently the scope).
+	MCPDefaults *MCPDefaults `json:"mcpDefaults,omitempty"`
+
+	// MCPSets: named groups of MCP services exposed with their own
+	// access rights (resource/scope/identity) and per-member tool
+	// filters.
+	MCPSets map[string]*MCPSet `json:"mcpSets,omitempty"`
+
 	Routes []Route `json:"routes"`
+}
+
+// MCPDefaults: optional defaults for MCP access units.
+type MCPDefaults struct {
+	// Scope: default MCP scope when a service/set declares none.
+	Scope string `json:"scope,omitempty"`
+}
+
+// MCPSet: an MCP access unit grouping services under one endpoint.
+type MCPSet struct {
+	// Host: public host serving the set.
+	Host string `json:"host"`
+	// Endpoint: mount path of the set on that host ("/" allowed).
+	Endpoint string `json:"endpoint"`
+	// Resource: OAuth protected-resource identifier (audience) of the
+	// set — explicit, never derived.
+	Resource string `json:"resource"`
+	// Scope: MCP scope required from clients of this set.
+	Scope string `json:"scope,omitempty"`
+	// Identity: post-auth conditions applied to every member.
+	Identity *Match `json:"identity,omitempty"`
+	// Members: services exposed under this set.
+	Members []MCPSetMember `json:"members"`
+}
+
+// MCPSetMember: one service mounted under a set.
+type MCPSetMember struct {
+	// Service: mcp.name of the referenced service.
+	Service string `json:"service"`
+	// Path: path relative to the set endpoint ("/" = the set
+	// endpoint itself).
+	Path string `json:"path"`
+	// Tools: optional glob allow-list restricting the service's tools
+	// inside this set.
+	Tools []string `json:"tools,omitempty"`
 }
 
 // TokenBrokerConfig: connection to the internal token broker.
@@ -1624,7 +1708,231 @@ func (c *Config) validate() error {
 			}
 		}
 	}
+	if err := c.validateMCPSets(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateMCPSets checks the MCP services/sets model:
+//   - mcp.name is unique; a standalone service has its own access
+//     unit (auth), a non-standalone one belongs to at least one set;
+//   - each set has a host, an endpoint, an explicit absolute resource
+//     and at least one member;
+//   - members reference an existing service, have unique paths and
+//     valid tool globs;
+//   - composed endpoints and access-unit resources are unique;
+//   - a host carrying several sets emits a compatibility warning.
+func (c *Config) validateMCPSets() error {
+	services := map[string]*Route{}
+	standalone := map[string]bool{}
+
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		if r.MCP == nil || !r.MCP.Enabled || r.MCP.Name == "" {
+			continue
+		}
+		if _, dup := services[r.MCP.Name]; dup {
+			return fmt.Errorf(
+				"route %s: mcp.name %q declared twice",
+				r.Host, r.MCP.Name)
+		}
+		services[r.MCP.Name] = r
+		standalone[r.MCP.Name] = r.MCP.IsStandalone()
+
+		if !r.MCP.IsStandalone() {
+			continue
+		}
+		// No MCP exposed without an access unit: a standalone
+		// service must require authentication.
+		if r.Auth == nil {
+			return fmt.Errorf(
+				"route %s: standalone MCP service %q requires auth "+
+					"(no MCP without an access unit)",
+				r.Host, r.MCP.Name)
+		}
+		if r.MCP.Resource != "" {
+			u, err := url.Parse(r.MCP.Resource)
+			if err != nil || u.Scheme == "" || u.Host == "" {
+				return fmt.Errorf(
+					"route %s: mcp.resource %q must be an absolute URL",
+					r.Host, r.MCP.Resource)
+			}
+		}
+	}
+
+	resources := map[string]string{}
+	for name, r := range services {
+		if !standalone[name] || r.MCP.Resource == "" {
+			continue
+		}
+		if other, dup := resources[r.MCP.Resource]; dup {
+			return fmt.Errorf(
+				"mcp.resource %q used by %s and service %q",
+				r.MCP.Resource, other, name)
+		}
+		resources[r.MCP.Resource] = "service " + name
+	}
+
+	// existing public paths per host, for collision checks (a
+	// non-standalone service is not exposed directly)
+	routePaths := map[string]bool{}
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		if r.MCP != nil && r.MCP.Enabled && !r.MCP.IsStandalone() {
+			continue
+		}
+		p := r.Path
+		if r.MCP != nil && r.MCP.Enabled {
+			p = r.MCP.AccessPath(r.Path)
+		}
+		routePaths[normalizeHostName(r.Host)+"|"+
+			normalizeMCPEndpoint(p)] = true
+	}
+
+	referenced := map[string]bool{}
+	composed := map[string]string{}
+	setsByHost := map[string]int{}
+
+	for name, set := range c.MCPSets {
+		if set == nil {
+			return fmt.Errorf("mcpSets[%q]: empty set", name)
+		}
+		if strings.TrimSpace(set.Host) == "" {
+			return fmt.Errorf("mcpSets[%q]: host required", name)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(set.Endpoint), "/") {
+			return fmt.Errorf(
+				"mcpSets[%q]: endpoint must start with /", name)
+		}
+		ep := normalizeMCPEndpoint(set.Endpoint)
+		if ep == "" {
+			return fmt.Errorf("mcpSets[%q]: endpoint required", name)
+		}
+		if strings.TrimSpace(set.Resource) == "" {
+			return fmt.Errorf("mcpSets[%q]: resource required", name)
+		}
+		if u, err := url.Parse(set.Resource); err != nil ||
+			u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf(
+				"mcpSets[%q]: resource %q must be an absolute URL",
+				name, set.Resource)
+		}
+		if id := set.Identity; id != nil &&
+			(id.Method != "" || len(id.Query) > 0 ||
+				len(id.Header) > 0 || len(id.Body) > 0) {
+			return fmt.Errorf(
+				"mcpSets[%q].identity: technical conditions belong in "+
+					"a route's auth.when", name)
+		}
+		if len(set.Members) == 0 {
+			return fmt.Errorf(
+				"mcpSets[%q]: at least one member required", name)
+		}
+		if other, dup := resources[set.Resource]; dup {
+			return fmt.Errorf(
+				"mcpSets[%q]: resource %q already used by %s",
+				name, set.Resource, other)
+		}
+		resources[set.Resource] = "set " + name
+		setsByHost[normalizeHostName(set.Host)]++
+
+		memberPaths := map[string]bool{}
+		for _, m := range set.Members {
+			if _, ok := services[m.Service]; !ok {
+				return fmt.Errorf(
+					"mcpSets[%q]: unknown service %q",
+					name, m.Service)
+			}
+			referenced[m.Service] = true
+
+			if !strings.HasPrefix(strings.TrimSpace(m.Path), "/") {
+				return fmt.Errorf(
+					"mcpSets[%q] member %q: path must start with /",
+					name, m.Service)
+			}
+			mp := normalizeMCPEndpoint(m.Path)
+			if memberPaths[mp] {
+				return fmt.Errorf(
+					"mcpSets[%q]: duplicate member path %q",
+					name, mp)
+			}
+			memberPaths[mp] = true
+
+			for _, g := range m.Tools {
+				if _, err := path.Match(g, ""); err != nil {
+					return fmt.Errorf(
+						"mcpSets[%q] member %q: invalid tool pattern %q: %v",
+						name, m.Service, g, err)
+				}
+			}
+
+			full := joinMCPEndpoint(ep, mp)
+			key := normalizeHostName(set.Host) + "|" + full
+			if other, dup := composed[key]; dup {
+				return fmt.Errorf(
+					"mcpSets[%q]: endpoint %s already used by %s",
+					name, full, other)
+			}
+			if routePaths[key] {
+				return fmt.Errorf(
+					"mcpSets[%q]: endpoint %s collides with an existing route",
+					name, full)
+			}
+			composed[key] = "set " + name
+		}
+	}
+
+	for name := range services {
+		if !standalone[name] && !referenced[name] {
+			return fmt.Errorf(
+				"MCP service %q is not standalone and belongs to no mcpSet",
+				name)
+		}
+	}
+
+	for host, n := range setsByHost {
+		if n > 1 {
+			log.Printf(
+				"WARNING: host %s carries %d MCP sets; clients that "+
+					"only support origin-based RFC 9728 metadata will "+
+					"only see one — prefer one host per set",
+				host, n)
+		}
+	}
+
+	return nil
+}
+
+// normalizeMCPEndpoint normalizes a public path prefix: leading slash,
+// no trailing slash (except "/").
+func normalizeMCPEndpoint(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	p = strings.TrimRight(p, "/")
+	if p == "" {
+		p = "/"
+	}
+	return p
+}
+
+// joinMCPEndpoint joins a set endpoint and a member path.
+func joinMCPEndpoint(base, rel string) string {
+	base = normalizeMCPEndpoint(base)
+	rel = normalizeMCPEndpoint(rel)
+	switch {
+	case rel == "/":
+		return base
+	case base == "/":
+		return rel
+	default:
+		return base + rel
+	}
 }
 
 // resolveTokenBroker loads the shared secret for routes that use

@@ -19,6 +19,16 @@ import (
 	"time"
 )
 
+// accessUnit: the security unit of an MCP endpoint (a standalone
+// service or an mcpSet). resource/scope are per unit.
+type accessUnit struct {
+	// resource: explicit audience (empty = derive from host+path).
+	resource string
+	scope    string
+	// path: public endpoint of the unit.
+	path string
+}
+
 type compiledRoute struct {
 	route  *core.Route
 	proxy  *httputil.ReverseProxy
@@ -48,6 +58,13 @@ type compiledRoute struct {
 	// delegated: per-user upstream credentials (nil = no broker
 	// call on this route).
 	delegated *core.DelegatedCredentialPolicy
+
+	// unit: MCP access unit owning this endpoint.
+	unit *accessUnit
+
+	// mcpOps: resolved local operations (kept to build filtered
+	// servers for set members).
+	mcpOps []mcpserver.Operation
 }
 
 type Gateway struct {
@@ -216,6 +233,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		}
 	}
 
+	// services: named MCP services (mcp.name), kept to materialize
+	// the mcpSets members after the direct routes are compiled.
+	services := map[string]*compiledRoute{}
+
 	for i := range cfg.Routes {
 
 		route := &cfg.Routes[i]
@@ -358,6 +379,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 					}
 				}
 				cr.mcp = mcpserver.New(route.Backend, ops, delegated)
+				cr.mcpOps = ops
 
 				log.Printf(
 					"MCP enabled host=%s path=%s tools=%d",
@@ -365,6 +387,20 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 					route.MCP.Path,
 					len(ops),
 				)
+			}
+
+			// Access unit: a standalone service owns its own
+			// resource/scope; a non-standalone one is only served
+			// through the sets that reference it.
+			if route.MCP.IsStandalone() {
+				cr.unit = &accessUnit{
+					resource: route.MCP.Resource,
+					scope:    mcpScopeOrDefault(route.MCP.Scope, cfg),
+					path:     route.MCP.AccessPath(route.Path),
+				}
+			}
+			if route.MCP.Name != "" {
+				services[route.MCP.Name] = cr
 			}
 		}
 
@@ -399,8 +435,76 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			rp.ModifyResponse = chainInjectors(injectors)
 		}
 
+		if route.MCPActive() && !route.MCP.IsStandalone() {
+			// Service definition only: not exposed on its own.
+			continue
+		}
 		routes = append(routes, cr)
 
+	}
+
+	// Materialize the mcpSets members: each member is an MCP endpoint
+	// at set.host + set.endpoint + member.path, with the set's access
+	// unit (resource/scope/identity) and the member's tool filter.
+	for setName, set := range cfg.MCPSets {
+		setScope := mcpScopeOrDefault(set.Scope, cfg)
+		setPath := normalizeMCPPath(set.Endpoint)
+		for _, member := range set.Members {
+			svc, ok := services[member.Service]
+			if !ok {
+				return nil, fmt.Errorf(
+					"mcpSets[%q]: unknown service %q",
+					setName, member.Service)
+			}
+
+			full := joinMCPPath(set.Endpoint, member.Path)
+
+			rr := *svc.route
+			mcpCopy := *rr.MCP
+			mcpCopy.Path = full
+			mcpCopy.Resource = ""
+			rr.MCP = &mcpCopy
+			rr.Host = set.Host
+			rr.Path = full
+			// The set carries the rights: always require auth and
+			// apply the set identity (the service's own identity is
+			// for its standalone access only).
+			rr.Auth = &core.AuthPolicy{Identity: set.Identity}
+
+			mcr := &compiledRoute{
+				route:       &rr,
+				proxy:       svc.proxy,
+				prefix:      normalizePath(full),
+				stripPrefix: svc.stripPrefix,
+				delegated:   svc.delegated,
+				unit: &accessUnit{
+					resource: set.Resource,
+					scope:    setScope,
+					path:     setPath,
+				},
+			}
+
+			if svc.mcp != nil {
+				ops := filterMCPOperations(svc.mcpOps, member.Tools)
+				var delegated *mcpserver.DelegatedCredentials
+				if d := rr.DelegatedCredentials(); d != nil {
+					delegated = &mcpserver.DelegatedCredentials{
+						Header: d.HeaderValue(),
+						Prefix: d.PrefixValue(),
+					}
+				}
+				mcr.mcp = mcpserver.New(rr.Backend, ops, delegated)
+				mcr.mcpOps = ops
+			} else if svc.mcpUpstream != nil {
+				mcr.mcpUpstream = svc.mcpUpstream.cloneWithTools(member.Tools)
+			}
+
+			routes = append(routes, mcr)
+			log.Printf(
+				"MCP set member set=%s host=%s path=%s service=%s",
+				setName, set.Host, full, member.Service,
+			)
+		}
 	}
 
 	gw := &Gateway{
@@ -431,21 +535,16 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 func (g *Gateway) serveMCPProtectedResourceMetadata(
 	w http.ResponseWriter,
 	r *http.Request,
+	unit *accessUnit,
 ) {
-	resource, ok := g.mcpResourceURLForHost(r.Host, clientScheme(r))
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"resource": resource,
+		"resource": resourceForUnit(unit, r.Host, clientScheme(r)),
 		"authorization_servers": []string{
 			g.config.OIDC.Issuer,
 		},
-		"scopes_supported":         []string{g.mcpScopeForHost(r.Host)},
+		"scopes_supported":         []string{scopeForUnit(unit)},
 		"bearer_methods_supported": []string{"header"},
 	})
 }
@@ -460,6 +559,68 @@ func normalizePath(p string) string {
 	}
 
 	return p
+}
+
+// normalizeMCPPath normalizes an MCP endpoint path: leading slash, no
+// trailing slash (except "/").
+func normalizeMCPPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	p = strings.TrimRight(p, "/")
+	if p == "" {
+		p = "/"
+	}
+	return p
+}
+
+// joinMCPPath joins a set endpoint and a member path.
+func joinMCPPath(base, rel string) string {
+	base = normalizeMCPPath(base)
+	rel = normalizeMCPPath(rel)
+	switch {
+	case rel == "/":
+		return base
+	case base == "/":
+		return rel
+	default:
+		return base + rel
+	}
+}
+
+// mcpScopeOrDefault returns the explicit scope, else the configured
+// default, else the historical default.
+func mcpScopeOrDefault(scope string, cfg *core.Config) string {
+	if scope != "" {
+		return scope
+	}
+	if cfg != nil && cfg.MCPDefaults != nil &&
+		cfg.MCPDefaults.Scope != "" {
+		return cfg.MCPDefaults.Scope
+	}
+	return defaultMCPScope
+}
+
+// filterMCPOperations keeps the operations allowed by a set member's
+// glob list (empty = all).
+func filterMCPOperations(
+	ops []mcpserver.Operation,
+	tools []string,
+) []mcpserver.Operation {
+	if len(tools) == 0 {
+		return ops
+	}
+	out := make([]mcpserver.Operation, 0, len(ops))
+	for _, op := range ops {
+		if memberAllows(tools, op.Name) {
+			out = append(out, op)
+		}
+	}
+	return out
 }
 
 // stripRequestPrefix removes an exact, segment-bounded path prefix
@@ -700,23 +861,6 @@ func (g *Gateway) serveAuthState(
 	})
 }
 
-// mcpRouteForHost returns a host's enabled MCP route.
-func (g *Gateway) mcpRouteForHost(host string) (*core.Route, bool) {
-	for _, cr := range g.routes {
-		if cr.route.MCP == nil || !cr.route.MCP.Enabled {
-			continue
-		}
-
-		if normalizeHost(cr.route.Host) != normalizeHost(host) {
-			continue
-		}
-
-		return cr.route, true
-	}
-
-	return nil, false
-}
-
 // clientSchemeKey: the CLIENT scheme (browser→ingress) frozen into
 // the outgoing request's context by the Director — ReverseProxy
 // overwrites X-Forwarded-Proto with the gateway→backend hop's
@@ -776,54 +920,66 @@ func requestSchemeOut(r *http.Request) string {
 	return "https"
 }
 
-func (g *Gateway) mcpResourceURLForHost(
-	host string,
-	scheme string,
-) (string, bool) {
-	route, ok := g.mcpRouteForHost(host)
-	if !ok {
-		return "", false
+// resourceForUnit returns the protected-resource identifier of an
+// access unit: its explicit resource, else the endpoint URL.
+func resourceForUnit(u *accessUnit, host, scheme string) string {
+	if u == nil {
+		return ""
 	}
-
-	path := route.MCP.Path
-	if path == "" {
-		path = route.Path
+	if u.resource != "" {
+		return u.resource
 	}
-
-	if path == "" {
-		path = "/mcp"
-	}
-
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-
-	// Keep the request host as-is (normalizeHost strips the port):
-	// the resource identifier must be the URL clients actually call.
-	return scheme + "://" + strings.TrimSpace(host) + path, true
+	return scheme + "://" + strings.TrimSpace(host) + u.path
 }
 
-// mcpScopeForHost returns the MCP scope required for a host (the
-// mcp policy's "scope" field, default defaultMCPScope).
-func (g *Gateway) mcpScopeForHost(host string) string {
-	route, ok := g.mcpRouteForHost(host)
-	if !ok || route.MCP.Scope == "" {
+// scopeForUnit returns the scope of an access unit.
+func scopeForUnit(u *accessUnit) string {
+	if u == nil || u.scope == "" {
 		return defaultMCPScope
 	}
-	return route.MCP.Scope
+	return u.scope
 }
 
-func (g *Gateway) mcpResourceMetadataURL(
-	host string,
-	scheme string,
-) (string, bool) {
-	if _, ok := g.mcpResourceURLForHost(host, scheme); !ok {
-		return "", false
+// metadataURLForUnit returns the RFC 9728 metadata URL of a unit.
+func metadataURLForUnit(u *accessUnit, host, scheme string) string {
+	p := ""
+	if u != nil && u.path != "/" {
+		p = u.path
 	}
+	return scheme + "://" + strings.TrimSpace(host) +
+		"/.well-known/oauth-protected-resource" + p
+}
 
-	return scheme + "://" +
-		strings.TrimSpace(host) +
-		"/.well-known/oauth-protected-resource", true
+// unitForMetadataPath resolves a metadata request path to an access
+// unit. The origin form is kept for compatibility (first unit of the
+// host); the RFC 9728 path form targets the exact unit.
+func (g *Gateway) unitForMetadataPath(
+	host, reqPath string,
+) (*accessUnit, bool) {
+	const prefix = "/.well-known/oauth-protected-resource"
+	if reqPath != prefix && !strings.HasPrefix(reqPath, prefix+"/") {
+		return nil, false
+	}
+	if reqPath == prefix {
+		for _, cr := range g.routes {
+			if cr.unit != nil &&
+				normalizeHost(cr.route.Host) == normalizeHost(host) {
+				return cr.unit, true
+			}
+		}
+		return nil, false
+	}
+	target := normalizeMCPPath(strings.TrimPrefix(reqPath, prefix))
+	for _, cr := range g.routes {
+		if cr.unit == nil ||
+			normalizeHost(cr.route.Host) != normalizeHost(host) {
+			continue
+		}
+		if normalizeMCPPath(cr.unit.path) == target {
+			return cr.unit, true
+		}
+	}
+	return nil, false
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -835,10 +991,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// MCP OAuth protected-resource metadata
-	if ctx.Path == "/.well-known/oauth-protected-resource" {
-		if _, ok := g.mcpResourceURLForHost(ctx.Host, clientScheme(r)); ok {
-			g.serveMCPProtectedResourceMetadata(w, r)
+	// MCP OAuth protected-resource metadata (per access unit; the
+	// origin form is kept for compatibility).
+	if strings.HasPrefix(ctx.Path, "/.well-known/oauth-protected-resource") {
+		if unit, ok := g.unitForMetadataPath(ctx.Host, ctx.Path); ok {
+			g.serveMCPProtectedResourceMetadata(w, r, unit)
 			return
 		}
 	}
@@ -894,19 +1051,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		//
 		if g.needsAuthentication(route, ctx) {
 
-			resourceMetadataURL, ok := g.mcpResourceMetadataURL(
-				ctx.Host, clientScheme(r))
-			if !ok {
-				http.Error(
-					w,
-					"MCP authentication configuration error",
-					http.StatusInternalServerError,
-				)
-				return
-			}
-
-			mcpResource, _ := g.mcpResourceURLForHost(
-				ctx.Host, clientScheme(r))
+			unit := cr.unit
+			resourceMetadataURL := metadataURLForUnit(
+				unit, ctx.Host, clientScheme(r))
+			mcpResource := resourceForUnit(
+				unit, ctx.Host, clientScheme(r))
 
 			ctx, err = g.checkMCPAuth(
 				w,
@@ -914,7 +1063,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				ctx,
 				mcpResource,
 				resourceMetadataURL,
-				g.mcpScopeForHost(ctx.Host),
+				scopeForUnit(unit),
 			)
 
 			if err != nil {
@@ -1282,13 +1431,7 @@ func (g *Gateway) findMCP(
 			continue
 		}
 
-		path := r.route.MCP.Path
-
-		if path == "" {
-			path = "/mcp"
-		}
-
-		if ctx.Path != path {
+		if ctx.Path != r.route.MCP.AccessPath(r.route.Path) {
 			continue
 		}
 
