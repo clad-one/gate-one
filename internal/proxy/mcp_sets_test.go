@@ -381,7 +381,8 @@ func TestProviderUnknownErrorIsActionable(t *testing.T) {
 		t.Fatal("expected a startup error for the unknown provider")
 	}
 	for _, want := range []string{
-		"unknown or disabled provider", "hint:", "git",
+		"unknown or disabled provider", "hint:",
+		"docs/MCP.adoc#token-broker-provider", "git",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %v, want it to contain %q", err, want)

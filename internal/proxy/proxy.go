@@ -205,8 +205,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		if err != nil {
 			return nil, fmt.Errorf(
 				"token broker provider validation: %w\n"+
-					"hint: start the broker first (make broker-up), or remove the "+
-					"upstream.delegated routes and their mcpSets members",
+					"hint: the broker must be reachable at startup to validate "+
+					"delegated providers: start it (make broker-up) before Gate One, "+
+					"or remove the upstream.delegated routes and their mcpSets "+
+					"members (docs/MCP.adoc#token-broker-provider)",
 				err)
 		}
 
@@ -220,9 +222,11 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			if d != nil && !known[d.Provider] {
 				return nil, fmt.Errorf(
 					"route %s: upstream.delegated.provider %q: unknown or disabled provider\n"+
-						"hint: enable %q in the token broker (providers.json: "+
-						"\"enabled\": true + client_secret_env), or disable this source "+
-						"(mcp.enabled=false on this route)%s",
+						"hint: this route delegates the user's auth to the token broker: "+
+						"configure a %q provider (see docs/MCP.adoc#token-broker-provider), "+
+						"or stop delegating / use a shared service token where supported "+
+						"(docs/MCP.adoc#static-service-token), or disable this source "+
+						"(mcp.enabled=false)%s",
 					r.Host, d.Provider, d.Provider, setsHint(cfg, r))
 			}
 		}
