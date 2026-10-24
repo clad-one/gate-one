@@ -219,15 +219,44 @@ type OpenAPIPolicy struct {
 	Public bool `json:"public,omitempty"`
 }
 
-// AuthGuardPolicy controls the injection of the gateway's 401/403 guard
+// AuthGuardPolicy controls the injection of the gateway's 401 guard
 // script into HTML responses of frontend routes. Unlike the AuthPolicy
 // (which enforces authentication on a route), the guard only reacts to
-// 401/403 answers already produced: when the injected script sees a
-// fetch() answer 401/403 it redirects the browser to the login page.
-// Absent policy = guard active on frontend routes, no-op elsewhere.
+// answers already produced: a fetch() 401 opens a login flow without
+// reloading; the gateway's OWN identity 403 is left to the app, with
+// an opt-in hint banner (Forbidden). Absent policy = guard active on
+// frontend routes, no-op elsewhere.
 type AuthGuardPolicy struct {
 	Enabled  *bool  `json:"enabled,omitempty"`  // false = opt-out
 	LoginURL string `json:"loginUrl,omitempty"` // default: shared constant
+
+	// Forbidden: opt-in UX for the gateway's OWN identity 403 (rights
+	// refusal — auth.identity not satisfied). A 403 originating from
+	// the backend is never concerned.
+	Forbidden *AuthGuardForbiddenPolicy `json:"forbidden,omitempty"`
+}
+
+// AuthGuardForbiddenPolicy is the opt-in UX for a request the gateway
+// refuses on identity conditions (403). Two surfaces, both optional:
+//
+//   - a browser NAVIGATION gets a readable built-in HTML page (or a
+//     redirect to pageUrl) instead of the raw JSON body;
+//   - a fetch()/XHR gets the JSON 403 UNCHANGED, plus — when banner is
+//     true — a dismissable hint injected by the guard script inviting
+//     the front authors to hide the feature (uiGate / data-gtw-*).
+//
+// The banner reacts ONLY to the gateway's own 403: the gateway stamps
+// it with the response header X-Gate-One-Forbidden; a backend 403
+// never carries it (and the header is stripped from proxied responses).
+type AuthGuardForbiddenPolicy struct {
+	// Banner: the injected guard script shows a dismissable banner
+	// when a fetch() sees the gateway's identity 403. Default false.
+	Banner bool `json:"banner,omitempty"`
+	// PageURL: a browser navigation refused on identity is redirected
+	// there (302) instead of the built-in HTML page.
+	PageURL string `json:"pageUrl,omitempty"`
+	// Message: overrides the built-in forbidden page's text.
+	Message string `json:"message,omitempty"`
 }
 
 // RewriteExcept: rewriteBody exception. Two declarable forms:
@@ -1254,6 +1283,16 @@ func (r *Route) GuardActive() bool {
 		return *r.AuthGuard.Enabled
 	}
 	return true
+}
+
+// ForbiddenPolicy returns the route's authGuard.forbidden policy, if
+// any (nil = the identity-403 UX is left at its default: raw JSON for
+// fetches, built-in HTML page for navigations).
+func (r *Route) ForbiddenPolicy() *AuthGuardForbiddenPolicy {
+	if r == nil || r.AuthGuard == nil {
+		return nil
+	}
+	return r.AuthGuard.Forbidden
 }
 
 // MCPActive: does the route expose an MCP server?

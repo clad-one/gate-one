@@ -49,6 +49,16 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 		http.Redirect(w, r, r.URL.Query().Get("loc"), http.StatusFound)
 	})
 
+	// 403 from the BACKEND — with a FORGED gateway marker: the
+	// gateway must strip it (a backend must not be able to trigger
+	// the identity-403 banner). The body is JSON, like a real API.
+	mux.HandleFunc("/forbidden", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(GatewayForbiddenHeader, gatewayForbiddenValue)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"backend_forbidden"}`))
+	})
+
 	mux.HandleFunc("/page", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -600,6 +610,7 @@ func guardInjectedLen(t *testing.T) int {
 		userBadgeJSON(route),
 		rewriteGuardJSON(route, backend),
 		patchJSONFor(route),
+		forbiddenBannerJSON(route),
 	)
 	return len(script)
 }

@@ -53,6 +53,11 @@
           "roles": ["offline_access"]
         }
       ],
+      "authGuard": {
+        "forbidden": {
+          "banner": true
+        }
+      },
       "pwa": {
         "enabled": true,
         "name": "Solveur poétique",

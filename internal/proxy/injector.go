@@ -96,6 +96,7 @@ func buildInjectors(
 			userBadgeJSON(route),
 			rewriteGuardJSON(route, u),
 			patchJSONFor(route),
+			forbiddenBannerJSON(route),
 		)
 		injectors = append(injectors, &guardInjector{
 			host:   route.Host,

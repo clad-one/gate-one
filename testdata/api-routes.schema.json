@@ -288,7 +288,7 @@
     },
     "authGuardPolicy": {
       "type": "object",
-      "description": "401 guard script (login without reloading: tab + replay + banner + declarative gating). Active by default on frontend routes; no-op elsewhere. The guard only intercepts the 401 — a 403 (insufficient rights) crosses to the app.",
+      "description": "401 guard script (login without reloading: tab + replay + banner + declarative gating). Active by default on frontend routes; no-op elsewhere. The guard intercepts the 401 (login) and, when authGuard.forbidden.banner is set, the gateway's OWN identity 403; a 403 coming from the backend is never concerned.",
       "additionalProperties": false,
       "properties": {
         "enabled": {
@@ -298,6 +298,26 @@
         "loginUrl": {
           "type": "string",
           "description": "Default: https://login.cladone.com/login (auth-bridge page)."
+        },
+        "forbidden": { "$ref": "#/definitions/authGuardForbiddenPolicy" }
+      }
+    },
+    "authGuardForbiddenPolicy": {
+      "type": "object",
+      "description": "Opt-in UX for the gateway's OWN identity 403 (rights refusal — auth.identity not satisfied). A backend 403 is never concerned. Browser navigations get a readable HTML page (or a redirect to pageUrl); fetch()/XHR get the JSON 403 unchanged, plus an optional dismissable banner hinting the front authors to hide the feature.",
+      "additionalProperties": false,
+      "properties": {
+        "banner": {
+          "type": "boolean",
+          "description": "true = the injected guard script shows a dismissable banner when a fetch() sees the gateway's identity 403. Default false."
+        },
+        "pageUrl": {
+          "type": "string",
+          "description": "Browser navigations refused on identity are redirected there (302) instead of the built-in HTML page."
+        },
+        "message": {
+          "type": "string",
+          "description": "Overrides the built-in forbidden page's message text."
         }
       }
     },

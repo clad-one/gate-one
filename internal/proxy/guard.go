@@ -19,9 +19,9 @@ import (
 const AuthStatePath = "/__gate-one/auth"
 
 // guardScript is injected into HTML responses of frontend routes. It
-// wraps window.fetch so that a 401 answer (session expired or
-// identity conditions not met, the gateway answers JSON 401 on API
-// routes) triggers a login flow that does NOT reload the application:
+// wraps window.fetch so that a 401 answer (session expired: the
+// gateway answers JSON 401 on API routes) triggers a login flow that
+// does NOT reload the application:
 //
 //   - every fetch is cloned before being sent (a Request body can
 //     only be read once), keeping a replayable copy ;
@@ -85,10 +85,19 @@ const AuthStatePath = "/__gate-one/auth"
 //     want to trigger authentication from their own UI (opt-in; the
 //     zero-code-change contract holds for everyone else)
 //
+// Gateway identity 403 (opt-in, authGuard.forbidden.banner): a fetch
+// answer carrying the gateway's OWN marker (X-Gate-One-Forbidden — set
+// only on the gateway's identity 403; a backend 403 never has it, and
+// the header is stripped from proxied responses) shows a dismissable
+// hint inviting the front authors to hide the feature (uiGate /
+// data-gtw-*). No login is offered (a rights refusal would loop); the
+// JSON 403 is returned to the app unchanged.
+//
 // guardScript: the guard script, LOCKED by tests (guardInjectedLen,
 // node parity). The JS lives outside the Go code:
 // guard/guard.js.tmpl (go:embed); the %[n]s are substituted by the
-// buildInjectors Sprintf (login, probe, uiGate, badge, rewrite).
+// buildInjectors Sprintf (login, probe, uiGate, badge, rewrite, patch,
+// forbidden).
 //
 //go:embed guard/guard.js.tmpl
 var guardScriptFS embed.FS

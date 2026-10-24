@@ -22,6 +22,11 @@
   // for sites whose markup cannot be edited. Applied on every
   // evaluation cycle (see bottom).
   var PATCH = %[6]s;
+  // Gateway identity-403 banner (route authGuard.forbidden.banner):
+  // true = show the dismissable hint when a fetch() sees the gateway's
+  // OWN rights refusal (X-Gate-One-Forbidden marker); null = off. A
+  // backend 403 never carries the marker and never triggers it.
+  var FORBIDDEN = %[7]s;
   var LOGIN_ORIGIN = "";
   try { LOGIN_ORIGIN = new URL(LOGIN).origin; } catch (e) {}
   // Logout: same host as the login page (auth-bridge) — clears the
@@ -326,6 +331,55 @@
 
   function hideBanner() {
     if (banner) { banner.remove(); banner = null; }
+  }
+
+  // == Gateway identity-403 banner (opt-in: authGuard.forbidden.banner) ==
+  // A fetch() answer 403 carrying the gateway marker
+  // (X-Gate-One-Forbidden) means the route's identity conditions
+  // (roles/scopes/claims) refused THIS user — a rights refusal, NOT an
+  // auth problem. Offering a login would loop, so this banner is a
+  // pure HINT to the front authors: hide the feature with uiGate /
+  // data-gtw-* instead of letting the user hit a dead end. It is
+  // separate from the 401 banner (own element, × only, no "Sign in",
+  // no tab, no request queueing) and shows at most ONCE per page load.
+  // A 403 coming from the backend never carries the marker: it never
+  // triggers the banner.
+  var forbiddenBanner = null;
+  var forbiddenShown = false;
+
+  function showForbiddenBanner() {
+    if (forbiddenShown || !document.body) return;
+    forbiddenShown = true;
+    forbiddenBanner = document.createElement("div");
+    forbiddenBanner.setAttribute("data-gtw-forbidden-banner", "1");
+    forbiddenBanner.style.cssText =
+      "position:fixed;left:0;right:0;bottom:20px;margin:0 auto;" +
+      "width:fit-content;max-width:min(90vw,44em);z-index:2147483647;" +
+      "display:flex;gap:12px;box-sizing:border-box;" +
+      "align-items:center;background:#3a2f14;color:#fff;" +
+      "padding:10px 14px;border-radius:10px;" +
+      "box-shadow:0 8px 30px rgba(0,0,0,0.35);" +
+      "font:14px/1.4 system-ui,sans-serif";
+    var msg = document.createElement("span");
+    msg.textContent = "Gate-One message: frontsite features using backend " +
+      "services denied to the user should better be hidden or forbidden " +
+      "using uiGate or data-gtw-* element";
+    forbiddenBanner.appendChild(msg);
+    var no = document.createElement("button");
+    no.type = "button";
+    no.title = "Close";
+    no.textContent = "\u00d7";
+    no.style.cssText =
+      "border:0;background:transparent;color:#d9c9a0;cursor:pointer;" +
+      "font:20px/1 system-ui,sans-serif;padding:0 2px;flex:0 0 auto";
+    no.onclick = function () {
+      if (forbiddenBanner) {
+        forbiddenBanner.remove();
+        forbiddenBanner = null;
+      }
+    };
+    forbiddenBanner.appendChild(no);
+    document.body.appendChild(forbiddenBanner);
   }
 
   // Abandon (×, click outside the banner, Escape): pending requests
@@ -1108,6 +1162,20 @@
     var replay = buildReplay(input, init);
 
     return orig.apply(this, arguments).then(function (res) {
+
+      // Gateway identity 403 (rights refusal — when.identity not met):
+      // the response carries the gateway's OWN marker
+      // (X-Gate-One-Forbidden) AND is JSON. When authGuard.forbidden
+      // .banner is on, show the dismissable hint — then return res
+      // UNCHANGED (the app still sees its 403). Offering a login
+      // would loop. A 403 from the BACKEND never carries the marker:
+      // never concerned (the HTML navigation page is not JSON either).
+      if (FORBIDDEN && res && res.status === 403 && res.headers &&
+          res.headers.get("X-Gate-One-Forbidden") &&
+          /json/.test(res.headers.get("content-type") || "")) {
+        showForbiddenBanner();
+        return res;
+      }
 
       // 401 ONLY: it is the "authenticate yourself" signal. A 403
       // (authenticated but insufficient rights — when.roles/scopes/

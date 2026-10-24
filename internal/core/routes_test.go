@@ -1116,3 +1116,54 @@ func TestAuthWhenIdentitySplit(t *testing.T) {
 		}
 	})
 }
+
+// TestAuthGuardForbiddenPolicy: authGuard.forbidden is the opt-in UX
+// for the gateway's own identity 403 (banner / pageUrl / message). It
+// is deserialized on a frontend route and stays nil when absent.
+func TestAuthGuardForbiddenPolicy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+
+	load := func(cfg string) (*Config, error) {
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(path)
+	}
+
+	t.Run("forbidden policy deserialized", func(t *testing.T) {
+		c, err := load(`{"oidc":{"loginUrl":"https://l.test/login"},
+			"routes":[{"host":"a.local","path":"/*","frontend":true,
+			"backend":"http://x","authGuard":{"forbidden":{"banner":true,
+			"pageUrl":"https://denied.test/no","message":"nope"}}}]}`)
+		if err != nil {
+			t.Fatalf("valid authGuard.forbidden rejected: %v", err)
+		}
+		fb := c.Routes[0].ForbiddenPolicy()
+		if fb == nil || !fb.Banner ||
+			fb.PageURL != "https://denied.test/no" || fb.Message != "nope" {
+			t.Fatalf("forbidden policy not deserialized: %+v", fb)
+		}
+	})
+
+	t.Run("absent forbidden policy stays nil", func(t *testing.T) {
+		c, err := load(`{"oidc":{"loginUrl":"https://l.test/login"},
+			"routes":[{"host":"a.local","path":"/*","frontend":true,
+			"backend":"http://x","authGuard":{"loginUrl":"https://l.test/login"}}]}`)
+		if err != nil {
+			t.Fatalf("valid config rejected: %v", err)
+		}
+		if c.Routes[0].ForbiddenPolicy() != nil {
+			t.Fatal("forbidden policy should be nil when absent")
+		}
+	})
+
+	t.Run("unknown field in forbidden refused", func(t *testing.T) {
+		_, err := load(`{"oidc":{"loginUrl":"https://l.test/login"},
+			"routes":[{"host":"a.local","path":"/*","frontend":true,
+			"backend":"http://x","authGuard":{"forbidden":{"bnner":true}}}]}`)
+		if err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Fatalf("unknown field in forbidden accepted or wrong error: %v", err)
+		}
+	})
+}

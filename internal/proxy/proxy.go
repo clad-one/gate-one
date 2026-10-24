@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"net"
 	"net/http"
@@ -458,8 +459,16 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		// guard → rewriteBody → upstream(headers) → pwa → custom.
 		// The guard JS lives in guard/guard.js.tmpl (go:embed);
 		// custom injections (bundle) are data, not code.
-		if injectors := buildInjectors(cfg, route, u, rwPlan, pathPlan, injectsBody); len(injectors) > 0 {
-			rp.ModifyResponse = chainInjectors(injectors)
+		// The gateway's identity-403 marker (GatewayForbiddenHeader)
+		// must never be forged by a backend: strip it from EVERY
+		// proxied response, before the injection chain. The guard
+		// banner trusts only this header.
+		chain := chainInjectors(
+			buildInjectors(cfg, route, u, rwPlan, pathPlan, injectsBody),
+		)
+		rp.ModifyResponse = func(resp *http.Response) error {
+			resp.Header.Del(GatewayForbiddenHeader)
+			return chain(resp)
 		}
 
 		if route.MCPActive() && !route.MCP.IsStandalone() {
@@ -842,6 +851,105 @@ func isBrowserRequest(r *http.Request) bool {
 		strings.Contains(sec, "document")
 }
 
+// GatewayForbiddenHeader is the response header stamped on the
+// gateway's OWN identity 403 (rights refusal — auth.identity not
+// satisfied). The injected guard banner reads it to tell a gateway
+// rights refusal apart from a backend 403: the latter never carries
+// it, and the header is stripped from every proxied response so a
+// backend cannot forge the banner.
+const GatewayForbiddenHeader = "X-Gate-One-Forbidden"
+
+// gatewayForbiddenValue: the marker value carried by
+// GatewayForbiddenHeader (a gateway identity 403).
+const gatewayForbiddenValue = "identity"
+
+// defaultForbiddenMessage: the built-in forbidden page's text when
+// authGuard.forbidden.message is not set.
+const defaultForbiddenMessage = "Access denied — your account does not " +
+	"have the rights required to access this service."
+
+// writeIdentityForbidden answers a request the gateway refuses on
+// identity conditions (roles/scopes/claims/user). The response always
+// carries the GatewayForbiddenHeader marker; the body depends on the
+// caller:
+//
+//   - a browser NAVIGATION gets a readable HTML page, or a 302 toward
+//     authGuard.forbidden.pageUrl when configured — the historical raw
+//     JSON body was a dead end in a browser;
+//   - a fetch()/XHR/API client gets the JSON 403 UNCHANGED (the
+//     marker lets the injected guard show its opt-in banner) — the
+//     front handles the refusal itself.
+//
+// A login is never offered: a rights refusal is not an authentication
+// problem (offering a login would loop).
+func writeIdentityForbidden(
+	w http.ResponseWriter,
+	r *http.Request,
+	route *core.Route,
+) {
+	w.Header().Set(GatewayForbiddenHeader, gatewayForbiddenValue)
+
+	if isBrowserRequest(r) {
+		fb := route.ForbiddenPolicy()
+		if fb != nil && fb.PageURL != "" {
+			http.Redirect(w, r, fb.PageURL, http.StatusFound)
+			return
+		}
+		writeForbiddenPage(w, fb)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	w.Write([]byte(
+		`{"error":"forbidden","error_description":"identity conditions not met"}`,
+	))
+}
+
+// writeForbiddenPage serves the built-in HTML 403 page (inline CSS, no
+// external asset, message configurable via authGuard.forbidden.message).
+func writeForbiddenPage(w http.ResponseWriter, fb *core.AuthGuardForbiddenPolicy) {
+	msg := defaultForbiddenMessage
+	if fb != nil && fb.Message != "" {
+		msg = fb.Message
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusForbidden)
+	w.Write([]byte(forbiddenPageHTML(msg)))
+}
+
+// forbiddenPageHTML: the self-contained forbidden page (no external
+// asset, adaptive light/dark). The message is HTML-escaped.
+func forbiddenPageHTML(message string) string {
+	return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Access denied</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;` +
+		`justify-content:center;background:#f4f5f7;color:#1c1f26;` +
+		`font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:34em;margin:2rem;padding:2rem 2.25rem;background:#fff;` +
+		`border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08)}
+h1{margin:0 0 .6rem;font-size:1.4rem}
+p{margin:0;color:#444}
+@media (prefers-color-scheme:dark){body{background:#16181d;color:#eef0f3}` +
+		`main{background:#20242e}p{color:#c7ccd6}}
+</style>
+</head>
+<body>
+<main>
+<h1>Access denied</h1>
+<p>` + html.EscapeString(message) + `</p>
+</main>
+</body>
+</html>`
+}
+
 func (g *Gateway) isPubliclyForbidden(
 	ctx *RequestContext,
 ) bool {
@@ -925,6 +1033,18 @@ func rewriteGuardJSON(route *core.Route, backend *url.URL) string {
 		return "null"
 	}
 	return core.AsciiJSON(dto, "null")
+}
+
+// forbiddenBannerJSON serializes the route's authGuard.forbidden
+// switch for the guard script (FORBIDDEN=%s; "true" when the banner is
+// enabled, "null" otherwise). The banner reacts only to the gateway's
+// identity 403 marker (see GatewayForbiddenHeader).
+func forbiddenBannerJSON(route *core.Route) string {
+	fb := route.ForbiddenPolicy()
+	if fb == nil || !fb.Banner {
+		return "null"
+	}
+	return "true"
 }
 
 func (g *Gateway) guardRouteForHost(host string) (*compiledRoute, bool) {
@@ -1342,17 +1462,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		//
 		// Identity conditions (roles/scopes/claims/user):
-		// authenticated but insufficient → 403. The guard script
-		// only intercepts the 401 — a rights refusal must not
-		// trigger a login invitation (loop).
+		// authenticated but insufficient → 403. A rights refusal must
+		// not trigger a login invitation (loop): the response is a
+		// readable page for a navigation, JSON for a fetch (see
+		// writeIdentityForbidden — marked so the guard banner only
+		// reacts to the gateway's OWN 403).
 		//
 		if route.Auth != nil &&
 			hasIdentityConditions(route.Auth.Identity) &&
 			!matchesIdentity(route.Auth.Identity, ctx) {
 
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"error":"forbidden","error_description":"identity conditions not met"}`))
+			writeIdentityForbidden(w, r, route)
 			return
 		}
 	}

@@ -17,8 +17,8 @@ const GUARD_TMPL = path.join(
 );
 const SERVED_URL = process.env.GATEWAY_UI_URL || "https://vers.cladone.com/";
 
-// rendering of guardScript: the 6 Sprintf verbs (loginUrl, authState,
-// uiGate[], userBadge, rewrite DTO, bundle patch[])
+// rendering of guardScript: the 7 Sprintf verbs (loginUrl, authState,
+// uiGate[], userBadge, rewrite DTO, bundle patch[], forbidden banner)
 export function renderGuard(opts = {}) {
   const tmpl = readFileSync(GUARD_TMPL, "utf8");
   const loginUrl = opts.loginUrl || "https://login.cladone.com/login";
@@ -27,13 +27,15 @@ export function renderGuard(opts = {}) {
   const userBadge = opts.userBadge || "null";
   const rewrite = opts.rewrite || "null";
   const patch = opts.patch || "[]";
+  const forbidden = opts.forbidden || "null";
   const rendered = tmpl
     .replace("%[1]s", loginUrl)
     .replace("%[2]s", authState)
     .replace("%[3]s", uiGate)
     .replace("%[4]s", userBadge)
     .replace("%[5]s", rewrite)
-    .replace("%[6]s", patch);
+    .replace("%[6]s", patch)
+    .replace("%[7]s", forbidden);
   if (rendered.includes("%[")) {
     throw new Error("residual % verb in the rendered script");
   }
@@ -55,18 +57,30 @@ export const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
 
 // test window: jsdom + shims (probe/requests fetch, counted
 // window.open, captured message listeners)
-export async function mkWindow(guard, html, sessionPayload, uiGate = "[]") {
+export async function mkWindow(guard, html, sessionPayload, uiGate = "[]", opts = {}) {
   const dom = new JSDOM(html, {
     url: "https://vers.cladone.com/",
     runScripts: "outside-only",
   });
   const w = dom.window;
   const st = { openCalls: 0, lastTab: null, msgListeners: [], navs: [] };
+  // opts.forbidden: {path, marked=true, contentType="application/json"}
+  // — URLs containing `path` answer 403 (with/without the gateway
+  // marker) so the identity-403 banner can be exercised.
+  const forbidden = opts.forbidden || null;
   w.fetch = async (url) => {
     if (url === "/__gate-one/auth") {
       return sessionPayload
         ? new w.Response(JSON.stringify(sessionPayload), { status: 200 })
         : new w.Response('{"error":"authentication_required"}', { status: 401 });
+    }
+    if (forbidden && String(url).indexOf(forbidden.path) !== -1) {
+      const headers = new Headers();
+      if (forbidden.marked !== false) {
+        headers.set("X-Gate-One-Forbidden", "identity");
+      }
+      headers.set("Content-Type", forbidden.contentType || "application/json");
+      return new w.Response('{"error":"forbidden"}', { status: 403, headers });
     }
     return new w.Response('{"error":"authentication_required"}', { status: 401 });
   };
@@ -112,5 +126,9 @@ export async function mkWindow(guard, html, sessionPayload, uiGate = "[]") {
     click: (el) =>
       el.dispatchEvent(new w.MouseEvent("click", { bubbles: true, cancelable: true })),
     banner: () => w.document.body.textContent.includes("Sign-in required"),
+    forbiddenBanner: () =>
+      w.document.body.textContent.includes("Gate-One message"),
+    forbiddenBannerCount: () =>
+      w.document.querySelectorAll("[data-gtw-forbidden-banner]").length,
   };
 }

@@ -81,6 +81,38 @@ load.
 - `frontend` routes redirect to the login on `401`; API routes get a
   JSON `401`.
 
+An identity failure (`403`) is a **rights refusal**, not an auth problem,
+so a login is never offered (it would loop):
+
+- a **browser navigation** gets a readable built-in HTML page (not the
+  raw JSON body);
+- a **`fetch()`/XHR** keeps the JSON `403` unchanged, so the app handles
+  the refusal itself.
+
+Both are marked with `X-Gate-One-Forbidden`; a `403` coming **from the
+backend** never is (the header is stripped from proxied responses).
+Optional UX (`authGuard.forbidden`):
+
+```json
+{
+  "authGuard": {
+    "forbidden": {
+      "banner": true,
+      "pageUrl": "https://app.example.com/access-denied",
+      "message": "You do not have access to this service."
+    }
+  }
+}
+```
+
+- `banner` — the injected guard shows a dismissable hint on a gateway
+  identity `403` seen by `fetch()`, inviting the front authors to **hide
+  the feature** (`uiGate` / `data-gtw-*`) instead of letting the user hit
+  a dead end. Shown at most once per page load.
+- `pageUrl` — navigations refused on identity are redirected there (`302`)
+  instead of the built-in page.
+- `message` — overrides the built-in page's text.
+
 ## Delegated upstream credentials
 
 A route may call its backend with a **per-user token** supplied by the
