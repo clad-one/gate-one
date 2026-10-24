@@ -611,6 +611,7 @@ func guardInjectedLen(t *testing.T) int {
 		rewriteGuardJSON(route, backend),
 		patchJSONFor(route),
 		forbiddenBannerJSON(route),
+		licenseJSON(gw.config),
 	)
 	return len(script)
 }

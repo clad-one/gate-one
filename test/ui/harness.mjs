@@ -17,8 +17,9 @@ const GUARD_TMPL = path.join(
 );
 const SERVED_URL = process.env.GATEWAY_UI_URL || "https://vers.cladone.com/";
 
-// rendering of guardScript: the 7 Sprintf verbs (loginUrl, authState,
-// uiGate[], userBadge, rewrite DTO, bundle patch[], forbidden banner)
+// rendering of guardScript: the 8 Sprintf verbs (loginUrl, authState,
+// uiGate[], userBadge, rewrite DTO, bundle patch[], forbidden banner,
+// licence status)
 export function renderGuard(opts = {}) {
   const tmpl = readFileSync(GUARD_TMPL, "utf8");
   const loginUrl = opts.loginUrl || "https://login.cladone.com/login";
@@ -28,6 +29,7 @@ export function renderGuard(opts = {}) {
   const rewrite = opts.rewrite || "null";
   const patch = opts.patch || "[]";
   const forbidden = opts.forbidden || "null";
+  const license = opts.license || "null";
   const rendered = tmpl
     .replace("%[1]s", loginUrl)
     .replace("%[2]s", authState)
@@ -35,7 +37,8 @@ export function renderGuard(opts = {}) {
     .replace("%[4]s", userBadge)
     .replace("%[5]s", rewrite)
     .replace("%[6]s", patch)
-    .replace("%[7]s", forbidden);
+    .replace("%[7]s", forbidden)
+    .replace("%[8]s", license);
   if (rendered.includes("%[")) {
     throw new Error("residual % verb in the rendered script");
   }

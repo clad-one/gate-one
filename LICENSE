@@ -7,6 +7,8 @@ Version 1.0 — Droits d'Auteur © [2026] [Benoit Rolland - Cladone-IT]. Tous dr
 
 L'accès au code source du présent logiciel (le « Logiciel ») est fourni gratuitement à des fins d'étude, de test, de développement interne et d'usage personnel. Vous êtes autorisé à copier, modifier et créer des travaux dérivés (y compris sous forme de "fork") du Logiciel, sous réserve du respect strict des conditions de la présente Licence.
 
+L'USAGE PERSONNEL ET L'ÉVALUATION SONT GRATUITS. L'USAGE COMMERCIAL EN PRODUCTION NÉCESSITE UNE LICENCE COMMERCIALE PAYANTE (voir §3).
+
 2. CONDITION CRUCIALE DE CESSION DE DROITS SUR LES TRAVAUX DÉRIVÉS
 
 Le Logiciel est fourni selon un principe de réciprocité commerciale asymétrique. En modifiant le Logiciel, en créant un travail dérivé ou en publiant un "fork" (ci-après dénommé « le Contributeur »), vous acceptez de manière irrévocable les conditions suivantes :
@@ -16,7 +18,9 @@ Le Logiciel est fourni selon un principe de réciprocité commerciale asymétriq
 
 3. RESTRICTIONS COMMERCIALES POUR LES TIERS
 
-Il est strictement interdit à tout tiers ou Contributeur d'utiliser le Logiciel ou ses travaux dérivés pour fournir un service concurrent direct du Concédant Initial, ou pour héberger le logiciel en tant que service payant (SaaS/Cloud), sauf autorisation écrite préalable et expresse du Concédant Initial.
+3.1 Usage commercial en production. Toute exploitation du Logiciel (ou d'un travail dérivé) en production à des fins commerciales — y compris en interne au sein d'une organisation, pour servir des utilisateurs ou des activités professionnelles — nécessite une licence commerciale payante, accordée par écrit par le Concédant Initial. L'étude, le test, l'évaluation et le développement interne (hors production) restent gratuits.
+
+3.2 Interdictions. Il est strictement interdit à tout tiers ou Contributeur d'utiliser le Logiciel ou ses travaux dérivés pour fournir un service concurrent direct du Concédant Initial, ou pour héberger le logiciel en tant que service payant (SaaS/Cloud), sauf autorisation écrite préalable et expresse du Concédant Initial.
 
 4. CONSERVATION DES NOTICES
 

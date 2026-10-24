@@ -27,6 +27,11 @@
   // OWN rights refusal (X-Gate-One-Forbidden marker); null = off. A
   // backend 403 never carries the marker and never triggers it.
   var FORBIDDEN = %[7]s;
+  // Licence (offline signed token, evaluated by the gateway at load):
+  // {state:"registered"|"eval", reason, org, email, plan, exp,
+  //  domains[], features[], url}. Never blocks: the badge shows an
+  // icon; clicking it reveals "registered to: …" (or eval/personal).
+  var LICENSE = %[8]s;
   var LOGIN_ORIGIN = "";
   try { LOGIN_ORIGIN = new URL(LOGIN).origin; } catch (e) {}
   // Logout: same host as the login page (auth-bridge) — clears the
@@ -542,7 +547,7 @@
       // back over it — the button becomes unclickable): doubled
       // class = higher specificity + declared after
       ".cladone-userbadge.cladone-userbadge-open" +
-      "{max-height:24em !important;opacity:1;pointer-events:auto}";
+      "{max-height:34em !important;opacity:1;pointer-events:auto}";
     // anti-FOUC veil for uiGate rules: one CSS rule PER selector (an
     // invalid selector must kill only its own hiding, not the
     // others')
@@ -762,6 +767,20 @@
     // first line (visible even folded): the icon + the identity
     var tab = badgeEl.firstChild;
     tab.textContent = "\uD83D\uDC64 " + String(sessionClaims.preferred_username || "account");
+    // Licence icon (state at a glance): clicking it unfolds the badge
+    // and reveals the details at the BOTTOM of the menu.
+    var lic = LICENSE || { state: "eval", reason: "missing" };
+    var licIcon = document.createElement("button");
+    licIcon.type = "button";
+    licIcon.textContent = lic.state === "registered" ? "\uD83D\uDD11" : "\u2696\uFE0F";
+    licIcon.title = lic.state === "registered"
+      ? "Licence enregistrée"
+      : "Licence d'évaluation / usage personnel";
+    licIcon.setAttribute("aria-label", licIcon.title);
+    licIcon.style.cssText =
+      "border:0;background:transparent;color:inherit;cursor:pointer;" +
+      "font:inherit;padding:0;margin-left:.35em;line-height:1;vertical-align:baseline";
+    tab.appendChild(licIcon);
     var body = badgeEl.lastChild;
     body.textContent = "";
     // claims: true = every claim the probe returned; false = none;
@@ -800,6 +819,54 @@
         encodeURIComponent(location.href);
     };
     body.appendChild(btn);
+
+    // Licence details, at the BOTTOM of the menu (hidden until the
+    // icon is clicked). Registered → "registered to:" + the signed
+    // claims; otherwise eval/personal + a registration link.
+    var licBox = document.createElement("div");
+    licBox.className = "cladone-license";
+    licBox.style.cssText =
+      "display:none;margin-top:.5em;padding-top:.42em;" +
+      "border-top:1px solid rgba(255,255,255,.18);font-size:.92em;" +
+      "line-height:1.45;white-space:normal";
+    function licLine(txt) {
+      var d = document.createElement("div");
+      d.textContent = txt;
+      licBox.appendChild(d);
+    }
+    if (lic.state === "registered") {
+      licLine("registered to:");
+      if (lic.org) licLine(String(lic.org));
+      if (lic.email) licLine(String(lic.email));
+      if (lic.plan) licLine("plan: " + String(lic.plan));
+      if (lic.exp) licLine("exp: " + String(lic.exp));
+      if (lic.domains && lic.domains.length)
+        licLine("domains: " + lic.domains.join(", "));
+      if (lic.features && lic.features.length)
+        licLine("features: " + lic.features.join(", "));
+    } else {
+      licLine("eval / personal license");
+      licLine("commercial production requires a license");
+      if (lic.reason === "expired") licLine("(license expired)");
+      if (lic.url) {
+        var reg = document.createElement("a");
+        reg.href = String(lic.url);
+        reg.target = "_blank";
+        reg.rel = "noopener";
+        reg.textContent = "Register";
+        reg.style.cssText = "color:#9fd0ff;text-decoration:underline";
+        licBox.appendChild(reg);
+      }
+    }
+    body.appendChild(licBox);
+    licIcon.onclick = function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      licBox.style.display =
+        licBox.style.display === "none" ? "block" : "none";
+      // unfold the badge so the details at the bottom become visible
+      if (badgeEl) badgeEl.classList.add("cladone-userbadge-open");
+    };
   }
 
   // "Login invitation" badge mode: after a session death, the same

@@ -19,14 +19,17 @@ package proxy
 // place).
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"cladone/gate-one/internal/core"
+	"cladone/gate-one/internal/license"
 	"cladone/gate-one/internal/pwa"
 )
 
@@ -97,6 +100,7 @@ func buildInjectors(
 			rewriteGuardJSON(route, u),
 			patchJSONFor(route),
 			forbiddenBannerJSON(route),
+			licenseJSON(cfg),
 		)
 		injectors = append(injectors, &guardInjector{
 			host:   route.Host,
@@ -146,6 +150,22 @@ func buildInjectors(
 	}
 
 	return injectors
+}
+
+// licenseJSON: the licence status embedded in the guard script (offline
+// signed token; absent/invalid/expired = evaluation). Never fails.
+func licenseJSON(cfg *core.Config) string {
+	var st license.Status
+	if cfg == nil {
+		st = license.Eval(nil, time.Now())
+	} else {
+		st = license.Eval(cfg.License, time.Now())
+	}
+	b, err := json.Marshal(st)
+	if err != nil {
+		return `{"state":"eval","reason":"invalid"}`
+	}
+	return string(b)
 }
 
 // chainInjectors: the generic ModifyResponse — each injector passes

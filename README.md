@@ -232,4 +232,28 @@ testdata/           reference production config
 
 ## License
 
-Source-available, BSL-custom — see `LICENSE`.
+**Source-available** (not open source), BSL-custom — see `LICENSE`.
+
+- personal use, evaluation, testing and internal development: **free**;
+- **commercial production use requires a paid licence**;
+- no competing service / paid SaaS hosting without written permission.
+
+The gateway stays **fully functional** without a licence: it only shows an
+"eval / personal" notice in the user badge (no kill switch, no phone-home).
+
+Optional `license` block in `api-routes.json`:
+
+```json
+{
+  "license": {
+    "token": "v1.<base64url(claims)>.<base64url(signature)>",
+    "publicKey": "<base64 Ed25519 public key>",
+    "url": "https://example.com/pricing"
+  }
+}
+```
+
+The token is an **Ed25519-signed** payload (`org`, `email`, `plan`, `exp`,
+`domains`, `features`) verified **offline** with `publicKey`; only the public
+key ships (the private signing key never does). Absent, invalid or expired =
+evaluation mode.

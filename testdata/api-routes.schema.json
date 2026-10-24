@@ -11,6 +11,25 @@
       "type": "string",
       "description": "Optional reference to this schema (autocompletion and validation in the editor)."
     },
+    "license": {
+      "type": "object",
+      "description": "Optional offline signed licence (Ed25519). Absent, invalid or expired = evaluation/personal mode: the gateway keeps serving; the user badge shows a notice. The private signing key NEVER ships (only publicKey is embedded).",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "Signed licence token: v1.<base64url(JSON claims)>.<base64url(signature)>."
+        },
+        "publicKey": {
+          "type": "string",
+          "description": "Ed25519 public key, base64 (raw 32 bytes). Public by design, safe to commit."
+        },
+        "url": {
+          "type": "string",
+          "description": "Registration/pricing URL shown by the badge."
+        }
+      }
+    },
     "oidc": {
       "type": "object",
       "description": "The platform's IdP — NO IdP URL is hard-coded in the code: the gateway is deployable by others, for other sites, with other rights. loginUrl = default login page for frontend routes with active guard (overridable per route via authGuard.loginUrl); required if such a route exists. issuer = OIDC issuer announced in the OAuth metadata of MCP routes (authorization_servers); required if an MCP route exists. Refuses to start/reload if a requirement is not met.",

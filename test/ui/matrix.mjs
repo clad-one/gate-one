@@ -172,6 +172,64 @@ const SESSION = {
     : fail("logout: a tab opened?!");
 }
 
+// ── 6c. licence indicator: icon in the handle, details at the bottom ──
+{
+  const badgeCfg =
+    '{"claims":false,"roles":false,"scopes":false,"logoutLabel":"Log out"}';
+
+  // eval / personal
+  const gEval = renderGuard({
+    userBadge: badgeCfg,
+    license:
+      '{"state":"eval","reason":"missing","url":"https://example.test/pricing"}',
+  });
+  const xe = await mkWindow(gEval, html, SESSION);
+  const be = xe.doc.querySelector(".cladone-userbadge");
+  const ie = be.querySelector(".cladone-userbadge-tab button");
+  ie && ie.textContent.includes("⚖")
+    ? ok("licence eval: ⚖ icon in the handle")
+    : fail("licence eval: icon expected in the tab");
+  const boxE = be.querySelector(".cladone-license");
+  boxE && boxE.style.display === "none"
+    ? ok("licence eval: details hidden until click")
+    : fail("licence eval: details must start hidden");
+  xe.click(ie);
+  await tick();
+  be.classList.contains("cladone-userbadge-open")
+    ? ok("licence eval: click unfolds the badge")
+    : fail("licence eval: click must unfold the badge");
+  boxE.style.display === "block" &&
+  boxE.textContent.includes("eval / personal license")
+    ? ok("licence eval: details = eval / personal")
+    : fail("licence eval: details text missing");
+  boxE.querySelector("a")
+    ? ok("licence eval: registration link shown")
+    : fail("licence eval: link expected");
+
+  // registered
+  const gReg = renderGuard({
+    userBadge: badgeCfg,
+    license:
+      '{"state":"registered","reason":"ok","org":"ACME","email":"ops@acme.fr",' +
+      '"plan":"pro","exp":"2027-10-24","domains":["acme.fr"],"features":["sso"]}',
+  });
+  const xr = await mkWindow(gReg, html, SESSION);
+  const br = xr.doc.querySelector(".cladone-userbadge");
+  const ir = br.querySelector(".cladone-userbadge-tab button");
+  ir && ir.textContent.includes("🔑")
+    ? ok("licence registered: 🔑 icon in the handle")
+    : fail("licence registered: key icon expected");
+  const boxR = br.querySelector(".cladone-license");
+  xr.click(ir);
+  await tick();
+  boxR.textContent.includes("registered to:") &&
+  boxR.textContent.includes("ACME") &&
+  boxR.textContent.includes("ops@acme.fr") &&
+  boxR.textContent.includes("plan: pro")
+    ? ok("licence registered: details = registered to + signed claims")
+    : fail("licence registered: details missing claims");
+}
+
 // ── 7. authenticated: silent tab abandonment (option C) ──
 {
   const x = await mkWindow(guard, html, SESSION);

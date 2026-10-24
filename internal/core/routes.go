@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"cladone/gate-one/internal/license"
 )
 
 type Match struct {
@@ -1187,6 +1189,11 @@ type Config struct {
 	// access rights (resource/scope/identity) and per-member tool
 	// filters.
 	MCPSets map[string]*MCPSet `json:"mcpSets,omitempty"`
+
+	// License: optional offline signed licence (see internal/license).
+	// Absent/invalid/expired = evaluation/personal mode (the gateway
+	// keeps serving; the guard badge only shows a notice).
+	License *license.Config `json:"license,omitempty"`
 
 	Routes []Route `json:"routes"`
 }
