@@ -1697,6 +1697,12 @@ func (c *Config) validate() error {
 			return fmt.Errorf("route %s: %v", host, err)
 		}
 
+		if route.MCPActive() {
+			if err := validateMCPStaticHeaders(route); err != nil {
+				return fmt.Errorf("route %s: %v", host, err)
+			}
+		}
+
 		if p := route.PWA; p != nil {
 			for _, pat := range p.networkOnlyPatterns() {
 				if _, err := regexp.Compile(pat); err != nil {
@@ -2197,10 +2203,23 @@ func validateMCPUpstream(route *Route) error {
 		}
 	}
 
+	return nil
+}
+
+// validateMCPStaticHeaders rejects upstream.headers that would override
+// the MCP transport or the gateway identity. Applied to every MCP route
+// (local REST-derived tools or external MCP proxy), because those
+// headers now reach the tool calls. Plain REST routes are unaffected
+// (they legitimately use Authorization/Accept/Cookie).
+func validateMCPStaticHeaders(route *Route) error {
 	if route.Upstream == nil {
 		return nil
 	}
-	for name := range route.Upstream.Headers {
+	for name, value := range route.Upstream.Headers {
+		if !headerFieldName.MatchString(name) {
+			return fmt.Errorf(
+				"upstream.headers[%q]: invalid header name", name)
+		}
 		lower := strings.ToLower(name)
 		switch lower {
 		case "host", "content-length", "transfer-encoding",
@@ -2220,6 +2239,15 @@ func validateMCPUpstream(route *Route) error {
 			return fmt.Errorf(
 				"upstream.headers[%q] is reserved for the MCP proxy",
 				name)
+		}
+		for i := 0; i < len(value); i++ {
+			c := value[i]
+			if c == '\r' || c == '\n' ||
+				(c < 0x20 && c != '\t') || c == 0x7f {
+				return fmt.Errorf(
+					"upstream.headers[%q]: control character in value",
+					name)
+			}
 		}
 	}
 	return nil

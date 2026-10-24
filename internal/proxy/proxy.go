@@ -403,7 +403,9 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 						Prefix: d.PrefixValue(),
 					}
 				}
-				cr.mcp = mcpserver.New(route.Backend, ops, delegated)
+				cr.mcp = mcpserver.New(
+					route.Backend, ops, delegated,
+					staticUpstreamFor(route))
 				cr.mcpOps = ops
 
 				log.Printf(
@@ -524,7 +526,9 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 						Prefix: d.PrefixValue(),
 					}
 				}
-				mcr.mcp = mcpserver.New(rr.Backend, ops, delegated)
+				mcr.mcp = mcpserver.New(
+					rr.Backend, ops, delegated,
+					staticUpstreamFor(&rr))
 				mcr.mcpOps = ops
 			} else if svc.mcpUpstream != nil {
 				mcr.mcpUpstream = svc.mcpUpstream.cloneWithTools(member.Tools)
@@ -688,6 +692,26 @@ func routeExposed(r *core.Route, live map[string]bool) bool {
 		return true
 	}
 	return live[r.MCP.Name]
+}
+
+// staticUpstreamFor builds the static upstream headers/Host of a route
+// (upstream.headers, resolved at load). nil when none.
+func staticUpstreamFor(route *core.Route) *mcpserver.StaticUpstream {
+	if route == nil || route.Upstream == nil {
+		return nil
+	}
+	if len(route.Upstream.Headers) == 0 &&
+		route.Upstream.HostOverride == "" {
+		return nil
+	}
+	h := make(map[string]string, len(route.Upstream.Headers))
+	for k, v := range route.Upstream.Headers {
+		h[k] = v
+	}
+	return &mcpserver.StaticUpstream{
+		Headers:      h,
+		HostOverride: route.Upstream.HostOverride,
+	}
 }
 
 // filterMCPOperations keeps the operations allowed by a set member's

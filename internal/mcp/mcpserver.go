@@ -30,6 +30,14 @@ type DelegatedCredentials struct {
 	Prefix string
 }
 
+// StaticUpstream: static headers (and optional Host override) sent to
+// the backend on every tool call. Values are already resolved at load
+// (${VAR}); an empty value removes the header.
+type StaticUpstream struct {
+	Headers      map[string]string
+	HostOverride string
+}
+
 // New builds the MCP server for one route. ops is the resolved
 // operation list (may be empty: the server then exposes no tool, but
 // still answers initialize/tools/list).
@@ -37,6 +45,7 @@ func New(
 	backend string,
 	ops []Operation,
 	delegated *DelegatedCredentials,
+	static *StaticUpstream,
 ) *Server {
 
 	server := mcp.NewServer(
@@ -56,6 +65,7 @@ func New(
 			op:        ops[i],
 			client:    client,
 			delegated: delegated,
+			static:    static,
 		}
 
 		server.AddTool(

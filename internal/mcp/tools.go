@@ -58,6 +58,7 @@ type toolHandler struct {
 	op        Operation
 	client    *http.Client
 	delegated *DelegatedCredentials
+	static    *StaticUpstream
 }
 
 func (h *toolHandler) call(
@@ -249,6 +250,22 @@ func (h *toolHandler) forwardIdentity(
 	httpReq *http.Request,
 	req *mcp.CallToolRequest,
 ) {
+
+	// Static upstream headers (upstream.headers) are applied first so
+	// the gateway identity and the delegated token take precedence. An
+	// empty value removes the header (same semantics as the proxy).
+	if h.static != nil {
+		for k, v := range h.static.Headers {
+			if v == "" {
+				httpReq.Header.Del(k)
+				continue
+			}
+			httpReq.Header.Set(k, v)
+		}
+		if h.static.HostOverride != "" {
+			httpReq.Host = h.static.HostOverride
+		}
+	}
 
 	if req.Extra == nil {
 		return
