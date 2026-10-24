@@ -112,11 +112,6 @@ func TestValidateMCPSetsRejects(t *testing.T) {
 			"duplicate member path",
 		},
 		{
-			"set without resource",
-			func(c *Config) { c.MCPSets["git"].Resource = "" },
-			"resource required",
-		},
-		{
 			"set without members",
 			func(c *Config) { c.MCPSets["git"].Members = nil },
 			"at least one member",

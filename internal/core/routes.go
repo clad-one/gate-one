@@ -1809,14 +1809,19 @@ func (c *Config) validateMCPSets() error {
 		if ep == "" {
 			return fmt.Errorf("mcpSets[%q]: endpoint required", name)
 		}
-		if strings.TrimSpace(set.Resource) == "" {
-			return fmt.Errorf("mcpSets[%q]: resource required", name)
-		}
-		if u, err := url.Parse(set.Resource); err != nil ||
-			u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf(
-				"mcpSets[%q]: resource %q must be an absolute URL",
-				name, set.Resource)
+		if set.Resource != "" {
+			if u, err := url.Parse(set.Resource); err != nil ||
+				u.Scheme == "" || u.Host == "" {
+				return fmt.Errorf(
+					"mcpSets[%q]: resource %q must be an absolute URL",
+					name, set.Resource)
+			}
+			if other, dup := resources[set.Resource]; dup {
+				return fmt.Errorf(
+					"mcpSets[%q]: resource %q already used by %s",
+					name, set.Resource, other)
+			}
+			resources[set.Resource] = "set " + name
 		}
 		if id := set.Identity; id != nil &&
 			(id.Method != "" || len(id.Query) > 0 ||
@@ -1829,12 +1834,6 @@ func (c *Config) validateMCPSets() error {
 			return fmt.Errorf(
 				"mcpSets[%q]: at least one member required", name)
 		}
-		if other, dup := resources[set.Resource]; dup {
-			return fmt.Errorf(
-				"mcpSets[%q]: resource %q already used by %s",
-				name, set.Resource, other)
-		}
-		resources[set.Resource] = "set " + name
 		setsByHost[normalizeHostName(set.Host)]++
 
 		memberPaths := map[string]bool{}

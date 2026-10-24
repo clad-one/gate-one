@@ -354,11 +354,11 @@
       "type": "object",
       "description": "An MCP access unit grouping services under one endpoint; carries the audience (resource), scope and identity of the group.",
       "additionalProperties": false,
-      "required": ["host", "endpoint", "resource", "members"],
+      "required": ["host", "endpoint", "members"],
       "properties": {
         "host": { "type": "string", "description": "Public host serving the set." },
         "endpoint": { "type": "string", "description": "Mount path of the set on that host (\"/\" allowed)." },
-        "resource": { "type": "string", "description": "OAuth protected-resource identifier (audience) of the set — explicit, never derived." },
+        "resource": { "type": "string", "description": "OAuth protected-resource identifier (audience) of the set. Empty = the set endpoint URL." },
         "scope": { "type": "string", "description": "MCP scope required from clients of this set. Default: mcpDefaults.scope, else mcp-tools." },
         "identity": { "$ref": "#/definitions/identityMatch" },
         "members": {
