@@ -20,6 +20,15 @@ import (
 // Virtual prefix served by the gateway itself, before any route proxying.
 const PathPrefix = "/__gate-one_pwa/"
 
+// GatewayInternalPrefix: gateway-served endpoints (auth-state probe,
+// stats). They must NEVER be cached by the client runtime: a stale
+// identity answer would show the wrong gating after login/logout, and
+// the probe explicitly answers Cache-Control: no-store (2026-10-25
+// incident: the universal GET cache served a cached "authenticated"
+// 200 after logout). Hard-coded like PathPrefix — these paths are the
+// gateway's own contract, not a deployment choice.
+const GatewayInternalPrefix = "/__gate-one/"
+
 // SwURL: URL of the unified service worker (PWA and/or client-side
 // rewriting), served by the gateway pre-authentication,
 // pass-through no-cache, requested scope '/'. Shared by the PWA
@@ -582,12 +591,13 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
 	polHash := fmt.Sprintf("%x", sha256.Sum256(apiCachePolicyJSON(all)))[:8]
 	cacheName += "-v" + apiCacheLogicVersion + "-" + polHash
 
-	// Exclusion filter: the gateway's virtual prefix, declared
-	// prefixes, declared endpoints' paths (variant A: a declared
-	// endpoint is master of its path, every method), and regular
-	// expressions tested against the COMPLETE URL (pathname + query
-	// — a particular parameter can disqualify a request).
-	excludes := []string{PathPrefix}
+	// Exclusion filter: the gateway's virtual prefixes (PWA assets and
+	// its own endpoints — auth probe, stats), declared prefixes,
+	// declared endpoints' paths (variant A: a declared endpoint is
+	// master of its path, every method), and regular expressions
+	// tested against the COMPLETE URL (pathname + query — a particular
+	// parameter can disqualify a request).
+	excludes := []string{PathPrefix, GatewayInternalPrefix}
 	excludes = append(excludes, all.Excludes...)
 	for _, c := range declared {
 		excludes = append(excludes, c.Path)

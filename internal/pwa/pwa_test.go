@@ -123,6 +123,28 @@ func TestServiceWorkerRewriteTargets(t *testing.T) {
 	}
 }
 
+// Gateway-internal endpoints are excluded from the universal GET cache
+// by default: caching the auth probe would replay a stale identity
+// (badge/gating wrong, logout apparently ineffective). The probe is
+// answered with Cache-Control: no-store, which the SW cache ignores on
+// its own.
+func TestServiceWorkerExcludesGatewayInternal(t *testing.T) {
+	pol := emptyPolicy()
+	pol.ApiGETCache = &core.PWAApiGETCache{}
+	h := New(pol)
+
+	sw := h.swJS()
+
+	for _, want := range []string{
+		`!url.pathname.startsWith('/__gate-one/')`,     // auth probe + gateway endpoints
+		`!url.pathname.startsWith('/__gate-one_pwa/')`, // the SW's own virtual assets
+	} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("sw.js catch-all does not exclude %s", want)
+		}
+	}
+}
+
 func TestServiceWorkerApiCache(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCache = &core.PWAApiCache{
