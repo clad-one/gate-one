@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"cladone/gate-one/internal/core"
 )
 
 // upstreamTestServer: echo backend simulating the essentials of a
@@ -40,6 +42,7 @@ func upstreamTestServer(t *testing.T) *httptest.Server {
 			"host":            r.Host,
 			"authorization":   r.Header.Get("Authorization"),
 			"custom":          r.Header.Get("X-Custom"),
+			"cookie":          r.Header.Get("Cookie"),
 			"strip_present":   len(r.Header.Values("X-Strip-Me")) > 0,
 			"accept-encoding": r.Header.Get("Accept-Encoding"),
 		})
@@ -377,6 +380,124 @@ func TestUpstreamForwardsClientAuthorization(t *testing.T) {
 	})
 	if got := echoOf(t, resp)["authorization"]; got != "Basic base64-client" {
 		t.Errorf("client Authorization not forwarded: %v", got)
+	}
+}
+
+// stripCookies (default "all"): the platform session cookies carry
+// Domain=<parent domain> and the browser sends them to EVERY public
+// host. A proxified third-party site must never receive them.
+func TestUpstreamStripsPlatformCookiesByDefault(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*", "frontend": true,
+			"backend": "BACKEND",
+			"upstream": {"host": true}
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/echo", map[string]string{
+		"Cookie": "access_token=SECRET; refresh_token=R; id_token=I; session=S",
+	})
+
+	if got := echoOf(t, resp)["cookie"]; got != "" {
+		t.Errorf("session cookies forwarded to the external origin: %q", got)
+	}
+}
+
+// stripCookies "all" + keep: the proxified app's own cookies survive
+// (byte-exact), the platform ones do not.
+func TestUpstreamKeepCookies(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*",
+			"backend": "BACKEND",
+			"upstream": {
+			  "stripCookies": "all",
+			  "keep": ["app_theme", "app_session"]
+			}
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/echo", map[string]string{
+		"Cookie": "access_token=SECRET; app_theme=dark; app_session=abc+def; other=1",
+	})
+
+	if got := echoOf(t, resp)["cookie"]; got != "app_theme=dark; app_session=abc+def" {
+		t.Errorf("kept cookies = %q, want app_theme=dark; app_session=abc+def", got)
+	}
+}
+
+// stripCookies "none": historical behavior (everything forwarded) —
+// explicit opt-out for an origin that relies on the platform cookies.
+func TestUpstreamStripCookiesNone(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*",
+			"backend": "BACKEND",
+			"upstream": {"stripCookies": "none"}
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/echo", map[string]string{
+		"Cookie": "access_token=SECRET; app=1",
+	})
+
+	if got := echoOf(t, resp)["cookie"]; got != "access_token=SECRET; app=1" {
+		t.Errorf("stripCookies=none modified the Cookie header: %q", got)
+	}
+}
+
+// An explicitly configured Cookie header is applied AFTER the strip:
+// a machine-to-machine credential can be sent even when the client's
+// cookies are removed.
+func TestUpstreamHeadersRestoreCookie(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*",
+			"backend": "BACKEND",
+			"upstream": {"stripCookies": "all", "headers": {"Cookie": "svc=token"}}
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/echo", map[string]string{
+		"Cookie": "access_token=SECRET",
+	})
+
+	if got := echoOf(t, resp)["cookie"]; got != "svc=token" {
+		t.Errorf("configured Cookie = %q, want svc=token", got)
+	}
+}
+
+// Internal backends (no upstream policy) keep receiving the browser's
+// cookies: the filter only exists on the external-upstream path.
+func TestInternalBackendKeepsCookies(t *testing.T) {
+	gw, _ := upstreamGateway(t, `{
+		"routes": [{
+			"host": "public.test", "path": "/*",
+			"backend": "BACKEND"
+		}]
+	}`)
+
+	resp := doRequestWithHeaders(t, gw, "public.test", "/echo", map[string]string{
+		"Cookie": "access_token=SECRET",
+	})
+
+	if got := echoOf(t, resp)["cookie"]; got != "access_token=SECRET" {
+		t.Errorf("internal backend lost the Cookie header: %q", got)
+	}
+}
+
+// Several Cookie header lines: each is filtered independently and the
+// empty ones disappear.
+func TestUpstreamStripCookiesMultipleLines(t *testing.T) {
+	up := &core.UpstreamPolicy{StripCookies: "all", Keep: []string{"app"}}
+	req := httptest.NewRequest(http.MethodGet, "http://public.test/", nil)
+	req.Header["Cookie"] = []string{"access_token=SECRET", "app=1; refresh_token=R"}
+
+	stripClientCookies(up, req)
+
+	if got := req.Header.Values("Cookie"); len(got) != 1 || got[0] != "app=1" {
+		t.Errorf("Cookie lines = %#v, want [app=1]", got)
 	}
 }
 

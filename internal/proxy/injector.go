@@ -68,7 +68,13 @@ func buildInjectors(
 	injectsBody bool,
 ) []injector {
 
-	injectors := make([]injector, 0, 6)
+	injectors := make([]injector, 0, 7)
+
+	// injectedHTML: every static HTML fragment the gateway adds to the
+	// document. The CSP layer hashes their inline scripts at compile
+	// time (a strict origin policy must not block what the gateway
+	// itself injects).
+	var injectedHTML []string
 
 	if injectsBody {
 		injectors = append(injectors, &gzipDecodeInjector{host: route.Host})
@@ -106,6 +112,7 @@ func buildInjectors(
 			host:   route.Host,
 			script: script,
 		})
+		injectedHTML = append(injectedHTML, script)
 	}
 
 	if rwPlan != nil {
@@ -133,6 +140,7 @@ func buildInjectors(
 
 	if route.PWA != nil && route.PWA.Enabled {
 		injectors = append(injectors, &pwaInjector{})
+		injectedHTML = append(injectedHTML, pwa.InjectedHeadHTML())
 	}
 
 	if bundle := route.InjectionBundle(); bundle != nil {
@@ -146,6 +154,33 @@ func buildInjectors(
 		injectors = append(injectors, &customInjector{
 			host:   route.Host,
 			bundle: bundle,
+		})
+		for j := range bundle.Contents {
+			injectedHTML = append(injectedHTML, bundle.Contents[j].Content)
+		}
+	}
+
+	// CSP: installed LAST so the nonce stamper sees the bytes the
+	// other injectors added (guard, PWA, custom) — no per-feature
+	// nonce plumbing. The hashes of the gateway's own inline scripts
+	// are computed once here, at route compile time.
+	if csp := route.CSP; csp != nil && csp.Mode != "off" {
+		var hashes []string
+		for _, frag := range injectedHTML {
+			hashes = append(hashes, inlineScriptHashes([]byte(frag))...)
+		}
+		hashes = dedupeStrings(hashes)
+		log.Printf(
+			"CSP enabled host=%s mode=%s reportOnly=%v stamp=%q hashes=%d",
+			route.Host,
+			csp.Mode,
+			csp.ReportOnly,
+			csp.StampScripts,
+			len(hashes),
+		)
+		injectors = append(injectors, &cspInjector{
+			policy: csp,
+			hashes: hashes,
 		})
 	}
 

@@ -23,6 +23,12 @@ import (
 // the client); value "" = header removed from the request (never
 // transmitted empty). These values are never logged (secrets:
 // basic auth, service tokens).
+//
+// Cookies go through the opposite filter: the platform session
+// cookies are scoped to the parent domain, so the browser presents
+// them to every public host — they are stripped before the static
+// headers are applied (an explicitly configured "Cookie" header
+// still wins).
 func applyUpstreamDirector(
 	up *core.UpstreamPolicy,
 	backend *url.URL,
@@ -36,6 +42,8 @@ func applyUpstreamDirector(
 		req.Host = backend.Host
 	}
 
+	stripClientCookies(up, req)
+
 	for k, v := range up.Headers {
 		if v == "" {
 			req.Header.Del(k)
@@ -43,6 +51,60 @@ func applyUpstreamDirector(
 		}
 		req.Header.Set(k, v)
 	}
+}
+
+// stripClientCookies removes the browser's cookies from the request
+// sent to an external backend (upstream.stripCookies). The gateway
+// session cookies carry Domain=<parent domain> (e.g. .cladone.com):
+// the browser therefore sends the user's access/refresh tokens to
+// every public host, and without this filter a proxified third-party
+// site receives them on every request. "all" (default) keeps only the
+// names listed in upstream.keep — the proxified app's own cookies,
+// translated back by rewriteCookies. Textual surgery per pair: kept
+// values come out byte-exact.
+func stripClientCookies(up *core.UpstreamPolicy, req *http.Request) {
+
+	if up.StripCookies == "none" {
+		return
+	}
+
+	lines := req.Header.Values("Cookie")
+	if len(lines) == 0 {
+		return
+	}
+
+	keep := make(map[string]bool, len(up.Keep))
+	for _, name := range up.Keep {
+		keep[name] = true
+	}
+
+	out := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		kept := make([]string, 0, 8)
+		for _, pair := range strings.Split(line, ";") {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			name := pair
+			if i := strings.IndexByte(name, '='); i >= 0 {
+				name = name[:i]
+			}
+			if keep[strings.TrimSpace(name)] {
+				kept = append(kept, pair)
+			}
+		}
+		if len(kept) > 0 {
+			out = append(out, strings.Join(kept, "; "))
+		}
+	}
+
+	if len(out) == 0 {
+		req.Header.Del("Cookie")
+		return
+	}
+	req.Header["Cookie"] = out
 }
 
 // upstreamResponseModifier returns the upstream policy's response
@@ -176,16 +238,10 @@ func rewriteUpstreamLocation(
 	resp.Header.Set("Location", ru.String())
 }
 
-// cookie names reserved for the gateway session (set by auth-bridge
-// on the same public host as every proxified site): a Set-Cookie
-// from the origin carrying one of them would overwrite the
-// browser's auth.
-var reservedCookieNames = map[string]bool{
-	"access_token":  true,
-	"refresh_token": true,
-	"id_token":      true,
-	"session":       true,
-}
+// cookie names reserved for the gateway session are listed in
+// core.ReservedCookieNames (auth-bridge sets them on the parent
+// domain): a Set-Cookie from the origin carrying one of them would
+// overwrite the browser's auth.
 
 // rewriteUpstreamCookies translates Set-Cookies set by the origin
 // toward the public host (upstream.rewriteCookies policy). A Domain
@@ -214,7 +270,7 @@ func rewriteUpstreamCookies(
 	for _, line := range lines {
 		name, _, _ := strings.Cut(line, "=")
 		name = strings.TrimSpace(name)
-		if reservedCookieNames[name] {
+		if core.IsReservedCookieName(name) {
 			// the name, never the value
 			log.Printf(
 				"COOKIE dropped host=%s: reserved name %q — an origin Set-Cookie would overwrite the gateway session",

@@ -189,6 +189,11 @@ func printRoutes(cfg *core.Config) {
 			if r.Upstream.RewriteCookies != nil {
 				p = append(p, "rewriteCookies")
 			}
+			if r.Upstream.StripCookies == "none" {
+				p = append(p, "cookies:forward")
+			} else {
+				p = append(p, "cookies:stripped")
+			}
 		}
 		if r.OpenAPI != nil {
 			p = append(p, "openapi")
@@ -198,6 +203,12 @@ func printRoutes(cfg *core.Config) {
 		}
 		if r.PWA != nil && r.PWA.Enabled {
 			p = append(p, "pwa")
+		}
+		if r.CSP != nil && r.CSP.Mode != "off" {
+			p = append(p, "csp:"+r.CSP.Mode)
+			if r.CSP.ReportOnly {
+				p = append(p, "csp:report-only")
+			}
 		}
 		if r.UserBadge != nil {
 			p = append(p, "userBadge")

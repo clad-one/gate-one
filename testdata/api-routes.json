@@ -1,14 +1,71 @@
 {
   "$schema": "./api-routes.schema.json",
+  "license": {
+    "token": "***REMOVED-LICENCE-TOKEN***",
+    "publicKey": "***REMOVED-LICENCE-KEY***",
+    "url": "https://cladone.com/"
+  },
   "oidc": {
     "loginUrl": "https://login.cladone.com/login",
     "issuer": "https://auth.cladone.com/realms/cladone"
+  },
+  "securityHeaders": {
+    "hstsMaxAge": 15552000,
+    "nosniff": true,
+    "referrerPolicy": "strict-origin-when-cross-origin"
   },
   "tokenBroker": {
     "url": "http://token-broker:4000",
     "secretEnv": "TOKEN_BROKER_SHARED_SECRET"
   },
-  "routes": [    
+  "mcpSets": {
+    "grammar": {
+      "host": "mcp.cladone.com",
+      "endpoint": "/grammar",
+      "resource": "https://mcp.cladone.com/grammar",
+      "scope": "mcp-tools",
+      "members": [
+        {
+          "service": "grammar",
+          "path": "/"
+        }
+      ]
+    },
+    "git-services-read": {
+      "host": "mcp.cladone.com",
+      "endpoint": "/git-services-read",
+      "resource": "https://mcp.cladone.com/git-services-read",
+      "scope": "mcp-tools",
+      "members": [
+        {
+          "service": "github",
+          "path": "/github",
+          "tools": [
+            "list_repos",
+            "get_repo"
+          ]
+        },
+        {
+          "service": "github",
+          "path": "/issues",
+          "tools": [
+            "list_issues"
+          ]
+        },
+        {
+          "service": "gitlab",
+          "path": "/gitlab",
+          "tools": [
+            "list_projects",
+            "get_project",
+            "list_issues"
+          ],
+          "enabled": false
+        }
+      ]
+    }
+  },
+  "routes": [
     {
       "host": "gram.cladone.com",
       "path": "/mcp",
@@ -37,6 +94,27 @@
       }
     },
     {
+      "host": "mcp.cladone.com",
+      "path": "/grammar/*",
+      "backend": "http://grammar:8000",
+      "openapi": {
+        "url": "http://grammar:8000/openapi.json",
+        "public": false
+      },
+      "mcp": {
+        "enabled": true,
+        "scope": "mcp-tools",
+        "operations": [
+          {
+            "name": "processStream",
+            "operationId": "process_api_process_stream_post"
+          }
+        ],
+        "name": "grammar",
+        "standalone": false
+      }
+    },
+    {
       "host": "vers.cladone.com",
       "path": "/*",
       "frontend": true,
@@ -44,13 +122,19 @@
       "autoHead": true,
       "userBadge": {
         "position": "right",
-        "claims": ["preferred_username", "email", "email_verified"],
+        "claims": [
+          "preferred_username",
+          "email",
+          "email_verified"
+        ],
         "logoutLabel": "Déconnexion"
       },
       "uiGate": [
         {
           "selector": ".liaison-options",
-          "roles": ["offline_access"]
+          "roles": [
+            "offline_access"
+          ]
         }
       ],
       "authGuard": {
@@ -58,11 +142,35 @@
           "banner": true
         }
       },
+      "csp": {
+        "mode": "nonce",
+        "reportOnly": true,
+        "directives": {
+          "default-src": "'self'",
+          "script-src": "'self'",
+          "img-src": [
+            "'self'",
+            "data:"
+          ],
+          "connect-src": [
+            "'self'",
+            "https://auth.cladone.com"
+          ],
+          "worker-src": "'self'",
+          "frame-ancestors": "'none'",
+          "object-src": "'none'",
+          "base-uri": "'self'",
+          "form-action": "'self'"
+        }
+      },
       "pwa": {
         "enabled": true,
         "name": "Solveur poétique",
         "themeColor": "#4285f4",
-        "icons": ["/icon-192.png", "/icon-512.png"],
+        "icons": [
+          "/icon-192.png",
+          "/icon-512.png"
+        ],
         "apiGETCache": {
           "excludePatterns": [
             "^https://vers\\.cladone\\.com/api/poems\\?.*user=admin"
@@ -101,19 +209,23 @@
     {
       "host": "vers.cladone.com",
       "path": "/api/process_stream",
-      "backend":"http://versifier:9292",
-      "auth":{
-        "when":{
-          "method":"POST",
-          "body":{
-            "coupes":true
+      "backend": "http://versifier:9292",
+      "auth": {
+        "when": {
+          "method": "POST",
+          "body": {
+            "coupes": true
           }
         },
-        "identity":{
-          "roles":["offline_access"],
-          "scopes":["profile"],
-          "claims":{
-            "email":"*"
+        "identity": {
+          "roles": [
+            "offline_access"
+          ],
+          "scopes": [
+            "profile"
+          ],
+          "claims": {
+            "email": "*"
           }
         }
       },
@@ -129,14 +241,14 @@
     {
       "host": "vers.cladone.com",
       "path": "/api/demo/email-verified",
-      "backend":"http://versifier:9292",
-      "auth":{
-        "when":{
-          "method":"GET"
+      "backend": "http://versifier:9292",
+      "auth": {
+        "when": {
+          "method": "GET"
         },
-        "identity":{
-          "claims":{
-            "email_verified":"true"
+        "identity": {
+          "claims": {
+            "email_verified": "true"
           }
         }
       }
@@ -150,18 +262,25 @@
       "auth": {},
       "userBadge": {
         "position": "right",
-        "claims": ["preferred_username", "email", "email_verified"],
+        "claims": [
+          "preferred_username",
+          "email",
+          "email_verified"
+        ],
         "logoutLabel": "Déconnexion"
       },
       "upstream": {
         "host": true,
+        "stripCookies": "all",
         "headers": {
           "Authorization": "Basic ${JACQUELOT_BASIC_AUTH}"
         },
         "rewriteRedirects": true,
         "rewriteBody": {
           "enabled": true,
-          "except": ["/CorrespondancesBonPapaEtBonneMaman/"]
+          "except": [
+            "/CorrespondancesBonPapaEtBonneMaman/"
+          ]
         },
         "browserCache": {
           "imagesMaxAgeSeconds": 604800
@@ -176,9 +295,78 @@
       "auth": {},
       "upstream": {
         "host": true,
+        "stripCookies": "all",
         "delegated": {
           "provider": "github"
         }
+      }
+    },
+    {
+      "host": "mcp.cladone.com",
+      "path": "/internal-github",
+      "backend": "https://api.github.com",
+      "auth": {},
+      "upstream": {
+        "delegated": {
+          "provider": "github"
+        }
+      },
+      "openapi": {
+        "url": "http://landing/github-openapi.json",
+        "public": false
+      },
+      "mcp": {
+        "enabled": true,
+        "name": "github",
+        "standalone": false,
+        "operations": [
+          {
+            "name": "list_repos",
+            "operationId": "list_repos"
+          },
+          {
+            "name": "get_repo",
+            "operationId": "get_repo"
+          },
+          {
+            "name": "list_issues",
+            "operationId": "list_issues"
+          }
+        ]
+      }
+    },
+    {
+      "host": "mcp.cladone.com",
+      "path": "/internal-gitlab",
+      "backend": "https://gitlab.com/api/v4",
+      "auth": {},
+      "upstream": {
+        "delegated": {
+          "provider": "gitlab"
+        }
+      },
+      "openapi": {
+        "url": "http://landing/gitlab-openapi.json",
+        "public": false
+      },
+      "mcp": {
+        "enabled": true,
+        "name": "gitlab",
+        "standalone": false,
+        "operations": [
+          {
+            "name": "list_projects",
+            "operationId": "list_projects"
+          },
+          {
+            "name": "get_project",
+            "operationId": "get_project"
+          },
+          {
+            "name": "list_issues",
+            "operationId": "list_issues"
+          }
+        ]
       }
     }
   ]

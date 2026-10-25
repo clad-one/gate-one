@@ -283,6 +283,74 @@ func TestBrowserCacheValidationForcesPositive(t *testing.T) {
 	}
 }
 
+// stripCookies: only "all" and "none" are accepted (a typo must not
+// silently keep forwarding the platform session cookies).
+func TestStripCookiesValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+
+	for _, mode := range []string{"ALL", "some", "platform-stripped"} {
+		cfg := fmt.Sprintf(`{
+			"routes": [{
+				"host": "a.local", "path": "/*", "backend": "https://ext.example",
+				"upstream": {"stripCookies": %q}
+			}]
+		}`, mode)
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Errorf("stripCookies = %q: acceptance expected to be refused", mode)
+		}
+	}
+}
+
+// upstream.keep: an invalid name is refused, and a name reserved for
+// the gateway session must never be kept (it would reach the origin).
+func TestStripCookiesKeepValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+
+	for _, name := range []string{"", "a b", "x;y", "a=b", "access_token", "refresh_token", "id_token", "session"} {
+		cfg := fmt.Sprintf(`{
+			"routes": [{
+				"host": "a.local", "path": "/*", "backend": "https://ext.example",
+				"upstream": {"stripCookies": "all", "keep": [%q]}
+			}]
+		}`, name)
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Errorf("upstream.keep %q: acceptance expected to be refused", name)
+		}
+	}
+}
+
+// Valid values deserialize and load without error.
+func TestStripCookiesValid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfg := `{
+		"routes": [{
+			"host": "a.local", "path": "/*", "backend": "https://ext.example",
+			"upstream": {"stripCookies": "all", "keep": ["app_theme", "app_session"]}
+		}]
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	up := c.Routes[0].Upstream
+	if up == nil || up.StripCookies != "all" || len(up.Keep) != 2 ||
+		up.Keep[0] != "app_theme" || up.Keep[1] != "app_session" {
+		t.Errorf("stripCookies/keep not deserialized: %+v", up)
+	}
+}
+
 // A route without an upstream policy must not get an empty one created.
 func TestUpstreamAbsent(t *testing.T) {
 	dir := t.TempDir()

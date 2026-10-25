@@ -14,6 +14,11 @@ import (
 const injection = `<link rel="manifest" href="` + PathPrefix + `manifest.json">` +
 	`<script>navigator.serviceWorker.register('` + SwURL + `',{scope:'/'})</script>`
 
+// InjectedHeadHTML: the fragments the gateway injects into <head>.
+// Exported so the CSP layer can hash the inline script it adds (a
+// strict origin policy must not block it).
+func InjectedHeadHTML() string { return injection }
+
 // InjectResponse modifies an upstream HTML response in place, adding
 // the PWA tags. Non-HTML or non-200 responses pass through untouched.
 func InjectResponse(resp *http.Response) error {

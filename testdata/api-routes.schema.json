@@ -11,6 +11,46 @@
       "type": "string",
       "description": "Optional reference to this schema (autocompletion and validation in the editor)."
     },
+    "securityHeaders": {
+      "type": "object",
+      "description": "Platform-wide response hardening, emitted by the gateway on EVERY response it serves (proxied or generated: health, stats, 401/403, MCP metadata, PWA assets, CSP collector). Declaring the block applies the secure defaults; each field can be tightened or disabled. Referrer-Policy is only set when the response does not already carry one (a proxified app's stricter policy wins). Absent = nothing (an install whose edge proxy already sets them can opt out).",
+      "additionalProperties": false,
+      "properties": {
+        "hstsMaxAge": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 63072000,
+          "description": "Strict-Transport-Security max-age, in seconds. Absent = 15552000 (180 days); 0 = header omitted (e.g. a host that must stay reachable in plain HTTP). Keep includeSubDomains/preload off until every subdomain is HTTPS-only: with preload the choice becomes permanent in browsers."
+        },
+        "hstsIncludeSubDomains": {
+          "type": "boolean",
+          "description": "Append includeSubDomains. Default false."
+        },
+        "hstsPreload": {
+          "type": "boolean",
+          "description": "Append preload. Requires hstsIncludeSubDomains (refused at load otherwise). Default false."
+        },
+        "nosniff": {
+          "type": "boolean",
+          "description": "X-Content-Type-Options: nosniff. Default true."
+        },
+        "referrerPolicy": {
+          "type": "string",
+          "enum": [
+            "",
+            "no-referrer",
+            "no-referrer-when-downgrade",
+            "origin",
+            "origin-when-cross-origin",
+            "same-origin",
+            "strict-origin",
+            "strict-origin-when-cross-origin",
+            "unsafe-url"
+          ],
+          "description": "Referrer-Policy value. Absent = strict-origin-when-cross-origin; empty string = header omitted."
+        }
+      }
+    },
     "license": {
       "type": "object",
       "description": "Optional offline signed licence (Ed25519). Absent, invalid or expired = evaluation/personal mode: the gateway keeps serving; the user badge shows a notice. The private signing key NEVER ships (only publicKey is embedded).",
@@ -568,6 +608,43 @@
         }
       }
     },
+    "cspPolicy": {
+      "type": "object",
+      "description": "Content-Security-Policy emitted (or amended) by the gateway — the only component able to generate a per-response nonce and write it into the HTML it already rewrites (guard, PWA, custom injections). The origin's policy is NEVER removed or weakened: the gateway's policy is added as a SECOND header (browsers enforce all of them, so the effective rule is the strictest) and the hashes of the gateway's own injected scripts are APPENDED to the origin's script-src (script-src-elem > script-src > default-src). Applied to HTML responses only.",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["off", "merge", "hash", "nonce"],
+          "description": "\"off\" = nothing (the origin's policy passes as-is); \"merge\" = keep the origin policy and only add the hashes of the gateway's injected scripts (no policy of our own); \"hash\" = emit our policy with those hashes, no body rewrite; \"nonce\" = emit our policy with a per-response nonce and stamp the HTML in STREAMING mode (O(1) memory, upstream forced to gzip so the body is plain text)."
+        },
+        "reportOnly": {
+          "type": "boolean",
+          "description": "Emit Content-Security-Policy-Report-Only instead of the enforcing header (progressive rollout: violations are collected, nothing is blocked). Requires mode nonce or hash."
+        },
+        "reportTo": {
+          "type": "string",
+          "pattern": "^/[^\\s?#]*$",
+          "description": "Local path served by the gateway collecting the violations (report-uri). Default: /__gate-one_csp/report. Bounded ring buffer (256 entries), 16 KiB body limit, 50 reports/second, never authenticated."
+        },
+        "stampScripts": {
+          "type": "string",
+          "enum": ["inline", "all"],
+          "description": "\"inline\" (default) = only <script> tags WITHOUT src receive the nonce (external scripts stay governed by the host allow-list); \"all\" = every <script> tag. Nonce mode only. A tag that already carries a nonce is never rewritten."
+        },
+        "directives": {
+          "type": "object",
+          "description": "Directive name → sources, as one string (\"'self' https://x\") or an array. The gateway appends the nonce (nonce mode) and the injected scripts' hashes to script-src, and report-uri when reportTo is set.",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+            ]
+          }
+        }
+      }
+    },
     "upstreamPolicy": {
       "type": "object",
       "description": "Join to a backend outside the internal network (proxified external site — e.g. Cloudflare Pages/Workers). Absent = unchanged historical behavior: public Host preserved, client headers passed as-is.",
@@ -593,6 +670,17 @@
         "responseHeaders": { "$ref": "#/definitions/upstreamResponseHeaders" },
         "rewriteBody": { "$ref": "#/definitions/rewriteBodyPolicy" },
         "rewriteCookies": { "$ref": "#/definitions/rewriteCookiesPolicy" },
+        "stripCookies": {
+          "type": "string",
+          "enum": ["all", "none"],
+          "description": "REQUEST-side cookie filtering toward the backend. The gateway session cookies (access_token, refresh_token, id_token, session) carry Domain=<parent domain> (COOKIE_DOMAIN, e.g. .cladone.com): the browser presents them to EVERY public host, so without this filter a proxified third-party site receives the user's tokens on every request. \"all\" = every cookie removed except the names in keep (the proxified app's own cookies); \"none\" = historical behavior, everything forwarded. Default: \"all\" as soon as an upstream policy is declared (fail-closed)."
+        },
+        "keep": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "pattern": "^[^\\s;=\"\\x00-\\x1f\\x7f]+$" },
+          "description": "Cookie names preserved when stripCookies is \"all\" (typically the proxified application's own session). Names reserved for the gateway session (access_token, refresh_token, id_token, session) are refused at load: they must never reach an external origin."
+        },
         "browserCache": { "$ref": "#/definitions/browserCachePolicy" },
         "delegated": { "$ref": "#/definitions/delegatedCredentialPolicy" }
       }
@@ -739,6 +827,7 @@
         "openapi": { "$ref": "#/definitions/openapiPolicy" },
         "mcp": { "$ref": "#/definitions/mcpPolicy" },
         "pwa": { "$ref": "#/definitions/pwaPolicy" },
+        "csp": { "$ref": "#/definitions/cspPolicy" },
         "userBadge": { "$ref": "#/definitions/userBadgePolicy" },
         "uiGate": {
           "type": "array",

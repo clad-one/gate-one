@@ -297,7 +297,11 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			(route.PWA != nil && route.PWA.Enabled) ||
 			rwPlan != nil ||
 			pathPlan != nil ||
-			route.InjectionBundle() != nil
+			route.InjectionBundle() != nil ||
+			// nonce mode rewrites the HTML: the body must be plain
+			// text (a brotli/zstd body would be stamped as bytes and
+			// corrupted).
+			(route.CSP != nil && route.CSP.Nonce())
 
 		rp.Director = func(req *http.Request) {
 			// the CLIENT host (with its non-standard port) — frozen
@@ -1213,6 +1217,9 @@ func (g *Gateway) unitForMetadataPath(
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
+	// Platform hardening on EVERY response (proxied or generated).
+	w = newSecurityWriter(w, g.config.SecurityHeaders)
+
 	ctx, err := BuildContext(r)
 	if err != nil {
 		log.Printf("cannot build request context: %v", err)
@@ -1399,6 +1406,23 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	route := cr.route
 	p := cr.proxy
+
+	// CSP violation collector: gateway-served, before authentication
+	// (anonymous pages report too). Only on the route that declares it.
+	if csp := route.CSP; csp != nil && ctx.Path == csp.Path() {
+		g.serveCSPReport(w, r)
+		return
+	}
+
+	// CSP nonce: generated ONCE per request, before proxying, and read
+	// back by the injector through the outgoing request's context.
+	// Only nonce mode needs it (hash/merge never touch the body).
+	if csp := route.CSP; csp != nil && csp.Nonce() {
+		if nonce := newCSPNonce(); nonce != "" {
+			r = r.WithContext(
+				context.WithValue(r.Context(), cspNonceKey{}, nonce))
+		}
+	}
 
 	// Statistics: the response's FINAL status is counted per route
 	// (302 auth, 401, 403, 429, 200 proxified…).

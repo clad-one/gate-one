@@ -421,6 +421,23 @@ type UpstreamPolicy struct {
 	// which the browser would reject from the public host).
 	// Default: no cookie rewriting.
 	RewriteCookies *RewriteCookiesPolicy `json:"rewriteCookies,omitempty"`
+	// StripCookies: REQUEST-side filtering of the browser's cookies
+	// toward the backend. The gateway session cookies are scoped to
+	// the parent domain (COOKIE_DOMAIN, e.g. .cladone.com) and are
+	// therefore presented by the browser to EVERY public host — a
+	// proxified third-party site would otherwise receive the user's
+	// access/refresh tokens on every request. "all" = every cookie
+	// removed except the names listed in Keep (the proxified app's
+	// own cookies); "none" = historical behavior, everything
+	// forwarded. Default: "all" as soon as an upstream policy is
+	// declared (fail-closed).
+	StripCookies string `json:"stripCookies,omitempty"`
+	// Keep: cookie names preserved when StripCookies is "all" —
+	// typically the proxified application's own session. Names
+	// reserved for the gateway session (access_token,
+	// refresh_token, id_token, session) are refused at load: they
+	// must never reach an external origin.
+	Keep []string `json:"keep,omitempty"`
 	// BrowserCache: cache orientation to the browser when the
 	// origin serves its assets with no Cache-Control (see
 	// BrowserCachePolicy). Default: headers preserved as-is.
@@ -480,6 +497,23 @@ type RewriteCookiesPolicy struct {
 	// public host, it would overwrite the auth cookies.
 	Domain string `json:"domain"`
 }
+
+// ReservedCookieNames: cookie names reserved for the gateway session.
+// auth-bridge sets them on the parent domain (COOKIE_DOMAIN, e.g.
+// .cladone.com), so the browser presents them to every public host —
+// including proxified third-party sites. They are never accepted from
+// an origin's Set-Cookie (it would overwrite the auth) and never
+// forwarded to an external upstream (see UpstreamPolicy.StripCookies).
+var ReservedCookieNames = map[string]bool{
+	"access_token":  true,
+	"refresh_token": true,
+	"id_token":      true,
+	"session":       true,
+}
+
+// IsReservedCookieName reports whether name belongs to the gateway
+// session and must not cross to a proxified origin.
+func IsReservedCookieName(name string) bool { return ReservedCookieNames[name] }
 
 type MCPOperation struct {
 	// Name: the tool name exposed to MCP clients.
@@ -832,6 +866,13 @@ type Route struct {
 	OpenAPI *OpenAPIPolicy `json:"openapi,omitempty"`
 	MCP     *MCPPolicy     `json:"mcp,omitempty"`
 	PWA     *PWAPolicy     `json:"pwa,omitempty"`
+
+	// CSP: Content-Security-Policy emitted (or amended) by the
+	// gateway — the only place where a per-response nonce can be
+	// generated and written into the HTML the gateway already
+	// rewrites. Absent = no policy of our own, the origin's passes
+	// as-is.
+	CSP *CSPPolicy `json:"csp,omitempty"`
 
 	// UIGate: UI gating by config (CSS selectors + identity
 	// conditions) — for unmodifiable frontends; embedded in
@@ -1194,6 +1235,12 @@ type Config struct {
 	// Absent/invalid/expired = evaluation/personal mode (the gateway
 	// keeps serving; the guard badge only shows a notice).
 	License *license.Config `json:"license,omitempty"`
+
+	// SecurityHeaders: platform-wide response hardening (HSTS,
+	// X-Content-Type-Options, Referrer-Policy), emitted on every
+	// response the gateway serves. Absent = nothing (a deploy behind
+	// an edge proxy that already sets them can opt out).
+	SecurityHeaders *SecurityHeadersPolicy `json:"securityHeaders,omitempty"`
 
 	Routes []Route `json:"routes"`
 }
@@ -1711,6 +1758,11 @@ func (c *Config) expandUpstreamEnv() error {
 // validate rejects configs that cannot work at runtime — fail fast at
 // load instead of silently caching what should have been excluded.
 func (c *Config) validate() error {
+	if c.SecurityHeaders != nil {
+		if err := validateSecurityHeaders(c.SecurityHeaders); err != nil {
+			return err
+		}
+	}
 	for i := range c.Routes {
 		host := c.Routes[i].Host
 		route := &c.Routes[i]
@@ -1759,6 +1811,12 @@ func (c *Config) validate() error {
 			}
 		}
 
+		if csp := route.CSP; csp != nil {
+			if err := validateCSP(csp); err != nil {
+				return fmt.Errorf("route %s: %v", host, err)
+			}
+		}
+
 		if rb := c.Routes[i].UpstreamRewriteBody(); rb != nil {
 			if err := validateRewriteBody(rb); err != nil {
 				return fmt.Errorf("route %s: %v", host, err)
@@ -1771,6 +1829,28 @@ func (c *Config) validate() error {
 				return fmt.Errorf(
 					"route %s: rewriteCookies.domain %q (expected \"rewrite\" or \"strip\")",
 					host, up.RewriteCookies.Domain)
+			}
+		}
+
+		if up := c.Routes[i].Upstream; up != nil {
+			switch up.StripCookies {
+			case "", "all", "none":
+			default:
+				return fmt.Errorf(
+					"route %s: upstream.stripCookies %q (expected \"all\" or \"none\")",
+					host, up.StripCookies)
+			}
+			for _, name := range up.Keep {
+				if name == "" || strings.ContainsAny(name, " \t\r\n;=\"") {
+					return fmt.Errorf(
+						"route %s: upstream.keep %q (invalid cookie name)",
+						host, name)
+				}
+				if IsReservedCookieName(name) {
+					return fmt.Errorf(
+						"route %s: upstream.keep %q — name reserved for the gateway session, never forwarded to an external origin",
+						host, name)
+				}
 			}
 		}
 
