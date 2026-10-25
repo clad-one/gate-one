@@ -145,6 +145,42 @@ func TestServiceWorkerExcludesGatewayInternal(t *testing.T) {
 	}
 }
 
+// The origin's Cache-Control: no-store is honoured by every storage
+// path: the catch-all, the explicit apiCaches (GET and POST/SSE) and
+// the Workbox assets route. The Cache API ignores HTTP directives, so
+// the rule must live in the generated code.
+func TestServiceWorkerHonoursNoStore(t *testing.T) {
+	pol := emptyPolicy()
+	pol.ApiGETCache = &core.PWAApiGETCache{}
+	pol.ApiCaches = []*core.PWAApiCache{
+		{Path: "/api/stream", Method: "GET", MaxEntries: 10, MaxAgeSeconds: 600},
+		{Path: "/api/write", Method: "POST", MaxEntries: 10, MaxAgeSeconds: 600},
+	}
+	h := New(pol)
+
+	sw := h.swJS()
+
+	for _, want := range []string{
+		`const NO_STORE_RE = /(?:^|,)\s*no-store\b/`,
+		`function cacheForbidden(response)`,
+		`plugins: [CACHE_POLICY]`,
+		`cacheWillUpdate: async ({response})`,
+	} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("sw.js missing %s", want)
+		}
+	}
+	// Every store decision consults the predicate (catch-all GET,
+	// apiCaches GET, apiCaches POST/SSE).
+	if n := strings.Count(sw, "cacheForbidden(response)"); n < 4 {
+		t.Errorf("cacheForbidden used %d times, want >= 4 (all store paths)", n)
+	}
+	// A stale entry written before the rule is ignored at match time.
+	if n := strings.Count(sw, "cacheForbidden(hit)"); n != 2 {
+		t.Errorf("stale-entry guard used %d times, want 2 (catch-all + GET apiCache)", n)
+	}
+}
+
 func TestServiceWorkerApiCache(t *testing.T) {
 	pol := emptyPolicy()
 	pol.ApiCache = &core.PWAApiCache{

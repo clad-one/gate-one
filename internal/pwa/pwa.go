@@ -183,6 +183,31 @@ const ASSETS_CACHE = 'gate-one-pwa-assets-' + CACHE_VERSION;
 // (let alone cleaned) by the current-version filters below.
 const LEGACY_PREFIXES = ['gateway-pwa-'];
 
+// The Cache API ignores HTTP caching directives: cache.put() stores a
+// response whatever its Cache-Control. The generated SW therefore
+// enforces the origin's HARD prohibition itself — no-store means "do
+// not store", and a session probe or a per-user endpoint relies on it
+// (2026-10-25: the auth probe was cached and replayed a stale
+// identity). "private" stays cacheable (this cache is per-user, not a
+// shared one) and "no-cache" is approximated by the SWR background
+// revalidation.
+const NO_STORE_RE = /(?:^|,)\s*no-store\b/;
+function cacheForbidden(response) {
+  if (!response) return true;
+  return NO_STORE_RE.test(
+    (response.headers.get('cache-control') || '').toLowerCase());
+}
+// Same rule for the Workbox assets route (documents/scripts/styles):
+// a no-store page is never stored either.
+const CACHE_POLICY = {
+  cacheWillUpdate: async ({response}) => {
+    if (!response) return null;
+    if (response.type === 'opaque') return response;
+    if (response.status !== 200 || cacheForbidden(response)) return null;
+    return response;
+  }
+};
+
 // takes control as soon as installed: the update takes effect at
 // the next load, without waiting for all tabs to close
 self.skipWaiting();
@@ -224,7 +249,7 @@ if (workbox) {
   workbox.routing.registerRoute(
     ({request}) => request.destination === 'document' || request.destination === 'script' || request.destination === 'style',
     new workbox.strategies.ASSETS_STRATEGY({
-      cacheName: ASSETS_CACHE@@ASSETS_OPTIONS@@
+      cacheName: ASSETS_CACHE@@ASSETS_OPTIONS@@@@ASSETS_PLUGINS@@
     })
   );
   // diagnostic marker step 1: networkOnly + assets routes registered
@@ -248,6 +273,10 @@ self.addEventListener('fetch', () => {}); // no-op: force listener attachment
 	// name (see EffectiveAssets).
 	body = strings.ReplaceAll(body, "ASSETS_STRATEGY", strategy)
 	body = strings.ReplaceAll(body, "@@ASSETS_OPTIONS@@", opts)
+	// The origin's no-store prohibition is enforced on the assets
+	// route too (documents/scripts/styles): the Cache API does not
+	// honour it by itself.
+	body = strings.ReplaceAll(body, "@@ASSETS_PLUGINS@@", ",\n      plugins: [CACHE_POLICY]")
 
 	// Network-only exclusions, declarative (pwa.networkOnly) —
 	// nothing is hard-coded: which URLs to never cache is a
@@ -656,10 +685,14 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
       }
       console.log('[gate-one-pwa] apiGETCache intercepted:', req.url);
       const cache = await caches.open('` + cacheName + `');
-      const hit = await cache.match(req);
+      // An entry written by a previous SW may predate the rule:
+      // ignore (and let it expire) if it says no-store.
+      let hit = await cache.match(req);
+      if (hit && cacheForbidden(hit)) hit = null;
       const refresh = () => fetchNetwork(req, ` + fmtInt(allTimeoutSec) + `).then(({response}) => {
         if (!response || !response.ok || !response.body
-            || response.headers.has('set-cookie')) return;
+            || response.headers.has('set-cookie')
+            || cacheForbidden(response)) return;
         event.waitUntil(response.arrayBuffer().then((buf) =>
           cache.put(req, new Response(buf, {
             status: response.status,
@@ -674,7 +707,8 @@ func (h *Handler) apiGETCatchAllJS(declared []*core.PWAApiCache) string {
       }
       const { response, error } = await fetchNetwork(req, ` + fmtInt(allTimeoutSec) + `);
       if (error) throw error;
-      if (response.ok && response.body && !response.headers.has('set-cookie')) {
+      if (response.ok && response.body && !response.headers.has('set-cookie')
+          && !cacheForbidden(response)) {
         const clone = response.clone();
         event.waitUntil(clone.arrayBuffer().then((buf) =>
           cache.put(req, new Response(buf, {
@@ -772,11 +806,15 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
       // network refreshes in the background; strict offline ->
       // the cache. Key = URL alone (no body for a GET). Responses
       // non-200 or with Set-Cookie are not cached.
-      const hit = await cache.match(req);
+      // An entry written by a previous SW may predate the rule:
+      // ignore (and let it expire) if it says no-store.
+      let hit = await cache.match(req);
+      if (hit && cacheForbidden(hit)) hit = null;
       const refresh = () => fetchNetwork(req, ` + fmtInt(netTimeout) + `).then(({response}) => {
         if (!response || !response.ok || response.headers.has('set-cookie')) return;
         // opaque or empty response: nothing to store
         if (!response.body) return;
+        if (cacheForbidden(response)) return;
         event.waitUntil(response.arrayBuffer().then((buf) =>
           cache.put(req, new Response(buf, {
             status: response.status,
@@ -791,7 +829,8 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
       }
       const { response, error } = await fetchNetwork(req, ` + fmtInt(netTimeout) + `);
       if (error) throw error;
-      if (response.ok && response.body && !response.headers.has('set-cookie')) {
+      if (response.ok && response.body && !response.headers.has('set-cookie')
+          && !cacheForbidden(response)) {
         const clone = response.clone();
         event.waitUntil(clone.arrayBuffer().then((buf) =>
           cache.put(req, new Response(buf, {
@@ -846,7 +885,7 @@ func (h *Handler) apiCacheRouteJS(c *core.PWAApiCache) string {
         }
         const { response, error } = await fetchNetwork(req, ` + fmtInt(netTimeout) + `);
         if (error) throw error;
-        if (response.ok && response.body) {
+        if (response.ok && response.body && !cacheForbidden(response)) {
           const [toApp, toCache] = response.body.tee();
           // event.waitUntil is INDISPENSABLE: without it, the browser
           // may suspend the SW as soon as the response is returned,
