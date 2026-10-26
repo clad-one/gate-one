@@ -172,13 +172,19 @@ func (h *HTTP) Verify(
 		// The provider may still have refreshed cookies on a 401;
 		// hand them back so the browser can retry.
 		return res, ErrUnauthenticated
-	default:
-		log.Printf(
-			"AUTH PROVIDER %s: unexpected status %d",
-			h.verifyURL, resp.StatusCode)
-		return nil, fmt.Errorf(
-			"%w: status %d", ErrProviderUnavailable, resp.StatusCode)
 	}
+	// auth-bridge redirects to /login when there is no session: a
+	// 3xx on /auth is an authentication failure, NOT an outage. The
+	// client has CheckRedirect=ErrUseLastResponse, so the 302 is
+	// visible here instead of being followed.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return res, ErrUnauthenticated
+	}
+	log.Printf(
+		"AUTH PROVIDER %s: unexpected status %d",
+		h.verifyURL, resp.StatusCode)
+	return nil, fmt.Errorf(
+		"%w: status %d", ErrProviderUnavailable, resp.StatusCode)
 }
 
 // VerifyMCP implements Provider.
