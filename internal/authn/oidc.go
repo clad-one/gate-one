@@ -145,6 +145,16 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 	if len(scopes) == 0 {
 		scopes = []string{"openid", "profile", "email"}
 	}
+	hasOpenID := false
+	for _, s := range scopes {
+		if s == "openid" {
+			hasOpenID = true
+			break
+		}
+	}
+	if !hasOpenID {
+		scopes = append([]string{"openid"}, scopes...)
+	}
 	oauth2Cfg := &oauth2.Config{
 		ClientID:     clientID,
 		ClientSecret: cfg.ClientSecret,
@@ -268,7 +278,10 @@ func (o *OIDC) VerifyMCP(
 	if raw == "" {
 		return nil, ErrUnauthenticated
 	}
-	tok, err := o.mcpVerifier.Verify(ctx, raw)
+	// Bound the JWKS fetch: a wedged IdP must not freeze MCP auth.
+	vctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tok, err := o.mcpVerifier.Verify(vctx, raw)
 	if err != nil {
 		return nil, ErrUnauthenticated
 	}
@@ -362,8 +375,11 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	exctx, exCancel := context.WithTimeout(
+		r.Context(), 15*time.Second)
+	defer exCancel()
 	token, err := o.oauth2.Exchange(
-		r.Context(), code, oauth2.VerifierOption(tx.Verifier))
+		exctx, code, oauth2.VerifierOption(tx.Verifier))
 	if err != nil {
 		log.Printf("OIDC token exchange failed: %v", err)
 		http.Error(w, "authentication failed", http.StatusBadGateway)
@@ -375,7 +391,9 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication failed", http.StatusBadGateway)
 		return
 	}
-	idToken, err := o.verifier.Verify(r.Context(), rawID)
+	vctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	idToken, err := o.verifier.Verify(vctx, rawID)
 	if err != nil {
 		log.Printf("OIDC id_token verification failed: %v", err)
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
