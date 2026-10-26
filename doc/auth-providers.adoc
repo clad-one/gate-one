@@ -13,7 +13,9 @@ real alice/bob form, signed session cookie, MCP dev tokens. Loopback
 only. | none
 | `http` | Any service speaking the Gate One auth contract
 (`GET /auth`, `/auth/mcp`, `/login`, `/logout`, `/auth/popup-done`,
-`/health`). | auth-bridge, Authelia, Authentik, a custom adapter
+`/health`). auth-bridge is the reference implementation; a
+non-conforming service needs an adapter. | auth-bridge, or a custom
+adapter
 | `oidc` | Native OpenID Connect Relying Party: discovery, code + PKCE,
 state/nonce, JWKS, signed session, RP-initiated logout, local MCP
 bearer verification. | an OIDC IdP
@@ -156,9 +158,21 @@ Keycloak):
 ----
 
 This is also the adapter for non-OIDC identity (SAML gateways, LDAP
-front-ends, GitHub OAuth2) and for Authelia/Authentik forward-auth,
-with configurable endpoint and header names (`verifyUrl`,
-`mcpVerifyUrl`, `healthUrl`, `headers`).
+front-ends, GitHub OAuth2): the service must expose the Gate One
+contract. `verifyUrl`, `mcpVerifyUrl`, `healthUrl` and `headers` can be
+overridden, but that only adapts the verification call: `/login`,
+`/logout`, `/auth/mcp` and `/auth/popup-done` remain the contract.
+
+== Authelia, Authentik, other IdPs
+
+* **Authentik**: an OIDC provider — use `type: "oidc"` directly.
+* **Keycloak**: `type: "oidc"` directly, or `type: "http"` with
+  auth-bridge when its hardened session/refresh/popup flow is wanted.
+* **Authelia**: a forward-auth portal, *not* an implementation of the
+  Gate One contract. It needs an adapter for `/auth`, `/auth/mcp` and
+  `/auth/popup-done`; overriding `verifyUrl`/`headers` is not enough.
+* **SAML / LDAP / GitHub OAuth2**: `type: "http"` plus an adapter
+  (auth-bridge or custom).
 
 == Troubleshooting
 

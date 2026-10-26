@@ -7,8 +7,7 @@
 //
 //   - dev:  the embedded development IdP (loopback only, onboarding);
 //   - http: any external service implementing the Gate One auth
-//     contract (auth-bridge/Keycloak today, Authelia, Authentik or a
-//     custom adapter);
+//     contract (auth-bridge/Keycloak, or a custom adapter);
 //   - oidc: a native OpenID Connect Relying Party (same contract,
 //     no external bridge).
 //

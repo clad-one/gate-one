@@ -81,7 +81,7 @@
     },
     "authProvider": {
       "type": "object",
-      "description": "Authentication provider. `dev` is the embedded loopback-only IdP used for onboarding/tests; `http` is any external service implementing the Gate One auth contract (auth-bridge/Keycloak, Authelia, Authentik, a custom adapter); `oidc` is the native Relying Party (discovery, code+PKCE, JWKS, session, logout, MCP resource server). Absent = legacy oidc + auth-bridge translation, so existing configs are unchanged.",
+      "description": "Authentication provider. `dev` is the embedded loopback-only IdP used for onboarding/tests; `http` is any external service implementing the Gate One auth contract (auth-bridge is the reference implementation; a non-conforming service needs an adapter); `oidc` is the native Relying Party (discovery, code+PKCE, JWKS, session, logout, MCP resource server). Absent = legacy oidc + auth-bridge translation, so existing configs are unchanged.",
       "additionalProperties": false,
       "properties": {
         "type": {

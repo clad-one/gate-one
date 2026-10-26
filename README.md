@@ -64,12 +64,18 @@ that keeps auth-bridge **optional**, including for OIDC:
 | type | What it is | External dependency |
 |---|---|---|
 | `dev` | Embedded development IdP (dedicated `login.<domain>` host, real form, signed session cookie) | none (loopback only) |
-| `http` | Any service implementing the Gate One auth contract: auth-bridge/Keycloak, Authelia, Authentik, a custom adapter | that service |
+| `http` | Any service implementing the Gate One auth contract (`/auth`, `/auth/mcp`, `/login`, `/logout`, `/auth/popup-done`). auth-bridge is the reference implementation; a non-conforming service needs an adapter. | that service |
 | `oidc` | Native OIDC Relying Party: discovery, code + PKCE, JWKS, session, logout, MCP resource server | an OIDC IdP (Keycloak, Entra, Google, Authentik, Okta, Auth0…) |
 
 Absent `authProvider` = the legacy `oidc` + auth-bridge translation, so
 existing configs keep working. A purely public route needs no auth block
 at all.
+
+Authelia and Authentik are **not** drop-in `http` providers: Authentik
+exposes an OIDC provider (`type: "oidc"`); Authelia is a forward-auth
+portal and needs an adapter implementing the Gate One contract
+(`/auth`, `/auth/mcp`, `/auth/popup-done`). `verifyUrl` and the header
+mapping only cover the verification call.
 
 ```json
 {

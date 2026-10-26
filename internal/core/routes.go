@@ -1219,7 +1219,7 @@ type Config struct {
 	// AuthProvider selects how requests are authenticated:
 	//   dev  — embedded development IdP (loopback only);
 	//   http — external service implementing the auth contract
-	//          (auth-bridge/Keycloak, Authelia, Authentik…).
+	//          (auth-bridge/Keycloak, or a custom adapter).
 	// Absent = legacy auth-bridge via oidc/-authBridge.
 	AuthProvider *AuthProviderConfig `json:"authProvider,omitempty"`
 

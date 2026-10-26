@@ -74,7 +74,8 @@ type HTTPConfig struct {
 }
 
 // HTTP is the adapter for any service speaking the Gate One auth
-// contract over HTTP (auth-bridge, Authelia, Authentik, custom).
+// contract over HTTP (auth-bridge is the reference implementation;
+// a non-conforming service needs an adapter).
 type HTTP struct {
 	baseURL      string
 	verifyURL    string

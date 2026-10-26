@@ -93,10 +93,11 @@ script never pushes, tags or uploads.
   without auth-bridge. auth-bridge remains available as
   \`type: "http"\`, including in front of Keycloak.
 - **Authentication provider abstraction.** \`authProvider.type: "http"\`
-  keeps auth-bridge (Keycloak) as one adapter among others (Authelia,
-  Authentik, a custom forward-auth service). The legacy \`oidc\` block and
-  \`-authBridge\` flag keep working unchanged: existing deployments do not
-  need a config edit.
+  keeps auth-bridge (Keycloak) as the reference adapter. Any other
+  service must implement the Gate One auth contract (a custom adapter);
+  overriding \`verifyUrl\`/\`headers\` only adapts the verification call.
+  The legacy \`oidc\` block and \`-authBridge\` flag keep working
+  unchanged: existing deployments do not need a config edit.
 - **No silent login loops.** An unreachable provider now answers
   \`502 authentication_unavailable\` (readable HTML for a navigation,
   JSON for a fetch) instead of a 401/login redirect.
