@@ -9,6 +9,11 @@
 // never ships. An absent, invalid or expired token yields the "eval"
 // state (personal/evaluation) — never a hard stop: the gateway keeps
 // serving, the guard script only displays a notice.
+//
+// The token may come from (precedence): the GATE_ONE_LICENSE_TOKEN
+// environment variable, then `license.tokenFile`, then `license.token`.
+// The file/env are re-read on every config reload (SIGHUP), which makes
+// renewal possible without editing api-routes.json.
 package license
 
 import (
@@ -16,16 +21,24 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"time"
 )
 
 const tokenVersion = "v1"
 
+// TokenEnv overrides every other token source when non-empty.
+const TokenEnv = "GATE_ONE_LICENSE_TOKEN"
+
 // Config is the `license` block of api-routes.json.
 type Config struct {
 	// Token: the signed licence token (empty = evaluation/personal).
 	Token string `json:"token,omitempty"`
+	// TokenFile: path to a file holding the token (mounted secret, easy
+	// renewal: replace the file + SIGHUP). Ignored when the env var
+	// GATE_ONE_LICENSE_TOKEN is set; falls back to Token when unreadable.
+	TokenFile string `json:"tokenFile,omitempty"`
 	// PublicKey: base64 Ed25519 public key (raw 32 bytes). Required for
 	// a token to be valid; it is public by design and safe to commit.
 	PublicKey string `json:"publicKey,omitempty"`
@@ -65,7 +78,8 @@ func Eval(cfg *Config, now time.Time) Status {
 		return st
 	}
 	st.URL = cfg.URL
-	if strings.TrimSpace(cfg.Token) == "" {
+	token := resolveToken(cfg)
+	if token == "" {
 		return st
 	}
 	if strings.TrimSpace(cfg.PublicKey) == "" {
@@ -77,7 +91,7 @@ func Eval(cfg *Config, now time.Time) Status {
 		st.Reason = "no-key"
 		return st
 	}
-	claims, err := Verify(pub, cfg.Token)
+	claims, err := Verify(pub, token)
 	if err != nil {
 		st.Reason = "invalid"
 		return st
@@ -94,6 +108,26 @@ func Eval(cfg *Config, now time.Time) Status {
 	st.State = "registered"
 	st.Reason = "ok"
 	return st
+}
+
+// resolveToken applies the precedence env > tokenFile > token. The file
+// is re-read on each call (i.e. each config reload): replacing it and
+// sending SIGHUP renews the licence without touching api-routes.json.
+func resolveToken(cfg *Config) string {
+	if v := strings.TrimSpace(os.Getenv(TokenEnv)); v != "" {
+		return v
+	}
+	if cfg != nil && strings.TrimSpace(cfg.TokenFile) != "" {
+		if b, err := os.ReadFile(cfg.TokenFile); err == nil {
+			if v := strings.TrimSpace(string(b)); v != "" {
+				return v
+			}
+		}
+	}
+	if cfg != nil {
+		return strings.TrimSpace(cfg.Token)
+	}
+	return ""
 }
 
 // Verify checks the signature and returns the claims.

@@ -247,6 +247,7 @@ Optional `license` block in `api-routes.json`:
 {
   "license": {
     "token": "v1.<base64url(claims)>.<base64url(signature)>",
+    "tokenFile": "/run/secrets/gate-one-license",
     "publicKey": "<base64 Ed25519 public key>",
     "url": "https://example.com/pricing"
   }
@@ -257,3 +258,30 @@ The token is an **Ed25519-signed** payload (`org`, `email`, `plan`, `exp`,
 `domains`, `features`) verified **offline** with `publicKey`; only the public
 key ships (the private signing key never does). Absent, invalid or expired =
 evaluation mode.
+
+**Token sources** (precedence):
+
+1. `GATE_ONE_LICENSE_TOKEN` environment variable;
+2. `license.tokenFile` (path to a file — e.g. a mounted secret);
+3. `license.token` (inline).
+
+The file and env var are re-read on every config reload (**SIGHUP**), so a
+renewal does **not** require editing `api-routes.json`: replace the token file
+(or the env var) and send `SIGHUP`.
+
+**Renewal** (same key): mint a new token with the existing private key, update
+the file/env/config, then `SIGHUP`.
+
+**Key rotation** (new keypair): replace `license.publicKey` **and** the token
+in one deployment. There is no multi-key grace period — tokens signed with the
+old key stop verifying immediately. With no users yet this is a plain
+replace + redeploy; a `kid` / `publicKeys` mechanism can be added later if
+zero-downtime rotation becomes necessary.
+
+Mint tokens (vendor side; keep the private key offline):
+
+```bash
+go run ./cmd/gate-one-license keygen
+go run ./cmd/gate-one-license sign -key priv.b64 -org "ACME" \
+  -email ops@acme.fr -plan pro -days 365 -domains acme.fr -features sso,mcp
+```

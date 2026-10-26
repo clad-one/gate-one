@@ -2,6 +2,8 @@ package license
 
 import (
 	"crypto/ed25519"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +116,46 @@ func TestDecodeKeyAcceptsEncodings(t *testing.T) {
 		if err != nil || !got.Equal(pub) {
 			t.Fatalf("decodeKey(%q) failed: %v", s, err)
 		}
+	}
+}
+
+func TestEvalTokenFile(t *testing.T) {
+	pub, priv, _ := GenerateKey()
+	tok, _ := Sign(priv, Claims{Org: "FILE", Exp: time.Now().Add(time.Hour).Unix()})
+	f := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(f, []byte(tok+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := Eval(&Config{TokenFile: f, PublicKey: EncodePublicKey(pub)}, time.Now())
+	if st.State != "registered" || st.Org != "FILE" {
+		t.Fatalf("tokenFile = %s/%s org=%q, want registered/FILE", st.State, st.Reason, st.Org)
+	}
+}
+
+func TestEvalTokenFileFallsBackToConfig(t *testing.T) {
+	pub, priv, _ := GenerateKey()
+	tok, _ := Sign(priv, Claims{Org: "CFG", Exp: time.Now().Add(time.Hour).Unix()})
+	missing := filepath.Join(t.TempDir(), "absent")
+	st := Eval(&Config{
+		TokenFile: missing, Token: tok, PublicKey: EncodePublicKey(pub),
+	}, time.Now())
+	if st.State != "registered" || st.Org != "CFG" {
+		t.Fatalf("fallback = %s/%s org=%q, want registered/CFG", st.State, st.Reason, st.Org)
+	}
+}
+
+func TestEvalEnvOverridesEverything(t *testing.T) {
+	pub, priv, _ := GenerateKey()
+	envTok, _ := Sign(priv, Claims{Org: "ENV", Exp: time.Now().Add(time.Hour).Unix()})
+	cfgTok, _ := Sign(priv, Claims{Org: "CFG", Exp: time.Now().Add(time.Hour).Unix()})
+	t.Setenv(TokenEnv, envTok)
+
+	st := Eval(&Config{
+		Token: cfgTok, TokenFile: filepath.Join(t.TempDir(), "absent"),
+		PublicKey: EncodePublicKey(pub),
+	}, time.Now())
+	if st.State != "registered" || st.Org != "ENV" {
+		t.Fatalf("env override = %s/%s org=%q, want registered/ENV", st.State, st.Reason, st.Org)
 	}
 }
 

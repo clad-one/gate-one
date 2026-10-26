@@ -60,6 +60,10 @@
           "type": "string",
           "description": "Signed licence token: v1.<base64url(JSON claims)>.<base64url(signature)>."
         },
+        "tokenFile": {
+          "type": "string",
+          "description": "Path to a file holding the token (mounted secret, easy renewal: replace the file + SIGHUP). Overridden by GATE_ONE_LICENSE_TOKEN; falls back to `token` when unreadable."
+        },
         "publicKey": {
           "type": "string",
           "description": "Ed25519 public key, base64 (raw 32 bytes). Public by design, safe to commit."
