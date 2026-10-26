@@ -79,7 +79,7 @@ func newMCPGatewayWithOpenAPI(
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw.authBridgeBaseURL = bridge.URL
+	gw.setAuthBridgeForTest(bridge.URL)
 
 	return gw, backend
 }

@@ -14,4 +14,7 @@ run: ## Lance le binaire avec la config de référence
 check: build ## Valide la config de référence sans démarrer
 	./bin/gate-one -config testdata/api-routes.json -check
 
-.PHONY: build test smoke run check
+release: ## Prépare les artefacts locaux dans dist/ (aucun push, aucun tag)
+	./release.sh
+
+.PHONY: build test smoke run check release

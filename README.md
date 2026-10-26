@@ -24,6 +24,61 @@ config changes:
 cd ../cladone-it-infra && make sync-config
 ```
 
+## Quickstart (two commands, no external service)
+
+```bash
+./build.sh
+
+# 1. Public site (zero authentication dependency)
+./bin/gate-one init --static --host app.localhost \
+  --backend http://127.0.0.1:8080
+./bin/gate-one -config api-routes.json
+# → http://app.localhost:3000
+
+# 2. SSO-shaped app with the embedded dev IdP (loopback only)
+./bin/gate-one init --host app.demo.localhost \
+  --backend http://127.0.0.1:8080
+./bin/gate-one -config api-routes.json
+# → http://app.demo.localhost:3000  login: alice/alice, bob/bob
+```
+
+`init` writes the smallest working `api-routes.json`; `-check` validates
+it without starting; `doctor` also probes the provider:
+
+```bash
+./bin/gate-one -config api-routes.json -check
+./bin/gate-one doctor -config api-routes.json
+```
+
+## Authentication providers
+
+`authProvider` selects how requests are authenticated. It is the seam
+that keeps auth-bridge **optional**, including for OIDC:
+
+| type | What it is | External dependency |
+|---|---|---|
+| `dev` | Embedded development IdP (dedicated `login.<domain>` host, real form, signed session cookie) | none (loopback only) |
+| `http` | Any service implementing the Gate One auth contract: auth-bridge/Keycloak, Authelia, Authentik, a custom adapter | that service |
+| `oidc` | Native OIDC Relying Party (planned, next lot) | an OIDC IdP |
+
+Absent `authProvider` = the legacy `oidc` + auth-bridge translation, so
+existing configs keep working. A purely public route needs no auth block
+at all.
+
+```json
+{
+  "authProvider": {
+    "type": "http",
+    "baseUrl": "http://auth-bridge:3000",
+    "loginUrl": "https://login.example.com/login",
+    "issuer": "https://auth.example.com/realms/example"
+  }
+}
+```
+
+An unreachable provider is a **502**, never a login redirect: the
+gateway no longer hides an outage behind a sign-in loop.
+
 ## Build
 
 ```bash
@@ -203,6 +258,19 @@ tool names:
 - Supported upstream transport: MCP Streamable HTTP (POST/GET SSE and
   session DELETE). Tool filtering is applied to JSON and SSE
   `tools/list` responses.
+
+## Preparing a release (local only)
+
+```bash
+./release.sh                 # version from ./VERSION
+VERSION=1.0.0 ./release.sh   # override
+```
+
+Builds static binaries for linux/darwin/arm64+amd64 and windows/amd64
+into `dist/`, with a tarball per platform (binary + schemas + examples +
+README/LICENSE), `SHA256SUMS` and `RELEASE_NOTES.md`. The script never
+pushes, tags or uploads anything — this repository intentionally has no
+remote.
 
 ## Releasing to the infrastructure repository
 

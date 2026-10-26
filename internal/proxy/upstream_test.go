@@ -982,9 +982,10 @@ func TestHealthzAndStats(t *testing.T) {
 }
 
 // WEDGED auth-bridge (never answers): the gateway must not freeze
-// — checkAuth times out (authBridgeClientTimeout) and the page route
-// answers 302 login (2026-10-17 incident: auth-bridge in CPU
-// busy-loop = all authenticated routes dead).
+// — checkAuth times out (authBridgeClientTimeout) and the request
+// answers 502 (provider outage), NOT a login redirect: a login page
+// cannot fix a down provider and would loop (2026-10-17 incident:
+// auth-bridge in CPU busy-loop = all authenticated routes dead).
 func TestHangingAuthBridgeTimesOut(t *testing.T) {
 	old := authBridgeClientTimeout
 	authBridgeClientTimeout = 300 * time.Millisecond
@@ -1025,8 +1026,8 @@ func TestHangingAuthBridgeTimesOut(t *testing.T) {
 	resp := doGet(t, gw, "public.test", "/echo")
 	elapsed := time.Since(start)
 
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("status = %d, want 302 (login) after timeout", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (provider outage) after timeout", resp.StatusCode)
 	}
 	if elapsed > 3*time.Second {
 		t.Errorf("response in %v, want < 3s (timeout not applied)", elapsed)
@@ -1037,17 +1038,30 @@ func TestHangingAuthBridgeTimesOut(t *testing.T) {
 // without identity, the request is refused BEFORE reaching the
 // backend (page route → 302 login, backend never contacted).
 func TestUpstreamAuthStillEnforced(t *testing.T) {
-	gw, _ := upstreamGateway(t, `{
+	srv := upstreamTestServer(t)
+	bridge := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		},
+	))
+	t.Cleanup(bridge.Close)
+
+	cfg := loadForTest(t, strings.ReplaceAll(`{
 		"routes": [{
 			"host": "public.test", "path": "/*", "frontend": true,
 			"backend": "BACKEND",
 			"auth": {},
 			"upstream": {"host": true}
 		}]
-	}`)
+	}`, "BACKEND", srv.URL))
 
-	// unreachable auth-bridge stub → auth failure → the page route
-	// (frontend) answers 302 toward the login.
+	gw, err := New(cfg, WithAuthBridgeURL(bridge.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 401 from the bridge → the page route (frontend) answers 302
+	// toward the login.
 	resp := doGet(t, gw, "public.test", "/echo")
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302 (login redirect)", resp.StatusCode)

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"cladone/gate-one/internal/authn"
 	"cladone/gate-one/internal/core"
 )
 
@@ -67,4 +68,28 @@ func loadForTestIn(
 func loadForTest(t *testing.T, routesJSON string) *core.Config {
 	t.Helper()
 	return loadForTestIn(t, t.TempDir(), routesJSON)
+}
+
+// setAuthBridgeForTest swaps the gateway's provider for a stub after
+// construction. Tests used to assign authBridgeBaseURL directly; the
+// provider is now built at New time, so the assignment must rebuild
+// it (and drop the identity cache, which is global).
+func (g *Gateway) setAuthBridgeForTest(rawURL string) {
+	g.authBridgeBaseURL = rawURL
+	login, issuer := "", ""
+	if g.config.AuthProvider != nil {
+		login = g.config.AuthProvider.LoginURL
+		issuer = g.config.AuthProvider.Issuer
+	}
+	p, err := authn.NewHTTP(authn.HTTPConfig{
+		BaseURL:       rawURL,
+		LoginURLValue: login,
+		IssuerValue:   issuer,
+		Client:        g.client,
+	})
+	if err != nil {
+		panic(err)
+	}
+	g.auth = p
+	clearAuthCache()
 }

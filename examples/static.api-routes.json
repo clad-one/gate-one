@@ -1,0 +1,10 @@
+{
+  "routes": [
+    {
+      "host": "app.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://127.0.0.1:8080"
+    }
+  ]
+}

@@ -42,7 +42,7 @@ func TestMCPE2EOnLine(t *testing.T) {
 	}`
 
 	gw := loadGatewayForTest(t, routesJSON)
-	gw.authBridgeBaseURL = bridge.URL
+	gw.setAuthBridgeForTest(bridge.URL)
 
 	// GET /mcp without Authorization → checkMCPAuth must be called
 	req := httptest.NewRequest(http.MethodGet, "http://mcp.smoke.local/mcp", nil)
@@ -83,7 +83,7 @@ func TestMCPBridgeUnreachable(t *testing.T) {
 	// unreachable fake auth-bridge: port 1, connection refused.
 	// Short-timeout client: the test must not suffer the production
 	// client's system timeout (30 s).
-	gw.authBridgeBaseURL = "http://127.0.0.1:1"
+	gw.setAuthBridgeForTest("http://127.0.0.1:1")
 	gw.client = &http.Client{Timeout: 2 * time.Second}
 
 	req := httptest.NewRequest(http.MethodGet, "http://mcp.smoke.local/mcp", nil)

@@ -303,9 +303,10 @@ func TestBackendErrorForwardedUnmodified(t *testing.T) {
 	}
 }
 
-// Login resolution: authGuard.loginUrl (route) wins over
-// oidc.loginUrl (platform); an active-guard route with neither
-// REFUSES to start (load-time validation).
+// Login resolution: authGuard.loginUrl (route) wins over the
+// platform provider; an AUTHENTICATED route with no login REFUSES to
+// start, while a purely public route starts with no oidc block (the
+// onboarding "static site" case).
 func TestLoginURLResolution(t *testing.T) {
 	t.Run("route priority > platform", func(t *testing.T) {
 		cfg := loadForTest(t, `{
@@ -334,7 +335,7 @@ func TestLoginURLResolution(t *testing.T) {
 		}
 	})
 
-	t.Run("guard without login: refuses to start", func(t *testing.T) {
+	t.Run("public route without login: starts", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgPath := filepath.Join(dir, "routes.json")
 		cfgJSON := `{"routes": [{
@@ -344,9 +345,29 @@ func TestLoginURLResolution(t *testing.T) {
 		if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		cfg, err := core.Load(cfgPath)
+		if err != nil {
+			t.Fatalf("public route refused: %v", err)
+		}
+		if got := cfg.LoginURLFor(&cfg.Routes[0]); got != "" {
+			t.Errorf("login = %q, want empty (no auth on this route)", got)
+		}
+	})
+
+	t.Run("authenticated route without login: refuses to start", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "routes.json")
+		cfgJSON := `{"routes": [{
+			"host": "front.test", "path": "/*", "frontend": true,
+			"backend": "http://127.0.0.1:1",
+			"auth": {}
+		}]}`
+		if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := core.Load(cfgPath); err == nil ||
-			!strings.Contains(err.Error(), "without login URL") {
-			t.Errorf("err = %v, want refusal \"without login URL\"", err)
+			!strings.Contains(err.Error(), "no login URL") {
+			t.Errorf("err = %v, want refusal \"no login URL\"", err)
 		}
 	})
 
@@ -362,8 +383,8 @@ func TestLoginURLResolution(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := core.Load(cfgPath); err == nil ||
-			!strings.Contains(err.Error(), "oidc.issuer") {
-			t.Errorf("err = %v, want refusal \"oidc.issuer\"", err)
+			!strings.Contains(err.Error(), "issuer") {
+			t.Errorf("err = %v, want refusal mentioning the issuer", err)
 		}
 	})
 }
@@ -378,7 +399,7 @@ func testGatewayWithAuthBridge(
 	t.Helper()
 
 	gw, hosts := testGateway(t, routesJSON)
-	gw.authBridgeBaseURL = authBridgeURL
+	gw.setAuthBridgeForTest(authBridgeURL)
 	return gw, hosts
 }
 
@@ -519,7 +540,7 @@ func TestIdentityConditions(t *testing.T) {
 		},
 	))
 	t.Cleanup(bridgeNoRoles.Close)
-	gw.authBridgeBaseURL = bridgeNoRoles.URL
+	gw.setAuthBridgeForTest(bridgeNoRoles.URL)
 	if resp := do("Bearer ok2"); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("insufficient: status = %d, want 403", resp.StatusCode)
 	} else {

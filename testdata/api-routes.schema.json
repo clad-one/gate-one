@@ -79,9 +79,95 @@
         }
       }
     },
+    "authProvider": {
+      "type": "object",
+      "description": "Authentication provider. `dev` is the embedded loopback-only IdP used for onboarding/tests; `http` is any external service implementing the Gate One auth contract (auth-bridge/Keycloak, Authelia, Authentik, a custom adapter). Absent = legacy oidc + auth-bridge translation, so existing configs are unchanged. A native OIDC provider is the next extension point.",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["dev", "http"],
+          "description": "Provider implementation. Default: dev when a dev block is present, http otherwise."
+        },
+        "baseUrl": {
+          "type": "string",
+          "description": "Service root for type http (default http://auth-bridge:3000, or AUTH_BRIDGE_URL)."
+        },
+        "loginBaseUrl": {
+          "type": "string",
+          "description": "Public origin of the login service. For dev it hosts the embedded login page, e.g. http://login.demo.localhost:3000 (no path/query)."
+        },
+        "loginUrl": {
+          "type": "string",
+          "description": "Full login page URL. Defaults to loginBaseUrl + /login, then (type http) the legacy oidc.loginUrl, then baseUrl + /login."
+        },
+        "issuer": {
+          "type": "string",
+          "description": "OIDC issuer advertised in MCP protected-resource metadata. Defaults to the legacy oidc.issuer, or loginBaseUrl + /dev for dev."
+        },
+        "cookieDomain": {
+          "type": "string",
+          "description": "Shared parent domain of the session cookie (dev), e.g. demo.localhost. Required for dev."
+        },
+        "verifyUrl": {
+          "type": "string",
+          "description": "Identity verification endpoint (type http). Default baseUrl + /auth."
+        },
+        "mcpVerifyUrl": {
+          "type": "string",
+          "description": "MCP bearer verification endpoint (type http). Default baseUrl + /auth/mcp."
+        },
+        "healthUrl": {
+          "type": "string",
+          "description": "Readiness endpoint (type http). Default baseUrl + /health."
+        },
+        "headers": {
+          "type": "object",
+          "description": "Maps the identity response headers of an external provider (type http). Empty = auth-bridge defaults.",
+          "additionalProperties": false,
+          "properties": {
+            "userId": { "type": "string", "description": "Default X-User-Id." },
+            "username": { "type": "string", "description": "Default X-Username." },
+            "email": { "type": "string", "description": "Default X-Email." },
+            "roles": { "type": "string", "description": "Default X-Roles (comma-separated)." },
+            "scopes": { "type": "string", "description": "Default X-Scopes (comma-separated)." },
+            "claims": { "type": "string", "description": "Default X-Claims (base64 JSON)." }
+          }
+        },
+        "dev": {
+          "type": "object",
+          "description": "Embedded development IdP. Loopback-only; never production.",
+          "additionalProperties": false,
+          "properties": {
+            "users": {
+              "type": "array",
+              "description": "Development accounts. Empty = alice/alice (user) and bob/bob (admin). Passwords are plaintext by design (dev only).",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["username", "password"],
+                "properties": {
+                  "username": { "type": "string" },
+                  "password": { "type": "string", "description": "Plaintext, dev only." },
+                  "roles": { "type": "array", "items": { "type": "string" } },
+                  "scopes": { "type": "array", "items": { "type": "string" } },
+                  "claims": { "type": "object", "additionalProperties": true },
+                  "mcpToken": { "type": "string", "description": "Bearer accepted by MCP routes. Default dev-<username>." }
+                }
+              }
+            },
+            "sessionTtlSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Session lifetime. Default 43200 (12h)."
+            }
+          }
+        }
+      }
+    },
     "oidc": {
       "type": "object",
-      "description": "The platform's IdP — NO IdP URL is hard-coded in the code: the gateway is deployable by others, for other sites, with other rights. loginUrl = default login page for frontend routes with active guard (overridable per route via authGuard.loginUrl); required if such a route exists. issuer = OIDC issuer announced in the OAuth metadata of MCP routes (authorization_servers); required if an MCP route exists. Refuses to start/reload if a requirement is not met.",
+      "description": "LEGACY platform IdP block. When authProvider is absent, it is translated into an http provider (auth-bridge) at load; existing configs keep working. New configurations should use authProvider.",
       "additionalProperties": false,
       "properties": {
         "loginUrl": {

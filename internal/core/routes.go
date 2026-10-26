@@ -1211,10 +1211,17 @@ type Config struct {
 	// (editor autocompletion/validation) — ignored at runtime.
 	Schema string `json:"$schema,omitempty"`
 
-	// OIDC: the platform's IdP — the gateway is multi-tenant,
-	// no IdP URL is hard-coded (routes access it via
-	// LoginURLFor / OIDC.Issuer).
+	// OIDC: legacy platform IdP block. Kept for backward
+	// compatibility: when authProvider is absent it is translated
+	// into an http provider (auth-bridge) at load.
 	OIDC *OIDCConfig `json:"oidc,omitempty"`
+
+	// AuthProvider selects how requests are authenticated:
+	//   dev  — embedded development IdP (loopback only);
+	//   http — external service implementing the auth contract
+	//          (auth-bridge/Keycloak, Authelia, Authentik…).
+	// Absent = legacy auth-bridge via oidc/-authBridge.
+	AuthProvider *AuthProviderConfig `json:"authProvider,omitempty"`
 
 	// TokenBroker: internal per-user credential broker, used only
 	// by routes declaring upstream.delegated. The shared secret is
@@ -1324,6 +1331,80 @@ type OIDCConfig struct {
 	Issuer   string `json:"issuer,omitempty"`
 }
 
+// AuthProviderConfig selects and configures the authentication
+// provider. Three implementations are possible behind the same
+// contract; only the ones implemented by this build are accepted.
+type AuthProviderConfig struct {
+	// Type: dev | http. Empty = http (or dev when the dev block is
+	// present).
+	Type string `json:"type,omitempty"`
+
+	// BaseURL: service root for type http (default
+	// http://auth-bridge:3000, or AUTH_BRIDGE_URL).
+	BaseURL string `json:"baseUrl,omitempty"`
+
+	// LoginBaseURL: public origin of the login service. For dev it
+	// hosts the embedded login page (e.g.
+	// http://login.demo.localhost:3000).
+	LoginBaseURL string `json:"loginBaseUrl,omitempty"`
+
+	// LoginURL: full login page URL. Defaults to
+	// LoginBaseURL + "/login"; for type http it defaults to the
+	// legacy oidc.loginUrl, then BaseURL + "/login".
+	LoginURL string `json:"loginUrl,omitempty"`
+
+	// Issuer: OIDC issuer advertised in MCP metadata. Defaults to
+	// the legacy oidc.issuer, or LoginBaseURL + "/dev" for dev.
+	Issuer string `json:"issuer,omitempty"`
+
+	// CookieDomain: shared parent domain for the session cookie
+	// (dev). e.g. demo.localhost.
+	CookieDomain string `json:"cookieDomain,omitempty"`
+
+	// Endpoint overrides (type http). Defaults:
+	// BaseURL + /auth, /auth/mcp, /health.
+	VerifyURL    string `json:"verifyUrl,omitempty"`
+	MCPVerifyURL string `json:"mcpVerifyUrl,omitempty"`
+	HealthURL    string `json:"healthUrl,omitempty"`
+
+	// Headers maps the identity response headers (type http).
+	Headers *AuthHeadersConfig `json:"headers,omitempty"`
+
+	// Dev configures the embedded provider.
+	Dev *DevAuthConfig `json:"dev,omitempty"`
+}
+
+// AuthHeadersConfig maps the Gate One identity contract to the
+// response headers of an external provider. Empty = auth-bridge
+// defaults.
+type AuthHeadersConfig struct {
+	UserID   string `json:"userId,omitempty"`
+	Username string `json:"username,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Roles    string `json:"roles,omitempty"`
+	Scopes   string `json:"scopes,omitempty"`
+	Claims   string `json:"claims,omitempty"`
+}
+
+// DevAuthConfig configures the embedded development IdP.
+type DevAuthConfig struct {
+	// Users: empty = alice/alice and bob/bob.
+	Users []DevUserConfig `json:"users,omitempty"`
+	// SessionTTLSeconds defaults to 43200 (12h).
+	SessionTTLSeconds int `json:"sessionTtlSeconds,omitempty"`
+}
+
+// DevUserConfig is one development account. Passwords are plaintext
+// by design: this provider is loopback-only.
+type DevUserConfig struct {
+	Username string         `json:"username"`
+	Password string         `json:"password"`
+	Roles    []string       `json:"roles,omitempty"`
+	Scopes   []string       `json:"scopes,omitempty"`
+	Claims   map[string]any `json:"claims,omitempty"`
+	MCPToken string         `json:"mcpToken,omitempty"`
+}
+
 // GuardActive: is the guard active on this route? (frontend +
 // authGuard not disabled) — the same rule as the proxy.
 func (r *Route) GuardActive() bool {
@@ -1365,11 +1446,14 @@ func (r *Route) DelegatedCredentials() *DelegatedCredentialPolicy {
 }
 
 // LoginURLFor: a route's login URL — authGuard.loginUrl
-// (route) wins over oidc.loginUrl (platform). Guaranteed non-empty
-// by load-time validation for any route with an active guard.
+// (route) wins over the platform provider. Guaranteed non-empty by
+// load-time validation for any route that can actually log in.
 func (c *Config) LoginURLFor(route *Route) string {
 	if route.AuthGuard != nil && route.AuthGuard.LoginURL != "" {
 		return route.AuthGuard.LoginURL
+	}
+	if c.AuthProvider != nil && c.AuthProvider.LoginURL != "" {
+		return c.AuthProvider.LoginURL
 	}
 	if c.OIDC != nil {
 		return c.OIDC.LoginURL
@@ -1377,7 +1461,32 @@ func (c *Config) LoginURLFor(route *Route) string {
 	return ""
 }
 
+// AuthIssuer is the OIDC issuer advertised in MCP metadata
+// (authProvider first, legacy oidc fallback).
+func (c *Config) AuthIssuer() string {
+	if c.AuthProvider != nil && c.AuthProvider.Issuer != "" {
+		return c.AuthProvider.Issuer
+	}
+	if c.OIDC != nil {
+		return c.OIDC.Issuer
+	}
+	return ""
+}
+
+// LoadOptions carries CLI/environment overrides into the config
+// loader. They are resolved before validation so -check and startup
+// see exactly the same provider.
+type LoadOptions struct {
+	// AuthBridgeURL: -authBridge flag (highest precedence for the
+	// legacy http provider).
+	AuthBridgeURL string
+}
+
 func Load(path string) (*Config, error) {
+	return LoadWithOptions(path, LoadOptions{})
+}
+
+func LoadWithOptions(path string, opts LoadOptions) (*Config, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1441,6 +1550,13 @@ func Load(path string) (*Config, error) {
 	// configuration refuses startup instead of serving requests
 	// without credentials.
 	if err := cfg.resolveTokenBroker(); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
+	// Authentication provider: explicit authProvider block, or a
+	// legacy (oidc + auth-bridge) translation. Resolved before
+	// validation so LoginURLFor/AuthIssuer see the final values.
+	if err := cfg.resolveAuthProvider(opts.AuthBridgeURL); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 
@@ -1767,15 +1883,26 @@ func (c *Config) validate() error {
 		host := c.Routes[i].Host
 		route := &c.Routes[i]
 
-		if route.GuardActive() && c.LoginURLFor(route) == "" {
+		// A login URL is required only when a BROWSER route can
+		// actually log a user in: an authenticated frontend route, or
+		// a frontend user badge whose logout button needs the login
+		// origin. API routes only answer 401, and a purely public
+		// frontend route starts with no oidc/authProvider block at all
+		// (the onboarding "static site" case).
+		if route.Frontend &&
+			(route.Auth != nil || route.UserBadge != nil) &&
+			c.LoginURLFor(route) == "" {
 			return fmt.Errorf(
-				"route %s: guard active without login URL (oidc.loginUrl block or authGuard.loginUrl required)",
+				"route %s: authentication is configured but no login URL is available\n"+
+					"hint: set authProvider.loginUrl, or use authProvider.type \"dev\" for "+
+					"local onboarding, or authGuard.loginUrl on this route",
 				host)
 		}
 
-		if route.MCPActive() && (c.OIDC == nil || c.OIDC.Issuer == "") {
+		if route.MCPActive() && c.AuthIssuer() == "" {
 			return fmt.Errorf(
-				"route %s: MCP active without oidc.issuer (OAuth metadata: authorization_servers)",
+				"route %s: MCP active without an OIDC issuer\n"+
+					"hint: set authProvider.issuer (or the legacy oidc.issuer)",
 				host)
 		}
 
@@ -2120,6 +2247,202 @@ func joinMCPEndpoint(base, rel string) string {
 	default:
 		return base + rel
 	}
+}
+
+// resolveAuthProvider materializes the authentication provider
+// configuration:
+//
+//   - an explicit authProvider block is completed with defaults;
+//   - without it, a legacy (oidc + auth-bridge) configuration is
+//     translated to an http provider, so existing deployments keep
+//     working unchanged.
+//
+// The provider itself is constructed by the proxy (it needs the
+// listen address and the route hosts).
+func (c *Config) resolveAuthProvider(authBridgeURL string) error {
+	authBridgeURL = strings.TrimRight(strings.TrimSpace(authBridgeURL), "/")
+
+	if c.AuthProvider == nil {
+		if c.OIDC == nil && authBridgeURL == "" {
+			return nil
+		}
+		ap := &AuthProviderConfig{Type: "http"}
+		if c.OIDC != nil {
+			ap.LoginURL = c.OIDC.LoginURL
+			ap.Issuer = c.OIDC.Issuer
+		}
+		if authBridgeURL != "" {
+			ap.BaseURL = authBridgeURL
+		}
+		c.AuthProvider = ap
+	}
+
+	ap := c.AuthProvider
+	if ap.Type == "" {
+		if ap.Dev != nil {
+			ap.Type = "dev"
+		} else {
+			ap.Type = "http"
+		}
+	}
+
+	switch ap.Type {
+
+	case "dev":
+		if ap.LoginBaseURL == "" && ap.LoginURL != "" {
+			if u, err := url.Parse(ap.LoginURL); err == nil && u.Host != "" {
+				ap.LoginBaseURL = u.Scheme + "://" + u.Host
+			}
+		}
+		ap.LoginBaseURL = strings.TrimRight(
+			strings.TrimSpace(ap.LoginBaseURL), "/")
+		if ap.LoginBaseURL == "" {
+			return fmt.Errorf(
+				"authProvider.type dev: loginBaseUrl is required " +
+					"(e.g. http://login.demo.localhost:3000)")
+		}
+		u, err := url.Parse(ap.LoginBaseURL)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf(
+				"authProvider.loginBaseUrl %q: invalid URL", ap.LoginBaseURL)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf(
+				"authProvider.loginBaseUrl %q: scheme must be http or https",
+				ap.LoginBaseURL)
+		}
+		if u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf(
+				"authProvider.loginBaseUrl %q: query and fragment forbidden",
+				ap.LoginBaseURL)
+		}
+		if u.Path != "" && u.Path != "/" {
+			return fmt.Errorf(
+				"authProvider.loginBaseUrl %q: a path is not supported "+
+					"(use an origin such as http://login.example.com:3000)",
+				ap.LoginBaseURL)
+		}
+		if ap.LoginURL == "" {
+			ap.LoginURL = ap.LoginBaseURL + "/login"
+		}
+		if ap.Issuer == "" {
+			ap.Issuer = ap.LoginBaseURL + "/dev"
+		}
+		ap.CookieDomain = strings.Trim(
+			strings.ToLower(strings.TrimSpace(ap.CookieDomain)), ".")
+		if ap.CookieDomain == "" {
+			return fmt.Errorf(
+				"authProvider.type dev: cookieDomain is required " +
+					"(e.g. demo.localhost)")
+		}
+		if ap.Dev == nil {
+			ap.Dev = &DevAuthConfig{}
+		}
+		if ap.Dev.SessionTTLSeconds < 0 {
+			return fmt.Errorf(
+				"authProvider.dev.sessionTtlSeconds: must be positive")
+		}
+		seenUsers := map[string]bool{}
+		seenTokens := map[string]bool{}
+		for i, du := range ap.Dev.Users {
+			name := strings.TrimSpace(du.Username)
+			if name == "" {
+				return fmt.Errorf(
+					"authProvider.dev.users[%d]: username is required", i)
+			}
+			if du.Password == "" {
+				return fmt.Errorf(
+					"authProvider.dev.users[%d] (%s): password is required",
+					i, name)
+			}
+			if seenUsers[name] {
+				return fmt.Errorf(
+					"authProvider.dev.users: duplicate username %q", name)
+			}
+			seenUsers[name] = true
+			token := du.MCPToken
+			if token == "" {
+				token = "dev-" + name
+			}
+			if seenTokens[token] {
+				return fmt.Errorf(
+					"authProvider.dev.users: duplicate mcpToken %q", token)
+			}
+			seenTokens[token] = true
+		}
+
+	case "http":
+		if authBridgeURL != "" {
+			// CLI flag: highest precedence, and it resets derived
+			// endpoints so they follow the new base.
+			ap.BaseURL = authBridgeURL
+			ap.VerifyURL = ""
+			ap.MCPVerifyURL = ""
+			ap.HealthURL = ""
+		}
+		base := strings.TrimRight(
+			strings.TrimSpace(ap.BaseURL), "/")
+		if base == "" {
+			base = strings.TrimRight(
+				strings.TrimSpace(os.Getenv("AUTH_BRIDGE_URL")), "/")
+		}
+		if base == "" {
+			base = "http://auth-bridge:3000"
+		}
+		ap.BaseURL = base
+		u, err := url.Parse(base)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf(
+				"authProvider.baseUrl %q: invalid URL", base)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf(
+				"authProvider.baseUrl %q: scheme must be http or https",
+				base)
+		}
+		if ap.VerifyURL == "" {
+			ap.VerifyURL = base + "/auth"
+		}
+		if ap.MCPVerifyURL == "" {
+			ap.MCPVerifyURL = base + "/auth/mcp"
+		}
+		if ap.HealthURL == "" {
+			ap.HealthURL = base + "/health"
+		}
+		if ap.LoginURL == "" {
+			if c.OIDC != nil && c.OIDC.LoginURL != "" {
+				ap.LoginURL = c.OIDC.LoginURL
+			} else {
+				ap.LoginURL = base + "/login"
+			}
+		}
+		if ap.Issuer == "" && c.OIDC != nil {
+			ap.Issuer = c.OIDC.Issuer
+		}
+		for name, raw := range map[string]string{
+			"loginUrl":     ap.LoginURL,
+			"verifyUrl":    ap.VerifyURL,
+			"mcpVerifyUrl": ap.MCPVerifyURL,
+			"healthUrl":    ap.HealthURL,
+		} {
+			if raw == "" {
+				continue
+			}
+			pu, err := url.Parse(raw)
+			if err != nil || pu.Host == "" ||
+				(pu.Scheme != "http" && pu.Scheme != "https") {
+				return fmt.Errorf(
+					"authProvider.%s %q: invalid http(s) URL", name, raw)
+			}
+		}
+
+	default:
+		return fmt.Errorf(
+			"authProvider.type %q: unknown provider (expected dev or http)",
+			ap.Type)
+	}
+
+	return nil
 }
 
 // resolveTokenBroker loads the shared secret for routes that use

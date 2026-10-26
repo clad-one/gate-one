@@ -1,9 +1,8 @@
 package proxy
 
 import (
+	"cladone/gate-one/internal/authn"
 	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -34,6 +33,29 @@ func writeMCPAuthChallenge(w http.ResponseWriter, resourceMetadataURL, scope str
   "error": "unauthorized",
   "error_description": "Bearer token required"
 }`))
+}
+
+// writeMCPInsufficientScope answers an authenticated MCP caller that
+// lacks the required scope. resource_metadata is present on the 403
+// too (MCP 2026-07-28, consistency with the 401).
+func writeMCPInsufficientScope(
+	w http.ResponseWriter,
+	resourceMetadataURL, scope string,
+) {
+	w.Header().Set(
+		"WWW-Authenticate",
+		fmt.Sprintf(
+			`Bearer error="insufficient_scope", scope="%s", resource_metadata="%s"`,
+			scope,
+			resourceMetadataURL,
+		),
+	)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(fmt.Sprintf(`{
+  "error": "insufficient_scope",
+  "error_description": "%s scope required"
+}`, scope)))
 }
 
 func splitRoles(s string) []string {
@@ -142,88 +164,68 @@ func (g *Gateway) checkAuth(
 		r.Header.Get("Authorization") != "",
 	)
 
-	// Identity cache: one auth-bridge round-trip per session and per
+	provider := g.auth
+	if provider == nil {
+		return nil, authn.ErrProviderUnavailable
+	}
+
+	// Identity cache: one provider round-trip per session and per
 	// TTL instead of one per request. A silent refresh's Set-Cookie
 	// is only propagated on the fresh call (the cache does not have
-	// one) — after rotation, cookies change → new key.
-	if cached, ok := cachedAuth(authCacheKey(r)); ok {
+	// one) — after rotation, cookies change → new key. The provider
+	// name is part of the key so a config reload with another
+	// provider cannot reuse a stale identity.
+	key := provider.Name() + "|" + authCacheKey(r)
+	if cached, ok := cachedAuth(key); ok {
 		atomic.AddInt64(&statAuthCacheHi, 1)
 		log.Printf("AUTH CACHE hit user=%q", cached.Username)
-		ctx.UserID = cached.UserID
-		ctx.Username = cached.Username
-		ctx.Email = cached.Email
-		ctx.Roles = cached.Roles
-		ctx.Scopes = cached.Scopes
-		ctx.Claims = cached.Claims
+		applyIdentity(ctx, authn.Identity{
+			UserID:   cached.UserID,
+			Username: cached.Username,
+			Email:    cached.Email,
+			Roles:    cached.Roles,
+			Scopes:   cached.Scopes,
+			Claims:   cached.Claims,
+		})
 		return ctx, nil
 	}
 
-	req, err := http.NewRequest(
-		http.MethodGet,
-		g.authBridgeBaseURLFor()+"/auth",
-		nil,
-	)
+	res, err := provider.Verify(r.Context(), r)
+	if res != nil {
+		// Propagate any session refresh issued by the provider
+		// (auth-bridge silently refreshes access tokens).
+		for _, c := range res.SetCookies {
+			w.Header().Add("Set-Cookie", c)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		req.Header.Set("Authorization", auth)
-	}
-	for _, c := range r.Cookies() {
-		req.AddCookie(c)
-	}
-	req.Header.Set("X-Forwarded-Host", r.Host)
-	req.Header.Set("X-Forwarded-Uri", r.RequestURI)
-	req.Header.Set("X-Forwarded-Method", r.Method)
-
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
 	atomic.AddInt64(&statAuthBridge, 1)
 
 	log.Printf(
-		"AUTH BRIDGE status=%d user=%q username=%q roles=%q",
-		resp.StatusCode,
-		resp.Header.Get("X-User-Id"),
-		resp.Header.Get("X-Username"),
-		resp.Header.Get("X-Roles"),
+		"AUTH PROVIDER %s user=%q username=%q roles=%q",
+		provider.Name(),
+		res.UserID,
+		res.Username,
+		res.Roles,
 	)
 
-	// Propagate any cookies auth-bridge issued (e.g. a silently
-	// refreshed access_token/refresh_token) back to the browser,
-	// regardless of whether auth ultimately succeeded or not.
-	for _, c := range resp.Header["Set-Cookie"] {
-		w.Header().Add("Set-Cookie", c)
+	if res.UserID == "" && res.Username == "" {
+		return nil, authn.ErrUnauthenticated
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New("authentication failed")
-	}
-	ctx.UserID = resp.Header.Get("X-User-Id")
-	ctx.Username = resp.Header.Get("X-Username")
-	ctx.Email = resp.Header.Get("X-Email")
-	ctx.Roles = splitRoles(resp.Header.Get("X-Roles"))
-	ctx.Scopes = splitRoles(resp.Header.Get("X-Scopes"))
-
-	// Token claims (base64-JSON of the full payload): consumed by
-	// the when.claims conditions and the /__gate-one/auth probe.
-	if xc := resp.Header.Get("X-Claims"); xc != "" {
-		if raw, derr := base64.StdEncoding.DecodeString(xc); derr == nil {
-			var claims map[string]any
-			if jerr := json.Unmarshal(raw, &claims); jerr == nil {
-				ctx.Claims = claims
-			} else {
-				log.Printf("AUTH BRIDGE: unreadable X-Claims: %v", jerr)
-			}
-		} else {
-			log.Printf("AUTH BRIDGE: non-base64 X-Claims: %v", derr)
-		}
-	}
-	cacheAuth(authCacheKey(r), ctx)
+	applyIdentity(ctx, res.Identity)
+	cacheAuth(key, ctx)
 	return ctx, nil
+}
+
+func applyIdentity(ctx *RequestContext, id authn.Identity) {
+	ctx.UserID = id.UserID
+	ctx.Username = id.Username
+	ctx.Email = id.Email
+	ctx.Roles = id.Roles
+	ctx.Scopes = id.Scopes
+	ctx.Claims = id.Claims
 }
 
 func (g *Gateway) checkMCPAuth(
@@ -235,86 +237,34 @@ func (g *Gateway) checkMCPAuth(
 	scope string,
 ) (*RequestContext, error) {
 
-	req, err := http.NewRequest(
-		http.MethodGet,
-		g.authBridgeBaseURLFor()+"/auth/mcp",
-		nil,
-	)
+	provider := g.auth
+	if provider == nil {
+		return nil, authn.ErrProviderUnavailable
+	}
+
+	res, err := provider.VerifyMCP(r.Context(), r, scope, resource)
 	if err != nil {
-		return nil, err
+		switch {
+		case errors.Is(err, authn.ErrInsufficientScope):
+			writeMCPInsufficientScope(w, resourceMetadataURL, scope)
+			return nil, ErrUnauthorized
+		case errors.Is(err, authn.ErrUnauthenticated):
+			writeMCPAuthChallenge(w, resourceMetadataURL, scope)
+			return nil, ErrUnauthorized
+		default:
+			return nil, err
+		}
 	}
-
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		req.Header.Set("Authorization", auth)
-	}
-
-	// Internal header: the required scope declared by the route's
-	// mcp policy (X-MCP-Scope). The request is built here, never
-	// copied from input headers: an external client cannot forge it.
-	req.Header.Set("X-MCP-Scope", scope)
-
-	// Internal header: the protected-resource identifier of THIS MCP
-	// endpoint (host + mcp.path), so auth-bridge verifies the token
-	// audience per endpoint rather than against a single global
-	// resource. Also built here, never copied from the client.
-	if resource != "" {
-		req.Header.Set("X-MCP-Resource", resource)
-	}
-
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
 	atomic.AddInt64(&statAuthBridge, 1)
 
 	log.Printf(
-		"MCP AUTH BRIDGE status=%d user=%q username=%q roles=%q",
-		resp.StatusCode,
-		resp.Header.Get("X-User-Id"),
-		resp.Header.Get("X-Username"),
-		resp.Header.Get("X-Roles"),
+		"MCP AUTH PROVIDER %s user=%q username=%q roles=%q",
+		provider.Name(),
+		res.UserID,
+		res.Username,
+		res.Roles,
 	)
 
-	switch resp.StatusCode {
-
-	case http.StatusUnauthorized:
-		writeMCPAuthChallenge(w, resourceMetadataURL, scope)
-		return nil, ErrUnauthorized
-
-	case http.StatusForbidden:
-		// resource_metadata is expected on the 403 too
-		// (MCP 2026-07-28, consistency with the 401).
-		w.Header().Set(
-			"WWW-Authenticate",
-			fmt.Sprintf(
-				`Bearer error="insufficient_scope", scope="%s", resource_metadata="%s"`,
-				scope,
-				resourceMetadataURL,
-			),
-		)
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-
-		_, _ = w.Write([]byte(fmt.Sprintf(`{
-  "error": "insufficient_scope",
-  "error_description": "%s scope required"
-}`, scope)))
-
-		return nil, ErrUnauthorized
-
-	case http.StatusOK:
-		// continue
-
-	default:
-		return nil, errors.New("MCP authentication failed")
-	}
-
-	ctx.UserID = resp.Header.Get("X-User-Id")
-	ctx.Username = resp.Header.Get("X-Username")
-	ctx.Email = resp.Header.Get("X-Email")
-	ctx.Roles = splitRoles(resp.Header.Get("X-Roles"))
-
+	applyIdentity(ctx, res.Identity)
 	return ctx, nil
 }

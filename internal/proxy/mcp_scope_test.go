@@ -61,7 +61,7 @@ func newMCPTestGatewayWithBridgeStatus(
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw.authBridgeBaseURL = bridge.URL
+	gw.setAuthBridgeForTest(bridge.URL)
 
 	return gw, &seen
 }
@@ -187,7 +187,7 @@ func TestMCPResourceHeaderSentToBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw.authBridgeBaseURL = bridge.URL
+	gw.setAuthBridgeForTest(bridge.URL)
 
 	doGet(t, gw, "gram.test", "/mcp")
 

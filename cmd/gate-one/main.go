@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,7 +17,80 @@ import (
 	"cladone/gate-one/internal/proxy"
 )
 
+// Set by the release build (-ldflags "-X main.version=..."). The
+// source tree builds a plain "dev" binary.
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
+func printVersion() {
+	fmt.Printf("gate-one %s (commit %s, built %s)\n", version, commit, date)
+}
+
+// printReady is the onboarding banner: the URLs a human should open,
+// the login page and (in dev) the accounts. Production logs stay
+// short.
+func printReady(cfg *core.Config, addr string) {
+	ap := cfg.AuthProvider
+	if ap == nil {
+		return
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		host, port = addr, "3000"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+
+	if ap.Type == "dev" {
+		fmt.Println()
+		fmt.Println("READY (dev auth — loopback only)")
+		seen := map[string]bool{}
+		for i := range cfg.Routes {
+			h := cfg.Routes[i].Host
+			if seen[h] {
+				continue
+			}
+			seen[h] = true
+			fmt.Printf("  http://%s:%s\n", h, port)
+		}
+		login := ap.LoginURL
+		if login == "" {
+			login = "http://login." + ap.CookieDomain
+			if port != "" {
+				login += ":" + port
+			}
+			login += "/login"
+		}
+		fmt.Printf("  login: %s\n", login)
+		fmt.Println("  accounts: alice/alice (user), bob/bob (admin)")
+		fmt.Println()
+		return
+	}
+
+	fmt.Printf(
+		"AUTH provider=%s login=%s\n",
+		ap.Type, ap.LoginURL)
+}
+
 func main() {
+
+	// Subcommands are dispatched before flag parsing so the
+	// historical flag mode (`gate-one -config ...`) is untouched.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "init":
+			os.Exit(runInit(os.Args[2:]))
+		case "doctor":
+			os.Exit(runDoctor(os.Args[2:]))
+		case "version":
+			printVersion()
+			return
+		}
+	}
 
 	configPath := flag.String(
 		"config",
@@ -50,12 +124,48 @@ func main() {
 		false,
 		"log request query and body (debug)",
 	)
+	// devAllowRemote: explicit opt-in for the embedded dev IdP on a
+	// non-loopback bind (demo only; never production).
+	devAllowRemote := flag.Bool(
+		"dev-allow-remote",
+		false,
+		"allow the dev auth provider on a non-loopback listen address",
+	)
+	showVersion := flag.Bool(
+		"version",
+		false,
+		"print the version and exit",
+	)
 	flag.Parse()
 
-	cfg, err := core.Load(*configPath)
+	if *showVersion {
+		printVersion()
+		return
+	}
+
+	// The embedded dev provider is loopback-only. If the user did not
+	// explicitly choose an address, bind loopback: `init --dev` then
+	// works with the default command, while Docker (non-dev) keeps
+	// :3000.
+	addrSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "addr" {
+			addrSet = true
+		}
+	})
+
+	cfg, err := core.LoadWithOptions(
+		*configPath,
+		core.LoadOptions{AuthBridgeURL: *authBridge},
+	)
 
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if !addrSet && cfg.AuthProvider != nil &&
+		cfg.AuthProvider.Type == "dev" {
+		*addr = "127.0.0.1:3000"
 	}
 
 	printRoutes(cfg)
@@ -70,6 +180,8 @@ func main() {
 	opts := []proxy.Option{
 		proxy.WithAuthBridgeURL(*authBridge),
 		proxy.WithLogBody(*logBody),
+		proxy.WithListenAddr(*addr),
+		proxy.WithDevRemote(*devAllowRemote),
 	}
 
 	// Hot-reloadable config (SIGHUP): the file can be a mounted
@@ -89,7 +201,10 @@ func main() {
 	// SIGHUP reload: re-read, validate, then swap (the previous config
 	// stays active if the new one is refused).
 	load := func() error {
-		c, err := core.Load(*configPath)
+		c, err := core.LoadWithOptions(
+			*configPath,
+			core.LoadOptions{AuthBridgeURL: *authBridge},
+		)
 		if err != nil {
 			return err
 		}
@@ -148,6 +263,7 @@ func main() {
 	}()
 
 	log.Printf("Cladone Gate One listening on %s", *addr)
+	printReady(cfg, *addr)
 
 	if err := srv.ListenAndServe(); err != nil &&
 		err != http.ErrServerClosed {
@@ -161,6 +277,10 @@ func main() {
 // a config is done by reading startup output (or -check).
 func printRoutes(cfg *core.Config) {
 	out := &strings.Builder{}
+	if ap := cfg.AuthProvider; ap != nil {
+		fmt.Fprintf(out, "AUTH PROVIDER %s  login=%s  issuer=%s\n",
+			ap.Type, ap.LoginURL, ap.Issuer)
+	}
 	fmt.Fprintf(out, "%-42s %-26s %-44s %s\n",
 		"HOST", "PATH", "BACKEND", "POLICIES")
 	for i := range cfg.Routes {

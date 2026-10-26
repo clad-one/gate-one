@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"cladone/gate-one/internal/authn"
 	"cladone/gate-one/internal/core"
 	mcpserver "cladone/gate-one/internal/mcp"
 	"cladone/gate-one/internal/pwa"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -74,9 +76,25 @@ type Gateway struct {
 	config *core.Config //for policy inspection
 	client *http.Client
 
+	// auth is the selected authentication provider (dev, http or,
+	// later, native OIDC). Nil only before New finishes.
+	auth authn.Provider
+
+	// loginHost/loginHandler: a native provider hosts its login page
+	// on a dedicated virtual host, intercepted before any route.
+	loginHost    string
+	loginHandler authn.LoginHandler
+
 	// auth-bridge base URL, overridable in tests to stub the
-	// service (default: authBridgeBaseURL)
+	// service (default: authBridgeBaseURL). Kept for backward
+	// compatibility with the existing test suite and the
+	// -authBridge flag.
 	authBridgeBaseURL string
+
+	// listenAddr is the effective -addr value: the dev provider
+	// refuses a non-loopback bind (safety).
+	listenAddr string
+	devRemote  bool
 
 	// tokenBroker is non-nil only when at least one route uses
 	// upstream.delegated.
@@ -111,6 +129,23 @@ func WithAuthBridgeURL(u string) Option {
 		if u != "" {
 			g.authBridgeBaseURL = u
 		}
+	}
+}
+
+// WithListenAddr records the effective listen address. The embedded
+// dev provider refuses a non-loopback bind unless WithDevRemote(true)
+// is explicitly set (demo only).
+func WithListenAddr(addr string) Option {
+	return func(g *Gateway) {
+		g.listenAddr = addr
+	}
+}
+
+// WithDevRemote allows the dev provider on a non-loopback bind. The
+// CLI exposes it only as --dev-allow-remote.
+func WithDevRemote(allow bool) Option {
+	return func(g *Gateway) {
+		g.devRemote = allow
 	}
 }
 
@@ -168,6 +203,14 @@ func (h *Reloadable) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
+
+	// Apply the construction options first: the auth provider needs
+	// the -authBridge override and the listen address before it is
+	// built.
+	gw := &Gateway{}
+	for _, opt := range opts {
+		opt(gw)
+	}
 
 	var routes []*compiledRoute
 
@@ -555,29 +598,204 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		}
 	}
 
-	gw := &Gateway{
-		routes:      routes,
-		config:      cfg,
-		tokenBroker: broker,
-		client: &http.Client{
-			// Timeout: auth-bridge calls must never freeze request
-			// handling (see authBridgeClientTimeout).
-			Timeout:   authBridgeClientTimeout,
-			Transport: backendTransport,
-			CheckRedirect: func(
-				req *http.Request,
-				via []*http.Request,
-			) error {
-				return http.ErrUseLastResponse
-			},
+	gw.routes = routes
+	gw.config = cfg
+	gw.tokenBroker = broker
+	gw.client = &http.Client{
+		// Timeout: auth-bridge calls must never freeze request
+		// handling (see authBridgeClientTimeout).
+		Timeout:   authBridgeClientTimeout,
+		Transport: backendTransport,
+		CheckRedirect: func(
+			req *http.Request,
+			via []*http.Request,
+		) error {
+			return http.ErrUseLastResponse
 		},
 	}
 
-	for _, opt := range opts {
-		opt(gw)
+	provider, loginHandler, err := buildAuthProvider(cfg, gw)
+	if err != nil {
+		return nil, err
+	}
+	gw.auth = provider
+	gw.loginHandler = loginHandler
+	if loginHandler != nil {
+		gw.loginHost = normalizeHost(loginHandler.LoginHost())
 	}
 
 	return gw, nil
+}
+
+// buildAuthProvider constructs the configured provider. The legacy
+// path (no authProvider block) keeps using auth-bridge, exactly as
+// before, so existing deployments are unchanged.
+func buildAuthProvider(
+	cfg *core.Config,
+	gw *Gateway,
+) (authn.Provider, authn.LoginHandler, error) {
+	ap := cfg.AuthProvider
+	if ap == nil {
+		// Legacy config with no oidc block: auth-bridge default,
+		// overridable by -authBridge. Public-only configs never call
+		// the provider.
+		ap = &core.AuthProviderConfig{Type: "http"}
+	}
+
+	switch ap.Type {
+
+	case "dev":
+		if !gw.devRemote && !isLoopbackAddr(gw.listenAddr) {
+			return nil, nil, fmt.Errorf(
+				"authProvider.type \"dev\" refuses to start on %q: "+
+					"the embedded dev IdP is loopback-only "+
+					"(use -addr 127.0.0.1:3000, or --dev-allow-remote for a demo)",
+				gw.listenAddr)
+		}
+		users := make([]authn.DevUser, 0)
+		if ap.Dev != nil {
+			users = make([]authn.DevUser, 0, len(ap.Dev.Users))
+			for _, u := range ap.Dev.Users {
+				users = append(users, authn.DevUser{
+					Username: u.Username,
+					Password: u.Password,
+					Roles:    u.Roles,
+					Scopes:   u.Scopes,
+					Claims:   u.Claims,
+					MCPToken: u.MCPToken,
+				})
+			}
+		}
+		var ttl time.Duration
+		if ap.Dev != nil && ap.Dev.SessionTTLSeconds > 0 {
+			ttl = time.Duration(ap.Dev.SessionTTLSeconds) * time.Second
+		}
+		allowed := make([]string, 0, len(cfg.Routes))
+		for i := range cfg.Routes {
+			allowed = append(allowed, cfg.Routes[i].Host)
+		}
+		dev, err := authn.NewDev(authn.DevConfig{
+			LoginBaseURL: ap.LoginBaseURL,
+			CookieDomain: ap.CookieDomain,
+			AllowedHosts: allowed,
+			Users:        users,
+			SessionTTL:   ttl,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("authProvider.type dev: %w", err)
+		}
+		log.Printf(
+			"DEV AUTH enabled login=%s cookieDomain=%s users=alice,bob "+
+				"(loopback only)",
+			dev.LoginURL(), ap.CookieDomain)
+		return dev, dev, nil
+
+	case "http", "":
+		base := gw.authBridgeBaseURL
+		if base == "" {
+			base = ap.BaseURL
+		}
+		if base == "" {
+			base = strings.TrimRight(
+				strings.TrimSpace(os.Getenv("AUTH_BRIDGE_URL")), "/")
+		}
+		if base == "" {
+			base = "http://auth-bridge:3000"
+		}
+		headers := authn.HeaderNames{}
+		if ap.Headers != nil {
+			headers = authn.HeaderNames{
+				UserID:   ap.Headers.UserID,
+				Username: ap.Headers.Username,
+				Email:    ap.Headers.Email,
+				Roles:    ap.Headers.Roles,
+				Scopes:   ap.Headers.Scopes,
+				Claims:   ap.Headers.Claims,
+			}
+		}
+		httpCfg := authn.HTTPConfig{
+			BaseURL:       base,
+			LoginURLValue: ap.LoginURL,
+			IssuerValue:   ap.Issuer,
+			Headers:       headers,
+			Client:        gw.client,
+		}
+		if gw.authBridgeBaseURL == "" {
+			httpCfg.VerifyURL = ap.VerifyURL
+			httpCfg.MCPVerifyURL = ap.MCPVerifyURL
+			httpCfg.HealthURL = ap.HealthURL
+		}
+		if httpCfg.LoginURLValue == "" && cfg.OIDC != nil {
+			httpCfg.LoginURLValue = cfg.OIDC.LoginURL
+		}
+		if httpCfg.IssuerValue == "" && cfg.OIDC != nil {
+			httpCfg.IssuerValue = cfg.OIDC.Issuer
+		}
+		if httpCfg.LoginURLValue == "" {
+			httpCfg.LoginURLValue = base + "/login"
+		}
+		p, err := authn.NewHTTP(httpCfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		log.Printf(
+			"AUTH PROVIDER http base=%s login=%s",
+			base, p.LoginURL())
+		return p, nil, nil
+
+	default:
+		return nil, nil, fmt.Errorf(
+			"authProvider.type %q: unknown provider", ap.Type)
+	}
+}
+
+// isLoopbackAddr reports whether a listen address is loopback-only.
+// ":3000" / "0.0.0.0:3000" are NOT loopback (all interfaces).
+func isLoopbackAddr(addr string) bool {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return true // no address recorded: tests / direct construction
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// ProviderName exposes the selected provider (doctor, logs).
+func (g *Gateway) ProviderName() string {
+	if g.auth == nil {
+		return ""
+	}
+	return g.auth.Name()
+}
+
+// ProviderLoginURL exposes the provider's login page (doctor).
+func (g *Gateway) ProviderLoginURL() string {
+	if g.auth == nil {
+		return ""
+	}
+	return g.auth.LoginURL()
+}
+
+// CheckProvider probes the authentication provider. A local provider
+// returns nil; an external one performs its /health request.
+func (g *Gateway) CheckProvider() error {
+	if g.auth == nil {
+		return fmt.Errorf("no authentication provider configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return g.auth.Health(ctx)
 }
 
 func (g *Gateway) serveMCPProtectedResourceMetadata(
@@ -590,7 +808,7 @@ func (g *Gateway) serveMCPProtectedResourceMetadata(
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"resource": resourceForUnit(unit, r.Host, clientScheme(r)),
 		"authorization_servers": []string{
-			g.config.OIDC.Issuer,
+			g.config.AuthIssuer(),
 		},
 		"scopes_supported":         []string{scopeForUnit(unit)},
 		"bearer_methods_supported": []string{"header"},
@@ -1079,6 +1297,13 @@ func (g *Gateway) serveAuthState(
 	w.Header().Set("Cache-Control", "no-store")
 	sctx, err := g.checkAuth(w, r, ctx)
 	if err != nil {
+		if errors.Is(err, authn.ErrProviderUnavailable) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(
+				`{"error":"authentication_unavailable"}`))
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"authentication_required"}`))
@@ -1092,6 +1317,45 @@ func (g *Gateway) serveAuthState(
 		"scopes": sctx.Scopes,
 		"claims": sctx.Claims,
 	})
+}
+
+// writeAuthUnavailable answers a dependency outage (auth-bridge /
+// IdP unreachable). It is deliberately NOT a 401/redirect: a login
+// page cannot fix a down provider and would loop.
+func writeAuthUnavailable(
+	w http.ResponseWriter,
+	r *http.Request,
+	pageRoute bool,
+) {
+	w.Header().Set("Cache-Control", "no-store")
+	if pageRoute && isBrowserRequest(r) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Authentication service unavailable</title>
+<style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;
+font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;
+background:#f4f5f7;color:#1c1f23}
+main{max-width:560px;padding:28px;background:#fff;border:1px solid #e2e6ea;
+border-radius:14px}
+h1{font-size:20px;margin:0 0 8px}p{margin:0;color:#5c6470}
+code{background:#f1f3f5;padding:1px 5px;border-radius:4px}
+</style></head><body><main>
+<h1>Authentication service unavailable</h1>
+<p>Gate One cannot reach the authentication provider. This is an
+outage, not a sign-in problem: retry in a moment. Operators can check
+<code>/healthz</code> and <code>gate-one doctor</code>.</p>
+</main></body></html>`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadGateway)
+	_, _ = w.Write([]byte(
+		`{"error":"authentication_unavailable",` +
+			`"error_description":"the authentication provider is unreachable"}`))
 }
 
 // clientSchemeKey: the CLIENT scheme (browser→ingress) frozen into
@@ -1224,6 +1488,15 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("cannot build request context: %v", err)
 		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Native provider login host (dev, later OIDC): a dedicated
+	// virtual host served BEFORE route matching, exactly like the
+	// production login.<domain>.
+	if g.loginHandler != nil &&
+		normalizeHost(ctx.Host) == g.loginHost {
+		g.loginHandler.ServeLogin(w, r)
 		return
 	}
 
@@ -1454,6 +1727,19 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if err != nil {
 
+			// A provider outage is NOT an authentication failure:
+			// redirecting to a login page would loop (the login
+			// service is the thing that is down). Answer 502 with a
+			// readable page for a navigation, JSON for a fetch.
+			if errors.Is(err, authn.ErrProviderUnavailable) {
+				log.Printf(
+					"AUTH PROVIDER unavailable host=%s: %v",
+					r.Host, err,
+				)
+				writeAuthUnavailable(w, r, cr.pageRoute)
+				return
+			}
+
 			//
 			// Page route
 			//
@@ -1464,10 +1750,19 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				returnTo := clientScheme(r) + "://" +
 					host + r.RequestURI
 
+				loginURL := g.config.LoginURLFor(route)
+				if loginURL == "" {
+					log.Printf(
+						"route %s: authentication required but no login URL",
+						route.Host)
+					writeAuthUnavailable(w, r, true)
+					return
+				}
+
 				http.Redirect(
 					w,
 					r,
-					g.config.LoginURLFor(route)+"?returnTo="+
+					loginURL+"?returnTo="+
 						url.QueryEscape(returnTo),
 					http.StatusFound,
 				)

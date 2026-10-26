@@ -78,7 +78,7 @@ func newMCPSetsGateway(t *testing.T) (*Gateway, *[]unitCall) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw.authBridgeBaseURL = bridge.URL
+	gw.setAuthBridgeForTest(bridge.URL)
 
 	return gw, &calls
 }
@@ -266,7 +266,7 @@ func newMCPSetFilterGateway(t *testing.T) *Gateway {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw.authBridgeBaseURL = bridge.URL
+	gw.setAuthBridgeForTest(bridge.URL)
 
 	return gw
 }

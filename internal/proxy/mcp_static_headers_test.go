@@ -60,7 +60,7 @@ func TestMCPStaticHeadersReachLocalTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw.authBridgeBaseURL = bridge.URL
+	gw.setAuthBridgeForTest(bridge.URL)
 
 	_, decoded := postMCP(t, gw,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{

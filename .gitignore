@@ -2,3 +2,4 @@ bin/
 test/ui/node_modules/
 node_modules/
 *.test
+dist/
