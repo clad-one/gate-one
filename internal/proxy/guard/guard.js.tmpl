@@ -1059,6 +1059,26 @@
     if (!document.hidden) probeSession();
   });
 
+  // A subresource that fails to load (the lazy images of a long book, a
+  // script, a stylesheet) is the FIRST sign that the session died
+  // mid-read: the gateway answers 302->login, the element fires
+  // "error" (resource errors do not bubble — capture phase is
+  // required). Re-probe at once instead of waiting for the periodic
+  // timer. Throttled: after the death, dozens of images fail in a
+  // burst and one probe is enough. probeSession() is a no-op when no
+  // gating is declared.
+  var lastResourceProbe = 0;
+  document.addEventListener("error", function (ev) {
+    var t = ev.target;
+    if (!t || (t.tagName !== "IMG" &&
+               t.tagName !== "SCRIPT" &&
+               t.tagName !== "LINK")) return;
+    var now = Date.now();
+    if (now - lastResourceProbe < 4000) return;
+    lastResourceProbe = now;
+    probeSession();
+  }, true);
+
   // Click handling while anonymous (capture phase). Two attributes,
   // two orthogonal dimensions:
   //

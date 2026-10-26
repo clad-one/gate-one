@@ -137,6 +137,36 @@ func TestGuardInjectedOnFrontendHTML(t *testing.T) {
 	}
 }
 
+// Lazy images are not fetch()es: a resource error is the first sign of
+// a session that died mid-read. The guard must re-probe at once
+// (throttled) instead of waiting for the periodic timer — otherwise the
+// login banner only appears after up to 60 s (2026-10-26).
+func TestGuardProbesOnResourceError(t *testing.T) {
+	gw, _ := testGateway(t, `{
+		"routes": [{
+			"host": "front.test",
+			"path": "/*",
+			"frontend": true,
+			"backend": "BACKEND",
+			"userBadge": {"claims": ["preferred_username"]}
+		}]
+	}`)
+
+	b := body(t, doGet(t, gw, "front.test", "/"))
+
+	for _, want := range []string{
+		`document.addEventListener("error"`,
+		"lastResourceProbe",
+		`t.tagName !== "IMG"`,
+		"probeSession();",
+		"}, true);",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("guard missing resource-error probe hook %q", want)
+		}
+	}
+}
+
 func TestGuardNotInjectedOnNonHTML(t *testing.T) {
 	gw, _ := testGateway(t, `{
 		"routes": [{
