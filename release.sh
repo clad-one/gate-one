@@ -123,8 +123,8 @@ script never pushes, tags or uploads.
 ## Artifacts
 
 Per platform: \`gate-one_${version}_<os>_<arch>.tar.gz\` containing the
-static binary, both JSON schemas, the two onboarding examples, README,
-LICENSE and VERSION.
+static binary, both JSON schemas, the three onboarding examples, the
+auth-provider guide, README, LICENSE and VERSION.
 EOF
 
 echo
