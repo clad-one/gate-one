@@ -173,9 +173,9 @@ func runInit(args []string) int {
 		loginBase := cfg.AuthProvider.LoginBaseURL
 		fmt.Printf("open https://%s\n", hostName)
 		fmt.Printf("login %s/login\n", loginBase)
-		fmt.Printf(
-			"register this redirect URI at the IdP: %s/auth/callback\n",
-			loginBase)
+		fmt.Printf("register at the IdP:\n")
+		fmt.Printf("  redirect URI:      %s/auth/callback\n", loginBase)
+		fmt.Printf("  post-logout URI:   https://%s/\n", hostName)
 		fmt.Printf("export %s=<client-secret>\n", *clientSecretEnv)
 	default:
 		fmt.Printf("open http://%s:%s\n", hostName, *port)

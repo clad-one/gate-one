@@ -106,6 +106,8 @@ Keycloak.
 An unreachable provider is a **502**, never a login redirect: the
 gateway no longer hides an outage behind a sign-in loop.
 
+Full guide: `doc/auth-providers.adoc`.
+
 ## Build
 
 ```bash
@@ -315,7 +317,9 @@ Go toolchain on the server.
 ## Layout
 
 ```
-cmd/gate-one/       entrypoint (flags, SIGHUP hot reload, shutdown)
+cmd/gate-one/       entrypoint (flags, init/doctor, SIGHUP reload, shutdown)
+cmd/gate-one-license/ vendor-side licence keygen/sign
+internal/authn/     provider SPI: dev IdP, http adapter, native OIDC
 internal/core/      config grammar + route loading/validation
 internal/proxy/     reverse proxy, auth, guards, rewriting, limits
 internal/pwa/       PWA wrap (manifest, service worker, Workbox)
@@ -323,6 +327,8 @@ internal/mcp/       MCP endpoint
 test/ui/            guard-script harness (jsdom)
 sw-sim/             service-worker simulator
 testdata/           reference production config
+examples/           minimal static/dev/OIDC configs
+release.sh          local release artifacts (never pushes)
 ```
 
 ## License

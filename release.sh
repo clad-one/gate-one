@@ -36,7 +36,7 @@ for target in "${targets[@]}"; do
 	[ "$os" = "windows" ] && bin="gate-one.exe"
 
 	stage="$dist/stage/gate-one_${version}_${os}_${arch}"
-	mkdir -p "$stage/examples"
+	mkdir -p "$stage/examples" "$stage/doc"
 
 	echo "building ${os}/${arch}…"
 	CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build \
@@ -49,6 +49,7 @@ for target in "${targets[@]}"; do
 	cp examples/static.api-routes.json "$stage/examples/"
 	cp examples/dev.api-routes.json "$stage/examples/"
 	cp examples/oidc.api-routes.json "$stage/examples/"
+	cp doc/auth-providers.adoc "$stage/doc/"
 	cp README.md LICENSE VERSION "$stage/"
 
 	tar -czf "$dist/gate-one_${version}_${os}_${arch}.tar.gz" \
