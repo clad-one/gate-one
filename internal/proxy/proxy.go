@@ -690,6 +690,37 @@ func buildAuthProvider(
 			dev.LoginURL(), ap.CookieDomain)
 		return dev, dev, nil
 
+	case "oidc":
+		allowed := make([]string, 0, len(cfg.Routes))
+		for i := range cfg.Routes {
+			allowed = append(allowed, cfg.Routes[i].Host)
+		}
+		ctx, cancel := context.WithTimeout(
+			context.Background(), 10*time.Second)
+		defer cancel()
+		p, err := authn.NewOIDC(ctx, authn.OIDCConfig{
+			Issuer:       ap.Issuer,
+			ClientID:     ap.ClientID,
+			ClientSecret: ap.ClientSecret,
+			LoginBaseURL: ap.LoginBaseURL,
+			CookieDomain: ap.CookieDomain,
+			AllowedHosts: allowed,
+			Scopes:       ap.Scopes,
+			RedirectURL:  ap.RedirectURL,
+			RoleClaims:   ap.RoleClaims,
+			ScopesClaim:  ap.ScopesClaim,
+			MCPAudience:  ap.MCPAudience,
+			SessionTTL: time.Duration(
+				ap.SessionTTLSeconds) * time.Second,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		log.Printf(
+			"OIDC enabled issuer=%s login=%s redirect=%s",
+			ap.Issuer, p.LoginURL(), ap.RedirectURL)
+		return p, p, nil
+
 	case "http", "":
 		base := gw.authBridgeBaseURL
 		if base == "" {

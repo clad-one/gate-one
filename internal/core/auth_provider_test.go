@@ -122,6 +122,95 @@ func TestPublicRouteNeedsNoProvider(t *testing.T) {
 	}
 }
 
+func TestAuthProviderOIDCConfig(t *testing.T) {
+	t.Setenv("ACME_OIDC_SECRET", "s3cret")
+	cfg, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "oidc",
+			"issuer": "https://auth.example.com/realms/acme",
+			"clientId": "gate-one",
+			"clientSecretEnv": "ACME_OIDC_SECRET",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com"
+		},
+		"routes": [{
+			"host": "app.example.com", "path": "/*", "frontend": true,
+			"backend": "http://127.0.0.1:1", "auth": {}
+		}]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ap := cfg.AuthProvider
+	if ap.Type != "oidc" {
+		t.Errorf("type = %q", ap.Type)
+	}
+	if ap.ClientSecret != "s3cret" {
+		t.Errorf("client secret not resolved")
+	}
+	if ap.LoginURL != "https://login.example.com/login" {
+		t.Errorf("login = %q", ap.LoginURL)
+	}
+	if ap.RedirectURL != "https://login.example.com/auth/callback" {
+		t.Errorf("redirect = %q", ap.RedirectURL)
+	}
+	if got := cfg.AuthIssuer(); got != "https://auth.example.com/realms/acme" {
+		t.Errorf("issuer = %q", got)
+	}
+}
+
+func TestAuthProviderOIDCRequiresIssuerAndClient(t *testing.T) {
+	_, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "oidc",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com"
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "issuer is required") {
+		t.Fatalf("err = %v, want issuer refusal", err)
+	}
+}
+
+func TestAuthProviderOIDCMissingSecret(t *testing.T) {
+	_, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "oidc",
+			"issuer": "https://auth.example.com/realms/acme",
+			"clientId": "gate-one",
+			"clientSecretEnv": "MISSING_OIDC_SECRET",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com"
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "MISSING_OIDC_SECRET") {
+		t.Fatalf("err = %v, want missing secret refusal", err)
+	}
+}
+
+func TestOIDCTypeInferredFromClientID(t *testing.T) {
+	cfg, err := loadAuthTest(t, `{
+		"authProvider": {
+			"issuer": "https://auth.example.com/realms/acme",
+			"clientId": "gate-one",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com"
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthProvider.Type != "oidc" {
+		t.Errorf("type = %q, want oidc", cfg.AuthProvider.Type)
+	}
+}
+
 func TestAuthRouteWithoutLoginRefused(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"routes": [{

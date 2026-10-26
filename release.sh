@@ -48,6 +48,7 @@ for target in "${targets[@]}"; do
 	cp testdata/inject-bundle.schema.json "$stage/"
 	cp examples/static.api-routes.json "$stage/examples/"
 	cp examples/dev.api-routes.json "$stage/examples/"
+	cp examples/oidc.api-routes.json "$stage/examples/"
 	cp README.md LICENSE VERSION "$stage/"
 
 	tar -czf "$dist/gate-one_${version}_${os}_${arch}.tar.gz" \
@@ -84,6 +85,12 @@ script never pushes, tags or uploads.
   \`login.<domain>\` host, a real alice/bob login form, a shared session
   cookie and a loopback-only safety guard. No Node, no Keycloak, no Go
   toolchain on the target.
+- **Native OIDC Relying Party** (\`authProvider.type: "oidc"\`).
+  Discovery, authorization code + PKCE, state/nonce, JWKS validation,
+  signed session, RP-initiated logout and local MCP bearer validation:
+  Keycloak, Entra, Google, Authentik, Okta, Auth0 or any OIDC IdP —
+  without auth-bridge. auth-bridge remains available as
+  \`type: "http"\`, including in front of Keycloak.
 - **Authentication provider abstraction.** \`authProvider.type: "http"\`
   keeps auth-bridge (Keycloak) as one adapter among others (Authelia,
   Authentik, a custom forward-auth service). The legacy \`oidc\` block and
@@ -107,8 +114,10 @@ script never pushes, tags or uploads.
   outage should key on 502.
 - The embedded \`dev\` provider refuses a non-loopback bind. Use
   \`--dev-allow-remote\` only for a demo.
-- Native OIDC (Relying Party, without auth-bridge) is the next lot; this
-  release keeps auth-bridge fully supported, including for OIDC.
+- Native OIDC is available (\`authProvider.type: "oidc"\`). The IdP must
+  register the redirect URI \`<loginBaseUrl>/auth/callback\`. For MCP
+  tokens, the scope is the gate; set \`mcpAudience\` for a strict
+  \`aud\` check. auth-bridge remains fully supported (type \`http\`).
 
 ## Artifacts
 

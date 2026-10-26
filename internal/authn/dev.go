@@ -2,13 +2,9 @@ package authn
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -72,9 +68,8 @@ type Dev struct {
 	secure       bool
 	users        map[string]DevUser
 	byToken      map[string]string // MCP token -> username
-	allowed      map[string]bool
-	secret       []byte
-	ttl          time.Duration
+	origins      *originPolicy
+	session      *sessionCodec
 	now          func() time.Time
 
 	loginTmpl *template.Template
@@ -138,15 +133,10 @@ func NewDev(cfg DevConfig) (*Dev, error) {
 		secure:       u.Scheme == "https",
 		users:        make(map[string]DevUser, len(users)),
 		byToken:      make(map[string]string, len(users)),
-		allowed:      map[string]bool{},
-		ttl:          cfg.SessionTTL,
 		now:          cfg.Now,
 		failures:     map[string][]time.Time{},
 		loginTmpl:    template.Must(template.New("login").Parse(devLoginHTML)),
 		doneTmpl:     template.Must(template.New("done").Parse(devPopupDoneHTML)),
-	}
-	if d.ttl <= 0 {
-		d.ttl = devSessionTTL
 	}
 	if d.now == nil {
 		d.now = time.Now
@@ -156,21 +146,22 @@ func NewDev(cfg DevConfig) (*Dev, error) {
 	if rnd == nil {
 		rnd = rand.Reader
 	}
-	d.secret = make([]byte, 32)
-	if _, err := io.ReadFull(rnd, d.secret); err != nil {
+	secret := make([]byte, 32)
+	if _, err := io.ReadFull(rnd, secret); err != nil {
 		return nil, fmt.Errorf("authProvider.dev: session key: %w", err)
 	}
-
-	// Normalize the allowed hosts: the cookie domain (and its
-	// subdomains) plus every configured application host.
-	d.allowed[normalizeHost(domain)] = true
-	d.allowed[normalizeHost(u.Host)] = true
-	for _, h := range cfg.AllowedHosts {
-		if h = normalizeHost(h); h != "" {
-			d.allowed[h] = true
-		}
+	ttl := cfg.SessionTTL
+	if ttl <= 0 {
+		ttl = devSessionTTL
 	}
+	d.session = newSessionCodec(
+		devSessionCookie, domain, d.secure, secret, ttl, d.now)
 
+	// Allowed returnTo/postMessage origins: the cookie domain (and
+	// its subdomains), the login host and every configured
+	// application host.
+	d.origins = newOriginPolicy(
+		domain, append([]string{u.Host}, cfg.AllowedHosts...))
 	for _, user := range users {
 		user.Username = strings.TrimSpace(user.Username)
 		if user.Username == "" {
@@ -232,10 +223,8 @@ func (d *Dev) Verify(
 	_ context.Context,
 	r *http.Request,
 ) (*Result, error) {
-	if c, err := r.Cookie(devSessionCookie); err == nil {
-		if id, ok := d.decodeSession(c.Value); ok {
-			return &Result{Identity: id}, nil
-		}
+	if id, _, ok := d.session.read(r); ok {
+		return &Result{Identity: id}, nil
 	}
 	if id, ok := d.bearerIdentity(r); ok {
 		return &Result{Identity: id}, nil
@@ -286,85 +275,6 @@ func (d *Dev) identity(u DevUser) Identity {
 	}
 }
 
-// sessionPayload is the signed cookie content.
-type sessionPayload struct {
-	User     string         `json:"u"`
-	Email    string         `json:"e,omitempty"`
-	Roles    []string       `json:"r,omitempty"`
-	Scopes   []string       `json:"s,omitempty"`
-	Claims   map[string]any `json:"c,omitempty"`
-	Expires  int64          `json:"exp"`
-	IssuedAt int64          `json:"iat,omitempty"`
-}
-
-func (d *Dev) encodeSession(id Identity) string {
-	p := sessionPayload{
-		User: id.Username, Email: id.Email,
-		Roles: id.Roles, Scopes: id.Scopes, Claims: id.Claims,
-		Expires: d.now().Add(d.ttl).Unix(), IssuedAt: d.now().Unix(),
-	}
-	raw, _ := json.Marshal(p)
-	body := base64.RawURLEncoding.EncodeToString(raw)
-	return body + "." + d.sign(body)
-}
-
-func (d *Dev) decodeSession(v string) (Identity, bool) {
-	body, sig, ok := strings.Cut(v, ".")
-	if !ok || body == "" || sig == "" {
-		return Identity{}, false
-	}
-	if !hmac.Equal([]byte(sig), []byte(d.sign(body))) {
-		return Identity{}, false
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(body)
-	if err != nil {
-		return Identity{}, false
-	}
-	var p sessionPayload
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return Identity{}, false
-	}
-	if p.Expires == 0 || d.now().Unix() >= p.Expires {
-		return Identity{}, false
-	}
-	return Identity{
-		UserID: p.User, Username: p.User, Email: p.Email,
-		Roles: p.Roles, Scopes: p.Scopes, Claims: p.Claims,
-	}, true
-}
-
-func (d *Dev) sign(body string) string {
-	mac := hmac.New(sha256.New, d.secret)
-	mac.Write([]byte(body))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
-
-func (d *Dev) setSession(w http.ResponseWriter, id Identity) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     devSessionCookie,
-		Value:    d.encodeSession(id),
-		Path:     "/",
-		Domain:   d.cookieDomain,
-		MaxAge:   int(d.ttl.Seconds()),
-		HttpOnly: true,
-		Secure:   d.secure,
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-func (d *Dev) clearSession(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     devSessionCookie,
-		Value:    "",
-		Path:     "/",
-		Domain:   d.cookieDomain,
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   d.secure,
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
 // ServeLogin implements LoginHandler.
 func (d *Dev) ServeLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -379,7 +289,7 @@ func (d *Dev) ServeLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		d.renderLogin(w, r, "", http.StatusOK)
 	case "/logout":
-		d.clearSession(w)
+		d.session.clear(w)
 		target := d.safeReturnTo(r.URL.Query().Get("returnTo"))
 		http.Redirect(w, r, target, http.StatusFound)
 	case "/auth/popup-done":
@@ -438,7 +348,7 @@ func (d *Dev) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d.clearFailures(username, r.RemoteAddr)
-	d.setSession(w, d.identity(user))
+	d.session.set(w, d.identity(user), "", time.Time{})
 	http.Redirect(w, r, returnTo, http.StatusFound)
 }
 
@@ -477,48 +387,11 @@ func (d *Dev) renderPopupDone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Dev) safeReturnTo(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "/"
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "/"
-	}
-	if u.IsAbs() {
-		if (u.Scheme == "http" || u.Scheme == "https") &&
-			d.allowedHost(u.Host) {
-			return u.String()
-		}
-		return "/"
-	}
-	if strings.HasPrefix(raw, "//") || !strings.HasPrefix(raw, "/") {
-		return "/"
-	}
-	return raw
+	return d.origins.safeReturnTo(raw)
 }
 
 func (d *Dev) allowedOrigin(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() {
-		return false
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return false
-	}
-	return d.allowedHost(u.Host)
-}
-
-func (d *Dev) allowedHost(host string) bool {
-	h := normalizeHost(host)
-	if h == "" {
-		return false
-	}
-	if d.allowed[h] {
-		return true
-	}
-	// Any subdomain of the shared cookie domain.
-	return strings.HasSuffix(h, "."+normalizeHost(d.cookieDomain))
+	return d.origins.allowedOrigin(raw)
 }
 
 func (d *Dev) demoAccounts() []string {
@@ -576,14 +449,6 @@ func (d *Dev) pruneFailures(key string) {
 		}
 	}
 	d.failures[key] = kept
-}
-
-func normalizeHost(h string) string {
-	h = strings.TrimSpace(strings.ToLower(h))
-	if host, _, err := net.SplitHostPort(h); err == nil {
-		h = host
-	}
-	return strings.Trim(h, "[]")
 }
 
 func contains(list []string, want string) bool {

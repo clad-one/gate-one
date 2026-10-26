@@ -1,0 +1,24 @@
+{
+  "authProvider": {
+    "type": "oidc",
+    "issuer": "https://auth.example.com/realms/example",
+    "clientId": "gate-one",
+    "clientSecretEnv": "OIDC_CLIENT_SECRET",
+    "loginBaseUrl": "https://login.example.com",
+    "cookieDomain": "example.com"
+  },
+  "routes": [
+    {
+      "host": "app.example.com",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://127.0.0.1:8080",
+      "auth": {},
+      "userBadge": {
+        "position": "right",
+        "claims": ["preferred_username", "email"],
+        "logoutLabel": "Sign out"
+      }
+    }
+  ]
+}

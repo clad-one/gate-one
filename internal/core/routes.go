@@ -1370,6 +1370,17 @@ type AuthProviderConfig struct {
 	// Headers maps the identity response headers (type http).
 	Headers *AuthHeadersConfig `json:"headers,omitempty"`
 
+	// OIDC native Relying Party (type oidc).
+	ClientID          string   `json:"clientId,omitempty"`
+	ClientSecretEnv   string   `json:"clientSecretEnv,omitempty"`
+	ClientSecret      string   `json:"-"`
+	Scopes            []string `json:"scopes,omitempty"`
+	RedirectURL       string   `json:"redirectUrl,omitempty"`
+	RoleClaims        []string `json:"roleClaims,omitempty"`
+	ScopesClaim       string   `json:"scopesClaim,omitempty"`
+	MCPAudience       string   `json:"mcpAudience,omitempty"`
+	SessionTTLSeconds int      `json:"sessionTtlSeconds,omitempty"`
+
 	// Dev configures the embedded provider.
 	Dev *DevAuthConfig `json:"dev,omitempty"`
 }
@@ -2279,9 +2290,12 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 
 	ap := c.AuthProvider
 	if ap.Type == "" {
-		if ap.Dev != nil {
+		switch {
+		case ap.Dev != nil:
 			ap.Type = "dev"
-		} else {
+		case ap.ClientID != "" || ap.ClientSecretEnv != "":
+			ap.Type = "oidc"
+		default:
 			ap.Type = "http"
 		}
 	}
@@ -2371,6 +2385,93 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 			seenTokens[token] = true
 		}
 
+	case "oidc":
+		if ap.LoginBaseURL == "" && ap.LoginURL != "" {
+			if u, err := url.Parse(ap.LoginURL); err == nil && u.Host != "" {
+				ap.LoginBaseURL = u.Scheme + "://" + u.Host
+			}
+		}
+		ap.LoginBaseURL = strings.TrimRight(
+			strings.TrimSpace(ap.LoginBaseURL), "/")
+		if ap.LoginBaseURL == "" {
+			return fmt.Errorf(
+				"authProvider.type oidc: loginBaseUrl is required " +
+					"(e.g. https://login.example.com)")
+		}
+		u, err := url.Parse(ap.LoginBaseURL)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf(
+				"authProvider.loginBaseUrl %q: invalid URL", ap.LoginBaseURL)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf(
+				"authProvider.loginBaseUrl %q: scheme must be http or https",
+				ap.LoginBaseURL)
+		}
+		if u.RawQuery != "" || u.Fragment != "" ||
+			(u.Path != "" && u.Path != "/") {
+			return fmt.Errorf(
+				"authProvider.loginBaseUrl %q: origin only (no path/query)",
+				ap.LoginBaseURL)
+		}
+		ap.CookieDomain = strings.Trim(
+			strings.ToLower(strings.TrimSpace(ap.CookieDomain)), ".")
+		if ap.CookieDomain == "" {
+			return fmt.Errorf(
+				"authProvider.type oidc: cookieDomain is required " +
+					"(e.g. example.com)")
+		}
+		ap.Issuer = strings.TrimSpace(ap.Issuer)
+		if ap.Issuer == "" {
+			return fmt.Errorf(
+				"authProvider.type oidc: issuer is required " +
+					"(the IdP discovery issuer, e.g. " +
+					"https://auth.example.com/realms/example)")
+		}
+		iu, err := url.Parse(ap.Issuer)
+		if err != nil || iu.Host == "" ||
+			(iu.Scheme != "http" && iu.Scheme != "https") {
+			return fmt.Errorf(
+				"authProvider.issuer %q: invalid http(s) URL", ap.Issuer)
+		}
+		ap.ClientID = strings.TrimSpace(ap.ClientID)
+		if ap.ClientID == "" {
+			return fmt.Errorf(
+				"authProvider.type oidc: clientId is required")
+		}
+		ap.ClientSecretEnv = strings.TrimSpace(ap.ClientSecretEnv)
+		if ap.ClientSecretEnv != "" {
+			if !envVarName.MatchString(ap.ClientSecretEnv) {
+				return fmt.Errorf(
+					"authProvider.clientSecretEnv %q: invalid environment variable name",
+					ap.ClientSecretEnv)
+			}
+			secret, ok := os.LookupEnv(ap.ClientSecretEnv)
+			if !ok || secret == "" {
+				return fmt.Errorf(
+					"authProvider.type oidc: environment variable %s is empty",
+					ap.ClientSecretEnv)
+			}
+			ap.ClientSecret = secret
+		}
+		if ap.LoginURL == "" {
+			ap.LoginURL = ap.LoginBaseURL + "/login"
+		}
+		if ap.RedirectURL == "" {
+			ap.RedirectURL = ap.LoginBaseURL + "/auth/callback"
+		}
+		ru, err := url.Parse(ap.RedirectURL)
+		if err != nil || ru.Host == "" ||
+			(ru.Scheme != "http" && ru.Scheme != "https") {
+			return fmt.Errorf(
+				"authProvider.redirectUrl %q: invalid http(s) URL",
+				ap.RedirectURL)
+		}
+		if ap.SessionTTLSeconds < 0 {
+			return fmt.Errorf(
+				"authProvider.sessionTtlSeconds: must be positive")
+		}
+
 	case "http":
 		if authBridgeURL != "" {
 			// CLI flag: highest precedence, and it resets derived
@@ -2438,7 +2539,8 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 
 	default:
 		return fmt.Errorf(
-			"authProvider.type %q: unknown provider (expected dev or http)",
+			"authProvider.type %q: unknown provider "+
+				"(expected dev, http or oidc)",
 			ap.Type)
 	}
 

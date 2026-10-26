@@ -81,13 +81,13 @@
     },
     "authProvider": {
       "type": "object",
-      "description": "Authentication provider. `dev` is the embedded loopback-only IdP used for onboarding/tests; `http` is any external service implementing the Gate One auth contract (auth-bridge/Keycloak, Authelia, Authentik, a custom adapter). Absent = legacy oidc + auth-bridge translation, so existing configs are unchanged. A native OIDC provider is the next extension point.",
+      "description": "Authentication provider. `dev` is the embedded loopback-only IdP used for onboarding/tests; `http` is any external service implementing the Gate One auth contract (auth-bridge/Keycloak, Authelia, Authentik, a custom adapter); `oidc` is the native Relying Party (discovery, code+PKCE, JWKS, session, logout, MCP resource server). Absent = legacy oidc + auth-bridge translation, so existing configs are unchanged.",
       "additionalProperties": false,
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["dev", "http"],
-          "description": "Provider implementation. Default: dev when a dev block is present, http otherwise."
+          "enum": ["dev", "http", "oidc"],
+          "description": "Provider implementation. Default: dev when a dev block is present, oidc when clientId is present, http otherwise."
         },
         "baseUrl": {
           "type": "string",
@@ -133,6 +133,41 @@
             "scopes": { "type": "string", "description": "Default X-Scopes (comma-separated)." },
             "claims": { "type": "string", "description": "Default X-Claims (base64 JSON)." }
           }
+        },
+        "clientId": {
+          "type": "string",
+          "description": "OIDC client ID (type oidc). The client must be registered at the IdP with the redirect URI below."
+        },
+        "clientSecretEnv": {
+          "type": "string",
+          "description": "Environment variable holding the OIDC client secret (type oidc). Absent/empty = public client (PKCE only). Never put the secret in this file."
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "OIDC scopes. Default: openid, profile, email."
+        },
+        "redirectUrl": {
+          "type": "string",
+          "description": "OIDC callback URL registered at the IdP. Default: loginBaseUrl + /auth/callback."
+        },
+        "roleClaims": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Dot paths into the ID token claims mapped to roles. Default: realm_access.roles, resource_access.<clientId>.roles, groups."
+        },
+        "scopesClaim": {
+          "type": "string",
+          "description": "Claim holding the granted scopes (default scope; scp is always also read)."
+        },
+        "mcpAudience": {
+          "type": "string",
+          "description": "When set, the MCP access token aud must contain this value (strict audience check). Default: scope-only."
+        },
+        "sessionTtlSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "OIDC session lifetime cap (the ID token expiry also applies). Default 43200 (12h)."
         },
         "dev": {
           "type": "object",

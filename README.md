@@ -40,6 +40,12 @@ cd ../cladone-it-infra && make sync-config
   --backend http://127.0.0.1:8080
 ./bin/gate-one -config api-routes.json
 # → http://app.demo.localhost:3000  login: alice/alice, bob/bob
+
+# 3. Production OIDC (your IdP; no auth-bridge required)
+./bin/gate-one init --oidc --host app.example.com \
+  --backend http://127.0.0.1:8080 \
+  --issuer https://auth.example.com/realms/acme \
+  --client-id gate-one
 ```
 
 `init` writes the smallest working `api-routes.json`; `-check` validates
@@ -59,7 +65,7 @@ that keeps auth-bridge **optional**, including for OIDC:
 |---|---|---|
 | `dev` | Embedded development IdP (dedicated `login.<domain>` host, real form, signed session cookie) | none (loopback only) |
 | `http` | Any service implementing the Gate One auth contract: auth-bridge/Keycloak, Authelia, Authentik, a custom adapter | that service |
-| `oidc` | Native OIDC Relying Party (planned, next lot) | an OIDC IdP |
+| `oidc` | Native OIDC Relying Party: discovery, code + PKCE, JWKS, session, logout, MCP resource server | an OIDC IdP (Keycloak, Entra, Google, Authentik, Okta, Auth0…) |
 
 Absent `authProvider` = the legacy `oidc` + auth-bridge translation, so
 existing configs keep working. A purely public route needs no auth block
@@ -75,6 +81,27 @@ at all.
   }
 }
 ```
+
+Native OIDC (no auth-bridge; the IdP must register
+`https://login.example.com/auth/callback`):
+
+```json
+{
+  "authProvider": {
+    "type": "oidc",
+    "issuer": "https://auth.example.com/realms/example",
+    "clientId": "gate-one",
+    "clientSecretEnv": "OIDC_CLIENT_SECRET",
+    "loginBaseUrl": "https://login.example.com",
+    "cookieDomain": "example.com"
+  }
+}
+```
+
+`gate-one init --oidc --issuer ... --client-id ...` writes this block and
+prints the redirect URI to register. auth-bridge stays fully supported
+for OIDC too: use `type: "http"` when you want the bridge in front of
+Keycloak.
 
 An unreachable provider is a **502**, never a login redirect: the
 gateway no longer hides an outage behind a sign-in loop.

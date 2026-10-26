@@ -26,11 +26,24 @@ func runInit(args []string) int {
 	host := fs.String("host", "app.localhost", "public application host")
 	backend := fs.String("backend", "http://127.0.0.1:8080", "backend base URL")
 	static := fs.Bool("static", false, "public site, no authentication")
+	oidc := fs.Bool("oidc", false, "native OIDC provider (bring your own IdP)")
+	issuer := fs.String("issuer", "", "OIDC issuer (with --oidc)")
+	clientID := fs.String("client-id", "", "OIDC client id (with --oidc)")
+	clientSecretEnv := fs.String(
+		"client-secret-env", "OIDC_CLIENT_SECRET",
+		"env var holding the OIDC client secret")
+	loginBaseFlag := fs.String(
+		"login-base", "",
+		"public login origin (with --oidc; default https://login.<domain>)")
 	out := fs.String("out", "api-routes.json", "output config file")
 	port := fs.String("port", "3000", "public listen port (dev login URL)")
 	printOnly := fs.Bool("print", false, "print the config, do not write a file")
 	force := fs.Bool("force", false, "overwrite an existing file")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *static && *oidc {
+		fmt.Fprintln(os.Stderr, "init: --static and --oidc are mutually exclusive")
 		return 2
 	}
 
@@ -54,10 +67,13 @@ func runInit(args []string) int {
 		UserBadge map[string]any `json:"userBadge,omitempty"`
 	}
 	type provider struct {
-		Type         string         `json:"type"`
-		LoginBaseURL string         `json:"loginBaseUrl"`
-		CookieDomain string         `json:"cookieDomain"`
-		Dev          map[string]any `json:"dev,omitempty"`
+		Type            string         `json:"type"`
+		LoginBaseURL    string         `json:"loginBaseUrl"`
+		CookieDomain    string         `json:"cookieDomain"`
+		Issuer          string         `json:"issuer,omitempty"`
+		ClientID        string         `json:"clientId,omitempty"`
+		ClientSecretEnv string         `json:"clientSecretEnv,omitempty"`
+		Dev             map[string]any `json:"dev,omitempty"`
 	}
 	type config struct {
 		AuthProvider *provider `json:"authProvider,omitempty"`
@@ -70,6 +86,32 @@ func runInit(args []string) int {
 	}
 
 	if *static {
+		cfg.Routes = []route{routeCfg}
+	} else if *oidc {
+		if *issuer == "" || *clientID == "" {
+			fmt.Fprintln(os.Stderr,
+				"init: --oidc requires --issuer and --client-id")
+			return 2
+		}
+		cookieDomain, loginHost := deriveDevHosts(hostName)
+		loginBase := strings.TrimRight(*loginBaseFlag, "/")
+		if loginBase == "" {
+			loginBase = "https://" + loginHost
+		}
+		cfg.AuthProvider = &provider{
+			Type:            "oidc",
+			LoginBaseURL:    loginBase,
+			CookieDomain:    cookieDomain,
+			Issuer:          *issuer,
+			ClientID:        *clientID,
+			ClientSecretEnv: *clientSecretEnv,
+		}
+		routeCfg.Auth = &struct{}{}
+		routeCfg.UserBadge = map[string]any{
+			"position":    "right",
+			"claims":      []string{"preferred_username", "email"},
+			"logoutLabel": "Sign out",
+		}
 		cfg.Routes = []route{routeCfg}
 	} else {
 		cookieDomain, loginHost := deriveDevHosts(hostName)
@@ -113,7 +155,9 @@ func runInit(args []string) int {
 	}
 
 	fmt.Printf("wrote %s\n\nnext:\n", *out)
-	if *port == "3000" {
+	if *static || *oidc {
+		fmt.Printf("  gate-one -config %s\n\n", *out)
+	} else if *port == "3000" {
 		fmt.Printf("  gate-one -config %s\n\n", *out)
 	} else {
 		// The dev login URL embeds the public port; the listen
@@ -121,10 +165,19 @@ func runInit(args []string) int {
 		fmt.Printf("  gate-one -config %s -addr 127.0.0.1:%s\n\n",
 			*out, *port)
 	}
-	if *static {
+	switch {
+	case *static:
 		fmt.Printf("open http://%s:%s (public — no authentication)\n",
 			hostName, *port)
-	} else {
+	case *oidc:
+		loginBase := cfg.AuthProvider.LoginBaseURL
+		fmt.Printf("open https://%s\n", hostName)
+		fmt.Printf("login %s/login\n", loginBase)
+		fmt.Printf(
+			"register this redirect URI at the IdP: %s/auth/callback\n",
+			loginBase)
+		fmt.Printf("export %s=<client-secret>\n", *clientSecretEnv)
+	default:
 		fmt.Printf("open http://%s:%s\n", hostName, *port)
 		fmt.Printf("login http://%s:%s/login\n", devLoginHost(hostName), *port)
 		fmt.Println("accounts: alice/alice (user), bob/bob (admin)")

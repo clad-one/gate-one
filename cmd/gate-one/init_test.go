@@ -118,3 +118,48 @@ func TestRunInitDevAndStatic(t *testing.T) {
 		t.Error("static template must be public")
 	}
 }
+
+func TestRunInitOIDC(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "oidc.json")
+	if code := runInit([]string{
+		"--oidc",
+		"--host", "app.demo.localhost",
+		"--backend", "http://127.0.0.1:8080",
+		"--issuer", "https://auth.example.com/realms/acme",
+		"--client-id", "gate-one",
+		"--client-secret-env", "ACME_OIDC_SECRET",
+		"--out", out,
+	}); code != 0 {
+		t.Fatalf("oidc init = %d", code)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		AuthProvider struct {
+			Type            string `json:"type"`
+			LoginBaseURL    string `json:"loginBaseUrl"`
+			CookieDomain    string `json:"cookieDomain"`
+			Issuer          string `json:"issuer"`
+			ClientID        string `json:"clientId"`
+			ClientSecretEnv string `json:"clientSecretEnv"`
+		} `json:"authProvider"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	ap := cfg.AuthProvider
+	if ap.Type != "oidc" || ap.ClientID != "gate-one" ||
+		ap.Issuer != "https://auth.example.com/realms/acme" ||
+		ap.ClientSecretEnv != "ACME_OIDC_SECRET" {
+		t.Errorf("authProvider = %+v", ap)
+	}
+	if ap.LoginBaseURL != "https://login.demo.localhost" {
+		t.Errorf("loginBaseUrl = %q", ap.LoginBaseURL)
+	}
+	if ap.CookieDomain != "demo.localhost" {
+		t.Errorf("cookieDomain = %q", ap.CookieDomain)
+	}
+}
