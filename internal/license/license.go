@@ -4,11 +4,13 @@
 //
 //	v1.<base64url(JSON claims)>.<base64url(signature)>
 //
-// The signature covers the decoded JSON payload. Only the PUBLIC key is
-// embedded in the gateway (config `license.publicKey`); the private key
-// never ships. An absent, invalid or expired token yields the "eval"
-// state (personal/evaluation) — never a hard stop: the gateway keeps
-// serving, the guard script only displays a notice.
+// The signature covers the decoded JSON payload. Only PUBLIC keys are
+// embedded in the gateway (config `license.publicKey`, or a `publicKeys`
+// map for rotation); the private key never ships. A token may carry a
+// signed `kid` selecting its key in `publicKeys`, so several keys can be
+// valid at once during a rotation. An absent, invalid or expired token
+// yields the "eval" state (personal/evaluation) — never a hard stop: the
+// gateway keeps serving, the guard script only displays a notice.
 //
 // The token may come from (precedence): the GATE_ONE_LICENSE_TOKEN
 // environment variable, then `license.tokenFile`, then `license.token`.
@@ -21,6 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -40,14 +43,23 @@ type Config struct {
 	// GATE_ONE_LICENSE_TOKEN is set; falls back to Token when unreadable.
 	TokenFile string `json:"tokenFile,omitempty"`
 	// PublicKey: base64 Ed25519 public key (raw 32 bytes). Required for
-	// a token to be valid; it is public by design and safe to commit.
+	// a token to be valid (unless PublicKeys is used); it is public by
+	// design and safe to commit. Legacy single-key form (tokens without
+	// `kid`).
 	PublicKey string `json:"publicKey,omitempty"`
+	// PublicKeys: kid -> base64 public key. Lets several signing keys be
+	// valid at the same time (rotation without invalidating old tokens).
+	// A token carries its `kid` in the signed payload; an unknown kid is
+	// rejected (no silent fallback).
+	PublicKeys map[string]string `json:"publicKeys,omitempty"`
 	// URL: optional registration / pricing link shown by the badge.
 	URL string `json:"url,omitempty"`
 }
 
 // Claims is the signed payload. Only non-empty fields are displayed.
 type Claims struct {
+	// Kid: id of the signing key (looked up in license.publicKeys).
+	Kid      string   `json:"kid,omitempty"`
 	Sub      string   `json:"sub,omitempty"`
 	Org      string   `json:"org,omitempty"`
 	Email    string   `json:"email,omitempty"`
@@ -61,6 +73,7 @@ type Claims struct {
 type Status struct {
 	State    string   `json:"state"`            // registered | eval
 	Reason   string   `json:"reason,omitempty"` // ok|missing|invalid|expired|no-key
+	Kid      string   `json:"kid,omitempty"`    // signing key id
 	Org      string   `json:"org,omitempty"`
 	Email    string   `json:"email,omitempty"`
 	Plan     string   `json:"plan,omitempty"`
@@ -82,20 +95,16 @@ func Eval(cfg *Config, now time.Time) Status {
 	if token == "" {
 		return st
 	}
-	if strings.TrimSpace(cfg.PublicKey) == "" {
+	if strings.TrimSpace(cfg.PublicKey) == "" && len(cfg.PublicKeys) == 0 {
 		st.Reason = "no-key"
 		return st
 	}
-	pub, err := decodeKey(cfg.PublicKey)
-	if err != nil || len(pub) != ed25519.PublicKeySize {
-		st.Reason = "no-key"
-		return st
-	}
-	claims, err := Verify(pub, token)
+	claims, err := VerifyWithConfig(cfg, token)
 	if err != nil {
 		st.Reason = "invalid"
 		return st
 	}
+	st.Kid = claims.Kid
 	st.Org, st.Email, st.Plan = claims.Org, claims.Email, claims.Plan
 	st.Domains, st.Features = claims.Domains, claims.Features
 	if claims.Exp > 0 {
@@ -130,7 +139,81 @@ func resolveToken(cfg *Config) string {
 	return ""
 }
 
-// Verify checks the signature and returns the claims.
+// VerifyWithConfig selects the signing key (by the token's signed `kid`)
+// then verifies the signature. Precedence: publicKeys[kid] when the token
+// carries a kid (unknown kid = rejected, no silent fallback); otherwise
+// the legacy publicKey, or the only configured publicKeys entry.
+func VerifyWithConfig(cfg *Config, token string) (Claims, error) {
+	var c Claims
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[0] != tokenVersion {
+		return c, errors.New("license: malformed token")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return c, err
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return c, err
+	}
+	// The kid is read from the (still unverified) payload ONLY to select
+	// the key: the signature check below authenticates it. A forged kid
+	// can at worst select another of OUR keys, never bypass the check.
+	if err := json.Unmarshal(payload, &c); err != nil {
+		return c, err
+	}
+	pub, err := selectKey(cfg, c.Kid)
+	if err != nil {
+		return c, err
+	}
+	if !ed25519.Verify(pub, payload, sig) {
+		return c, errors.New("license: bad signature")
+	}
+	return c, nil
+}
+
+func selectKey(cfg *Config, kid string) (ed25519.PublicKey, error) {
+	if cfg == nil {
+		return nil, errors.New("license: no key")
+	}
+	kid = strings.TrimSpace(kid)
+	if kid != "" {
+		b64, ok := cfg.PublicKeys[kid]
+		if !ok || strings.TrimSpace(b64) == "" {
+			return nil, fmt.Errorf("license: unknown kid %q", kid)
+		}
+		pub, err := decodeKey(b64)
+		if err != nil || len(pub) != ed25519.PublicKeySize {
+			return nil, errors.New("license: bad public key for kid " + kid)
+		}
+		return pub, nil
+	}
+	// No kid: legacy single key, or the only key configured.
+	if strings.TrimSpace(cfg.PublicKey) != "" {
+		pub, err := decodeKey(cfg.PublicKey)
+		if err != nil || len(pub) != ed25519.PublicKeySize {
+			return nil, errors.New("license: bad public key")
+		}
+		return pub, nil
+	}
+	if len(cfg.PublicKeys) == 1 {
+		for _, b64 := range cfg.PublicKeys {
+			pub, err := decodeKey(b64)
+			if err != nil || len(pub) != ed25519.PublicKeySize {
+				return nil, errors.New("license: bad public key")
+			}
+			return pub, nil
+		}
+	}
+	if len(cfg.PublicKeys) > 1 {
+		return nil, errors.New("license: token has no kid and several keys are configured")
+	}
+	return nil, errors.New("license: no key")
+}
+
+// Verify checks the signature against ONE explicit public key and returns
+// the claims (low-level; Eval uses VerifyWithConfig).
 func Verify(pub ed25519.PublicKey, token string) (Claims, error) {
 	var c Claims
 	parts := strings.Split(token, ".")

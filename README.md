@@ -249,15 +249,19 @@ Optional `license` block in `api-routes.json`:
     "token": "v1.<base64url(claims)>.<base64url(signature)>",
     "tokenFile": "/run/secrets/gate-one-license",
     "publicKey": "<base64 Ed25519 public key>",
+    "publicKeys": {
+      "2026-10": "<base64 old public key>",
+      "2027-10": "<base64 new public key>"
+    },
     "url": "https://example.com/pricing"
   }
 }
 ```
 
-The token is an **Ed25519-signed** payload (`org`, `email`, `plan`, `exp`,
-`domains`, `features`) verified **offline** with `publicKey`; only the public
-key ships (the private signing key never does). Absent, invalid or expired =
-evaluation mode.
+The token is an **Ed25519-signed** payload (`kid`, `org`, `email`, `plan`,
+`exp`, `domains`, `features`) verified **offline** with a public key; only
+public keys ship (the private signing key never does). Absent, invalid or
+expired = evaluation mode.
 
 **Token sources** (precedence):
 
@@ -272,11 +276,18 @@ renewal does **not** require editing `api-routes.json`: replace the token file
 **Renewal** (same key): mint a new token with the existing private key, update
 the file/env/config, then `SIGHUP`.
 
-**Key rotation** (new keypair): replace `license.publicKey` **and** the token
-in one deployment. There is no multi-key grace period — tokens signed with the
-old key stop verifying immediately. With no users yet this is a plain
-replace + redeploy; a `kid` / `publicKeys` mechanism can be added later if
-zero-downtime rotation becomes necessary.
+**Key rotation** (zero-downtime: several keys valid at once):
+
+1. `gate-one-license keygen` → new keypair + suggested `kid`;
+2. add the new public key under `license.publicKeys["<kid>"]` on the gateways
+   (normal deployment) — the old key stays valid;
+3. mint new tokens with `sign -kid <kid>`;
+4. keep the old key until the old tokens expire;
+5. remove the old entry.
+
+A token carries its `kid` inside the **signed** payload; an unknown `kid` is
+rejected (no silent fallback to another key). The legacy `license.publicKey`
+(tokens without `kid`) still works.
 
 Mint tokens (vendor side; keep the private key offline):
 

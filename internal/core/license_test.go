@@ -21,8 +21,9 @@ func TestLicenseStrictConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pubB64 := license.EncodePublicKey(pub)
 	data := []byte(`{
-		"license": {"token": "` + tok + `", "tokenFile": "/tmp/lic", "publicKey": "` + license.EncodePublicKey(pub) + `", "url": "https://x"},
+		"license": {"token": "` + tok + `", "tokenFile": "/tmp/lic", "publicKey": "` + pubB64 + `", "publicKeys": {"k": "` + pubB64 + `"}, "url": "https://x"},
 		"routes": []
 	}`)
 	var cfg Config
@@ -34,5 +35,8 @@ func TestLicenseStrictConfig(t *testing.T) {
 	}
 	if cfg.License.PublicKey == "" || cfg.License.URL != "https://x" || cfg.License.TokenFile != "/tmp/lic" {
 		t.Fatalf("license fields lost: %+v", cfg.License)
+	}
+	if cfg.License.PublicKeys["k"] != pubB64 {
+		t.Fatalf("publicKeys lost: %+v", cfg.License.PublicKeys)
 	}
 }

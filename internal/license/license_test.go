@@ -159,5 +159,79 @@ func TestEvalEnvOverridesEverything(t *testing.T) {
 	}
 }
 
+func TestEvalMultiKey(t *testing.T) {
+	pubA, privA, _ := GenerateKey()
+	pubB, privB, _ := GenerateKey()
+	cfg := &Config{PublicKeys: map[string]string{
+		"a": EncodePublicKey(pubA),
+		"b": EncodePublicKey(pubB),
+	}}
+	cases := []struct {
+		kid  string
+		org  string
+		priv ed25519.PrivateKey
+	}{
+		{"a", "ORG-A", privA},
+		{"b", "ORG-B", privB},
+	}
+	for _, tc := range cases {
+		tok, _ := Sign(tc.priv, Claims{
+			Kid: tc.kid, Org: tc.org, Exp: time.Now().Add(time.Hour).Unix(),
+		})
+		cfg.Token = tok
+		st := Eval(cfg, time.Now())
+		if st.State != "registered" || st.Org != tc.org || st.Kid != tc.kid {
+			t.Fatalf("kid %s: state=%s reason=%s org=%q kid=%q, want registered/%s/%s",
+				tc.kid, st.State, st.Reason, st.Org, st.Kid, tc.org, tc.kid)
+		}
+	}
+}
+
+func TestEvalUnknownKidRejectedNoFallback(t *testing.T) {
+	pub, priv, _ := GenerateKey()
+	tok, _ := Sign(priv, Claims{Kid: "c", Org: "X", Exp: time.Now().Add(time.Hour).Unix()})
+	cfg := &Config{
+		// legacy publicKey AND a key map: an unknown kid must NOT fall
+		// back to publicKey (silent fallback would defeat rotation).
+		PublicKey:  EncodePublicKey(pub),
+		PublicKeys: map[string]string{"a": EncodePublicKey(pub)},
+		Token:      tok,
+	}
+	st := Eval(cfg, time.Now())
+	if st.State != "eval" || st.Reason != "invalid" {
+		t.Fatalf("unknown kid = %s/%s, want eval/invalid", st.State, st.Reason)
+	}
+}
+
+func TestEvalNoKidSingleKeyMap(t *testing.T) {
+	pub, priv, _ := GenerateKey()
+	tok, _ := Sign(priv, Claims{Org: "ONLY", Exp: time.Now().Add(time.Hour).Unix()})
+	cfg := &Config{
+		PublicKeys: map[string]string{"only": EncodePublicKey(pub)},
+		Token:      tok,
+	}
+	st := Eval(cfg, time.Now())
+	if st.State != "registered" || st.Org != "ONLY" {
+		t.Fatalf("single key map = %s/%s, want registered/ONLY", st.State, st.Reason)
+	}
+}
+
+func TestEvalNoKidAmbiguousKeys(t *testing.T) {
+	pubA, privA, _ := GenerateKey()
+	pubB, _, _ := GenerateKey()
+	tok, _ := Sign(privA, Claims{Org: "AMB", Exp: time.Now().Add(time.Hour).Unix()})
+	cfg := &Config{
+		PublicKeys: map[string]string{
+			"a": EncodePublicKey(pubA),
+			"b": EncodePublicKey(pubB),
+		},
+		Token: tok,
+	}
+	st := Eval(cfg, time.Now())
+	if st.State != "eval" || st.Reason != "invalid" {
+		t.Fatalf("ambiguous keys = %s/%s, want eval/invalid", st.State, st.Reason)
+	}
+}
+
 // compile-time: ed25519 keys are the expected size
 var _ = ed25519.PublicKeySize
