@@ -59,6 +59,13 @@ type OIDCConfig struct {
 	// services share the login host. No effect on the native session.
 	LegacyTokenCookies bool
 
+	// BackchannelForwardURL (migration): after a valid logout_token is
+	// applied locally, POST the same token to this auth-bridge
+	// /backchannel-logout endpoint, so its persistent sid list stays in
+	// sync for /auth (forwardAuth) and /connections. Best effort: a
+	// forwarding failure never fails the IdP's backchannel request.
+	BackchannelForwardURL string
+
 	// Store persists back-channel logout revocations. Default: an
 	// in-memory store (tests/dev). Production passes bbolt.
 	Store RevocationStore
@@ -96,14 +103,15 @@ type OIDC struct {
 	secure       bool
 	origins      *originPolicy
 
-	roleClaims    []string
-	scopesClaim   string
-	mcpAudience   string
-	endSession    string
-	backchannel   bool
-	revocationTTL time.Duration
-	store         RevocationStore
-	legacyCookies bool
+	roleClaims         []string
+	scopesClaim        string
+	mcpAudience        string
+	endSession         string
+	backchannel        bool
+	revocationTTL      time.Duration
+	store              RevocationStore
+	legacyCookies      bool
+	backchannelForward string
 
 	session *sessionCodec
 	tx      *txCodec
@@ -307,6 +315,8 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 		revocationTTL: revocationTTL,
 		store:         store,
 		legacyCookies: cfg.LegacyTokenCookies,
+		backchannelForward: strings.TrimSpace(
+			cfg.BackchannelForwardURL),
 		session: newSessionCodec(
 			oidcSessionCookie, domain, u.Scheme == "https",
 			sessionKey, ttl, now, storeID),
@@ -715,10 +725,45 @@ func (o *OIDC) handleBackchannelLogout(
 			http.StatusServiceUnavailable)
 		return
 	}
+	// Migration: keep auth-bridge's persistent sid list in sync for
+	// its /auth (forwardAuth) and /connections pages. Best effort.
+	o.forwardBackchannelLogout(ctx, raw)
 	log.Printf(
 		"BACKCHANNEL LOGOUT issuer=%s sid=%q sub=%q",
 		o.issuer, sid, sub)
 	w.WriteHeader(http.StatusOK)
+}
+
+func (o *OIDC) forwardBackchannelLogout(
+	ctx context.Context,
+	raw string,
+) {
+	if o.backchannelForward == "" {
+		return
+	}
+	fctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	form := url.Values{"logout_token": {raw}}.Encode()
+	req, err := http.NewRequestWithContext(
+		fctx, http.MethodPost, o.backchannelForward,
+		strings.NewReader(form))
+	if err != nil {
+		log.Printf("BACKCHANNEL FORWARD: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("BACKCHANNEL FORWARD %s: %v",
+			o.backchannelForward, err)
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("BACKCHANNEL FORWARD %s: status %d",
+			o.backchannelForward, resp.StatusCode)
+	}
 }
 
 func (o *OIDC) renderPopupDone(w http.ResponseWriter, r *http.Request) {

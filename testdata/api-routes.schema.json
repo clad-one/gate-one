@@ -197,6 +197,10 @@
           "type": "boolean",
           "description": "Migration bridge: also set auth-bridge's access_token/refresh_token/id_token cookies on cookieDomain, so auth-bridge's token-broker proxy routes (/connections, /connect, /oauth) resolve the same session when both share the login host. Default false. The native session cookie remains authoritative for Gate One."
         },
+        "backchannelForwardUrl": {
+          "type": "string",
+          "description": "Migration bridge: after a valid local back-channel revocation, POST the same logout_token to this auth-bridge /backchannel-logout URL so its persistent sid list stays in sync for /auth and /connections. Best effort."
+        },
         "revocationTtlSeconds": {
           "type": "integer",
           "minimum": 1,

@@ -19,6 +19,7 @@
     },
     "sessionTtlSeconds": 3600,
     "backchannelLogout": true,
+    "backchannelForwardUrl": "http://auth-bridge:3000/backchannel-logout",
     "legacyTokenCookies": true,
     "mcpAudience": "auto"
   },

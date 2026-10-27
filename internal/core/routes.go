@@ -1401,6 +1401,11 @@ type AuthProviderConfig struct {
 	// advertises backchannel_logout_supported); true/false = force.
 	BackchannelLogout *bool `json:"backchannelLogout,omitempty"`
 
+	// BackchannelForwardURL: migration bridge — after a valid local
+	// revocation, forward the same logout_token to this auth-bridge
+	// /backchannel-logout endpoint (best effort).
+	BackchannelForwardURL string `json:"backchannelForwardUrl,omitempty"`
+
 	// RevocationTTLSeconds: retention of revocation entries. Default
 	// 86400 (24h), never shorter than the session TTL.
 	RevocationTTLSeconds int `json:"revocationTtlSeconds,omitempty"`
@@ -2344,10 +2349,11 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 	if ap.Type != "oidc" &&
 		(ap.SessionStore != nil || ap.SessionKeyEnv != "" ||
 			ap.BackchannelLogout != nil || ap.RevocationTTLSeconds != 0 ||
-			ap.LegacyTokenCookies) {
+			ap.LegacyTokenCookies || ap.BackchannelForwardURL != "") {
 		return fmt.Errorf(
 			"authProvider.sessionStore/sessionKeyEnv/backchannelLogout/" +
-				"legacyTokenCookies are only valid for type oidc")
+				"legacyTokenCookies/backchannelForwardUrl are only valid " +
+				"for type oidc")
 	}
 
 	switch ap.Type {
@@ -2560,6 +2566,17 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 		if ap.RevocationTTLSeconds < 0 {
 			return fmt.Errorf(
 				"authProvider.revocationTtlSeconds: must be positive")
+		}
+		ap.BackchannelForwardURL = strings.TrimSpace(
+			ap.BackchannelForwardURL)
+		if ap.BackchannelForwardURL != "" {
+			fu, err := url.Parse(ap.BackchannelForwardURL)
+			if err != nil || fu.Host == "" ||
+				(fu.Scheme != "http" && fu.Scheme != "https") {
+				return fmt.Errorf(
+					"authProvider.backchannelForwardUrl %q: invalid http(s) URL",
+					ap.BackchannelForwardURL)
+			}
 		}
 
 	case "http":

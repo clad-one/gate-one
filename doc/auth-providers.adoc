@@ -180,9 +180,13 @@ token-broker proxy routes are still served by auth-bridge:
   `access_token` / `refresh_token` / `id_token` cookies on the shared
   cookie domain, so auth-bridge's `/connections` and `/connect` resolve
   the same session without a second login;
+* set `backchannelForwardUrl: "http://auth-bridge:3000/backchannel-logout"`:
+  the native endpoint forwards each valid logout token to auth-bridge,
+  keeping its persistent `sid` list in sync for `/auth` (forwardAuth)
+  and `/connections`;
 * back-channel logout goes to Gate One (`/backchannel-logout`) and
-  revokes the native session. auth-bridge's broker page then relies on
-  the access-token expiry/refresh, not on an immediate sid revocation.
+  revokes the native session immediately. The forward is best effort:
+  a failure never fails Keycloak's request.
 
 This is a migration setup. Once the token-broker proxy routes are
 served by Gate One (or no longer needed), set `legacyTokenCookies` to

@@ -634,6 +634,32 @@ func TestOIDCMCPAudienceAuto(t *testing.T) {
 	}
 }
 
+func TestOIDCBackchannelForward(t *testing.T) {
+	m := newMockOIDC(t)
+	now := time.Now()
+	var got string
+	forward := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			got = r.PostFormValue("logout_token")
+			w.WriteHeader(http.StatusOK)
+		},
+	))
+	t.Cleanup(forward.Close)
+
+	o := newTestOIDCWith(t, m, &now, func(c *OIDCConfig) {
+		c.BackchannelForwardURL = forward.URL
+	})
+	_ = performLogin(t, m, o)
+	token := m.logoutToken("sid-123", "user-123", "jti-fwd", now)
+	if rec := backchannelRequest(t, o, token); rec.Code != http.StatusOK {
+		t.Fatalf("backchannel = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got != token {
+		t.Errorf("forwarded token mismatch")
+	}
+}
+
 func TestOIDCRejectsBadState(t *testing.T) {
 	m := newMockOIDC(t)
 	now := time.Now()
