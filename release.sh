@@ -48,6 +48,7 @@ for target in "${targets[@]}"; do
 	cp testdata/inject-bundle.schema.json "$stage/"
 	cp examples/static.api-routes.json "$stage/examples/"
 	cp examples/dev.api-routes.json "$stage/examples/"
+	cp examples/http.api-routes.json "$stage/examples/"
 	cp examples/oidc.api-routes.json "$stage/examples/"
 	cp doc/auth-providers.adoc "$stage/doc/"
 	cp doc/ui-gating.adoc "$stage/doc/"
@@ -125,7 +126,7 @@ script never pushes, tags or uploads.
 ## Artifacts
 
 Per platform: \`gate-one_${version}_<os>_<arch>.tar.gz\` containing the
-static binary, both JSON schemas, the three onboarding examples, the
+static binary, both JSON schemas, the four onboarding examples, the
 auth-provider guide, README, LICENSE and VERSION.
 EOF
 

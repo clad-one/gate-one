@@ -1,0 +1,21 @@
+{
+  "authProvider": {
+    "type": "http",
+    "loginUrl": "https://login.example.com/login",
+    "issuer": "https://auth.example.com/realms/example"
+  },
+  "routes": [
+    {
+      "host": "app.example.com",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://127.0.0.1:8080",
+      "auth": {},
+      "userBadge": {
+        "position": "right",
+        "claims": ["preferred_username", "email"],
+        "logoutLabel": "Sign out"
+      }
+    }
+  ]
+}

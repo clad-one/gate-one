@@ -163,6 +163,44 @@ contract. `verifyUrl`, `mcpVerifyUrl`, `healthUrl` and `headers` can be
 overridden, but that only adapts the verification call: `/login`,
 `/logout`, `/auth/mcp` and `/auth/popup-done` remain the contract.
 
+Examples: `examples/http.api-routes.json` (auth-bridge) and
+`examples/oidc.api-routes.json` (native).
+
+== Migrating the legacy `oidc` block
+
+The legacy block:
+
+[source,json]
+----
+"oidc": {
+  "loginUrl": "https://login.example.com/login",
+  "issuer": "https://auth.example.com/realms/example"
+}
+----
+
+is **behaviorally identical** to:
+
+[source,json]
+----
+"authProvider": {
+  "type": "http",
+  "loginUrl": "https://login.example.com/login",
+  "issuer": "https://auth.example.com/realms/example"
+}
+----
+
+`baseUrl` is optional (default `http://auth-bridge:3000`). This shape
+migration changes neither the session nor the auth path: `-check`, then
+`SIGHUP`. Keep it as the production baseline as long as auth-bridge is
+needed for other consumers (forward-auth, token-broker connections).
+
+Switching that block to `type: "oidc"` is **not** a shape migration: it
+moves the login and session to Gate One. It requires the native OIDC
+prerequisites (shared session key, per-endpoint MCP audience, refresh
+and/or `prompt=none`, backchannel logout, and a decision for
+`/connections`). Plan a staging login host and a dedicated Keycloak
+client; do not cut production over before that parity exists.
+
 == Authelia, Authentik, other IdPs
 
 * **Authentik**: an OIDC provider — use `type: "oidc"` directly.

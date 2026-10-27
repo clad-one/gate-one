@@ -88,6 +88,14 @@ mapping only cover the verification call.
 }
 ```
 
+`baseUrl` defaults to `http://auth-bridge:3000`; the legacy block
+`"oidc": {loginUrl, issuer}` and this explicit `type: "http"` block are
+**behaviorally identical**. Migrating the shape is therefore safe (no
+session change, no auth-bridge change) and is the recommended first
+step before considering native OIDC. Examples:
+`examples/http.api-routes.json` (auth-bridge) and
+`examples/oidc.api-routes.json` (native, future migration).
+
 Native OIDC (no auth-bridge; the IdP must register
 `https://login.example.com/auth/callback`):
 
@@ -349,7 +357,7 @@ internal/mcp/       MCP endpoint
 test/ui/            guard-script harness (jsdom)
 sw-sim/             service-worker simulator
 testdata/           reference production config
-examples/           minimal static/dev/OIDC configs
+examples/           minimal static/dev/http/OIDC configs
 release.sh          local release artifacts (never pushes)
 ```
 
