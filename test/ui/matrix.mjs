@@ -163,10 +163,9 @@ const SESSION = {
     ? ok("anonymous: mid-flow 401 → banner")
     : fail("anonymous mid-flow: banner expected");
   const ab = x.doc.querySelector("[data-gtw-auth-banner]");
-  ab && ab.style.borderTopWidth === "1px" &&
-  ab.style.borderTopColor === "rgb(255, 255, 255)"
-    ? ok("auth banner: white outline for dark pages")
-    : fail("auth banner: white outline expected");
+  ab && ab.classList.contains("cladone-banner")
+    ? ok("auth banner: class-based styling (strict CSP)")
+    : fail("auth banner: cladone-banner class expected");
   x.st.openCalls === 0
     ? ok("anonymous: never an automatic tab")
     : fail(`anonymous mid-flow: openCalls=${x.st.openCalls} (want 0)`);
@@ -193,7 +192,8 @@ const SESSION = {
 // ── 5. identity: data-gtw-roles / claims (implicit auth) ──
 {
   const x = await mkWindow(guard, html, SESSION);
-  const vis = (id) => x.doc.getElementById(id).style.display !== "none";
+  const vis = (id) =>
+    !x.doc.getElementById(id).hasAttribute("data-gtw-gated-off");
   // data-gtw-roles="admin" + session WITHOUT admin → hidden
   vis("role_gate")
     ? fail("role_gate visible without the admin role")
@@ -215,13 +215,12 @@ const SESSION = {
   const x = await mkWindow(guardBadge, html, SESSION);
   if (!x.doc.querySelector(".cladone-userbadge")) fail("badge expected (authenticated + userBadge configured)");
   const badge = x.doc.querySelector(".cladone-userbadge");
-  badge.style.borderLeftWidth === "1px" &&
-  badge.style.borderRightWidth === "1px" &&
-  badge.style.borderBottomWidth === "1px" &&
-  badge.style.borderTopWidth === "0px" &&
-  badge.style.borderLeftColor === "rgb(255, 255, 255)"
-    ? ok("badge: white outline except the top window edge")
-    : fail("badge: white outline expected except the top edge");
+  const cssText = x.doc.querySelector("style").textContent;
+  badge.classList.contains("cladone-userbadge") &&
+  badge.classList.contains("cladone-userbadge-right") &&
+  cssText.includes("border:1px solid #fff;border-top:0")
+    ? ok("badge: class-based outline except the top window edge")
+    : fail("badge: white outline class expected except the top edge");
   const tab = badge.querySelector(".cladone-userbadge-tab");
   tab.textContent.startsWith("👤") && tab.textContent.includes("alice")
     ? ok("badge: first line = 👤 + username")
@@ -289,8 +288,8 @@ const SESSION = {
   ie && ie.textContent.includes("⚖")
     ? ok("licence eval: ⚖ icon in the handle")
     : fail("licence eval: icon expected in the tab");
-  const boxE = be.querySelector(".cladone-license");
-  boxE && boxE.style.display === "none"
+  const boxE = be.querySelector(".cladone-badge-license");
+  boxE && !boxE.classList.contains("cladone-license-visible")
     ? ok("licence eval: details hidden until click")
     : fail("licence eval: details must start hidden");
   xe.click(ie);
@@ -298,7 +297,7 @@ const SESSION = {
   be.classList.contains("cladone-userbadge-open")
     ? ok("licence eval: click unfolds the badge")
     : fail("licence eval: click must unfold the badge");
-  boxE.style.display === "block" &&
+  boxE.classList.contains("cladone-license-visible") &&
   boxE.textContent.includes("eval / personal license")
     ? ok("licence eval: details = eval / personal")
     : fail("licence eval: details text missing");
@@ -319,7 +318,7 @@ const SESSION = {
   ir && ir.textContent.includes("🔑")
     ? ok("licence registered: 🔑 icon in the handle")
     : fail("licence registered: key icon expected");
-  const boxR = br.querySelector(".cladone-license");
+  const boxR = br.querySelector(".cladone-badge-license");
   xr.click(ir);
   await tick();
   boxR.textContent.includes("registered to:") &&
@@ -409,6 +408,15 @@ const SESSION = {
   x.banner()
     ? fail("affordance abandonment: the banner must not come back (option C)")
     : ok("affordance abandonment → silence (option C)");
+}
+
+// ── 8. strict CSP: the runtime <style> carries the script nonce ──
+{
+  const x = await mkWindow(guard, html, SESSION, "[]", { nonce: "n-test" });
+  const styles = [...x.doc.querySelectorAll("style")];
+  styles.some((s) => s.nonce === "n-test")
+    ? ok("CSP: guard <style> carries the response nonce")
+    : fail(`CSP: style nonce missing (${styles.map((s) => s.nonce).join(",")})`);
 }
 
 console.log(

@@ -112,13 +112,37 @@ func (i *cspInjector) policyString(nonce string) string {
 		directives[name] = append([]string(nil), sources...)
 	}
 
-	script := directives["script-src"]
+	// Scripts: append the nonce and the gateway's injected-script
+	// hashes to the directive the browser actually uses for
+	// parser-inserted scripts (script-src-elem > script-src).
+	scriptTarget := "script-src"
+	if _, ok := directives["script-src-elem"]; ok {
+		scriptTarget = "script-src-elem"
+	}
+	script := directives[scriptTarget]
 	if nonce != "" {
 		script = append(script, "'nonce-"+nonce+"'")
 	}
 	script = append(script, i.hashes...)
 	if len(script) > 0 {
-		directives["script-src"] = dedupeStrings(script)
+		directives[scriptTarget] = dedupeStrings(script)
+	}
+
+	// Styles: the guard creates a <style> at runtime and sets its
+	// nonce from document.currentScript.nonce. Append the same
+	// per-response nonce to the directive that governs <style>
+	// elements (style-src-elem > style-src). A config without either
+	// directive keeps its default-src fallback and must declare
+	// style-src explicitly to allow the guard's stylesheet.
+	if nonce != "" {
+		styleTarget := "style-src"
+		if _, ok := directives["style-src-elem"]; ok {
+			styleTarget = "style-src-elem"
+		}
+		if style, ok := directives[styleTarget]; ok {
+			directives[styleTarget] = dedupeStrings(
+				append(style, "'nonce-"+nonce+"'"))
+		}
 	}
 
 	if _, ok := directives["report-uri"]; !ok {

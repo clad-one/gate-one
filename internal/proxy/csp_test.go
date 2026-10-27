@@ -92,6 +92,51 @@ func TestCSPNonceStampsInlineScriptsOnly(t *testing.T) {
 	}
 }
 
+func TestCSPNonceAppendsToStyleSrc(t *testing.T) {
+	csp := &core.CSPPolicy{
+		Mode: "nonce",
+		Directives: map[string]core.DirectiveSources{
+			"default-src": {"'self'"},
+			"style-src":   {"'self'"},
+		},
+	}
+	resp, _ := cspInject(t, csp, `<style>x{}</style>`, "", "N")
+	policy := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(policy, "style-src 'self' 'nonce-N'") {
+		t.Errorf("style-src nonce absent: %q", policy)
+	}
+}
+
+func TestCSPNonceStyleSrcElemWins(t *testing.T) {
+	csp := &core.CSPPolicy{
+		Mode: "nonce",
+		Directives: map[string]core.DirectiveSources{
+			"style-src":      {"'self'"},
+			"style-src-elem": {"'none'"},
+		},
+	}
+	resp, _ := cspInject(t, csp, `<style>x{}</style>`, "", "N")
+	policy := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(policy, "style-src-elem 'none' 'nonce-N'") {
+		t.Errorf("style-src-elem nonce absent: %q", policy)
+	}
+}
+
+func TestCSPNonceScriptSrcElemWins(t *testing.T) {
+	csp := &core.CSPPolicy{
+		Mode: "nonce",
+		Directives: map[string]core.DirectiveSources{
+			"script-src":      {"'self'"},
+			"script-src-elem": {"'none'"},
+		},
+	}
+	resp, _ := cspInject(t, csp, `<script>x()</script>`, "", "N")
+	policy := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(policy, "script-src-elem 'none' 'nonce-N'") {
+		t.Errorf("script-src-elem nonce absent: %q", policy)
+	}
+}
+
 // A JS string containing "<script" must not be rewritten: the state
 // machine never scans a script body.
 func TestCSPNonceDoesNotCorruptScriptBody(t *testing.T) {

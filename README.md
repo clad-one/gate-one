@@ -130,6 +130,8 @@ An unreachable provider is a **502**, never a login redirect: the
 gateway no longer hides an outage behind a sign-in loop.
 
 Full guide: `doc/auth-providers.adoc`.
+Strict CSP (nonce styles, custom injections, proxified sites):
+`doc/strict-csp.adoc`.
 
 ## Build
 

@@ -28,10 +28,9 @@ const GUARD_OFF = renderGuard(); // FORBIDDEN = null (default)
     ? ok("gateway 403 (marked JSON) → banner")
     : fail("gateway 403: banner expected");
   const fb = x.doc.querySelector("[data-gtw-forbidden-banner]");
-  fb && fb.style.borderTopWidth === "1px" &&
-  fb.style.borderTopColor === "rgb(255, 255, 255)"
-    ? ok("forbidden banner: white outline for dark pages")
-    : fail("forbidden banner: white outline expected");
+  fb && fb.classList.contains("cladone-forbidden")
+    ? ok("forbidden banner: class-based styling (strict CSP)")
+    : fail("forbidden banner: cladone-forbidden class expected");
   status === 403
     ? ok("app still receives its 403 (response untouched)")
     : fail(`app status = ${status} (want 403)`);

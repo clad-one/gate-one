@@ -3,6 +3,14 @@
   if (window.__cladoneAuthGuard) return;
   window.__cladoneAuthGuard = true;
 
+  // Per-response CSP nonce (added to this inline script by the
+  // gateway's nonce stamper). The guard's own <style> is created at
+  // runtime, after parsing: it must carry the same nonce or a strict
+  // style-src would drop it. document.currentScript is only valid
+  // during this synchronous execution — capture it now.
+  var CSP_NONCE =
+    (document.currentScript && document.currentScript.nonce) || "";
+
   var LOGIN = "%[1]s";
   var AUTH_STATE = "%[2]s";
   // Route uiGate rules (config-driven UI gating, for fronts that
@@ -301,24 +309,15 @@
     if (banner || !document.body) return;
     shownBy = ev || null;
     banner = document.createElement("div");
-    banner.style.cssText =
-      "position:fixed;left:0;right:0;bottom:20px;margin:0 auto;" +
-      "width:fit-content;z-index:2147483647;display:flex;gap:12px;" +
-      "align-items:center;background:#20242e;color:#fff;" +
-      "padding:10px 14px;border-radius:10px;" +
-      // white ring: the dark banner must stay distinct on a black page
-      "border:1px solid #fff;" +
-      "box-shadow:0 8px 30px rgba(0,0,0,0.35);" +
-      "font:14px/1.4 system-ui,sans-serif";
+    banner.className = "cladone-banner";
     banner.setAttribute("data-gtw-auth-banner", "1");
     var msg = document.createElement("span");
+    msg.className = "cladone-banner-msg";
     msg.textContent = "Sign-in required to continue.";
     var btn = document.createElement("button");
     btn.type = "button";
+    btn.className = "cladone-banner-btn";
     btn.textContent = "Sign in";
-    btn.style.cssText =
-      "border:0;border-radius:6px;padding:6px 14px;cursor:pointer;" +
-      "font:inherit;color:#fff;background:#4a7c59";
     btn.onclick = function () {
       hideBanner();
       ensureLogin(); // user gesture: the tab opens reliably
@@ -327,11 +326,9 @@
     banner.appendChild(btn);
     var no = document.createElement("button");
     no.type = "button";
+    no.className = "cladone-banner-close";
     no.title = "Close";
     no.textContent = "\u00d7";
-    no.style.cssText =
-      "border:0;background:transparent;color:#aab;cursor:pointer;" +
-      "font:20px/1 system-ui,sans-serif;padding:0 2px";
     no.onclick = dismiss;
     banner.appendChild(no);
     document.body.appendChild(banner);
@@ -359,29 +356,19 @@
     if (forbiddenShown || !document.body) return;
     forbiddenShown = true;
     forbiddenBanner = document.createElement("div");
+    forbiddenBanner.className = "cladone-forbidden";
     forbiddenBanner.setAttribute("data-gtw-forbidden-banner", "1");
-    forbiddenBanner.style.cssText =
-      "position:fixed;left:0;right:0;bottom:20px;margin:0 auto;" +
-      "width:fit-content;max-width:min(90vw,44em);z-index:2147483647;" +
-      "display:flex;gap:12px;box-sizing:border-box;" +
-      "align-items:center;background:#3a2f14;color:#fff;" +
-      "padding:10px 14px;border-radius:10px;" +
-      // white ring: the dark banner must stay distinct on a black page
-      "border:1px solid #fff;" +
-      "box-shadow:0 8px 30px rgba(0,0,0,0.35);" +
-      "font:14px/1.4 system-ui,sans-serif";
     var msg = document.createElement("span");
+    msg.className = "cladone-forbidden-msg";
     msg.textContent = "Gate-One message: frontsite features using backend " +
       "services denied to the user should better be hidden or forbidden " +
       "using uiGate or data-gtw-* element";
     forbiddenBanner.appendChild(msg);
     var no = document.createElement("button");
     no.type = "button";
+    no.className = "cladone-forbidden-close";
     no.title = "Close";
     no.textContent = "\u00d7";
-    no.style.cssText =
-      "border:0;background:transparent;color:#d9c9a0;cursor:pointer;" +
-      "font:20px/1 system-ui,sans-serif;padding:0 2px;flex:0 0 auto";
     no.onclick = function () {
       if (forbiddenBanner) {
         forbiddenBanner.remove();
@@ -537,6 +524,9 @@
       "html:not(.cladone-evaluated) [data-gtw-claims]" +
       "{display:none !important}" +
       "html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}" +
+      // gating by class/attribute, never by an inline style (CSP:
+      // style attributes cannot be nonced)
+      "[data-gtw-gated-off]{display:none !important}" +
       // user badge, three states: FOLDED (handle 👤+name, INVISIBLE
       // until the mouse approaches the top edge — mousemove
       // detection, pointer-events:none at rest so page clicks are
@@ -544,8 +534,22 @@
       // post-login manifestation (partial max-height: the identity
       // appears) / UNFOLDED on click (everything: claims + logout) —
       // the open rule is declared LAST: at equal specificity, it
-      // wins when hover and open coexist
-      ".cladone-userbadge{opacity:0;pointer-events:none}" +
+      // wins when hover and open coexist.
+      // All dimensions are classes: no inline style (strict CSP).
+      ".cladone-userbadge{position:fixed;top:0;z-index:2147483646;" +
+      "background:#20242e;color:#fff;padding:.46em .92em;" +
+      "text-align:left;border:1px solid #fff;border-top:0;" +
+      "border-radius:0 0 .62em .62em;max-width:21.5em;" +
+      "box-shadow:0 4px 18px rgba(0,0,0,.3);max-height:2.3em;" +
+      "overflow:hidden;transition:opacity .2s ease,max-height .25s ease;" +
+      "cursor:default;opacity:0;pointer-events:none}" +
+      ".cladone-userbadge-left{left:12px}" +
+      ".cladone-userbadge-right{right:12px}" +
+      ".cladone-userbadge-fs-11{font:11px/1.4 system-ui,sans-serif}" +
+      ".cladone-userbadge-fs-12{font:12px/1.4 system-ui,sans-serif}" +
+      ".cladone-userbadge-fs-13{font:13px/1.4 system-ui,sans-serif}" +
+      ".cladone-userbadge-fs-14{font:14px/1.4 system-ui,sans-serif}" +
+      ".cladone-userbadge-fs-15{font:15px/1.4 system-ui,sans-serif}" +
       ".cladone-userbadge-near,.cladone-userbadge-reveal" +
       "{opacity:1;pointer-events:auto}" +
       ".cladone-userbadge:focus-within{opacity:1;pointer-events:auto}" +
@@ -556,7 +560,47 @@
       // back over it — the button becomes unclickable): doubled
       // class = higher specificity + declared after
       ".cladone-userbadge.cladone-userbadge-open" +
-      "{max-height:34em !important;opacity:1;pointer-events:auto}";
+      "{max-height:34em !important;opacity:1;pointer-events:auto}" +
+      ".cladone-userbadge-login{cursor:pointer}" +
+      ".cladone-userbadge-body{padding:.46em 0 .15em 0}" +
+      ".cladone-badge-row{white-space:nowrap;overflow:hidden;" +
+      "text-overflow:ellipsis}" +
+      ".cladone-badge-chips{margin-top:.38em}" +
+      ".cladone-badge-chip{display:inline-block;margin:0 .15em -.1em .38em;" +
+      "padding:.08em .5em;border-radius:.8em;background:rgba(255,255,255,.16);" +
+      "font-size:.86em}" +
+      ".cladone-badge-logout{margin-top:.46em;border:0;border-radius:.46em;" +
+      "padding:.38em .77em;cursor:pointer;font:inherit;color:#fff;" +
+      "background:#a04040}" +
+      ".cladone-badge-license{display:none;margin-top:.5em;padding-top:.42em;" +
+      "border-top:1px solid rgba(255,255,255,.18);font-size:.92em;" +
+      "line-height:1.45;white-space:normal}" +
+      ".cladone-badge-license.cladone-license-visible{display:block}" +
+      ".cladone-license-icon{border:0;background:transparent;color:inherit;" +
+      "cursor:pointer;font:inherit;padding:0;margin-left:.35em;" +
+      "line-height:1;vertical-align:baseline}" +
+      ".cladone-license-link{color:#9fd0ff;text-decoration:underline}" +
+      // banners (sign-in, identity-403): classes only, strict CSP
+      ".cladone-banner{position:fixed;left:0;right:0;bottom:20px;" +
+      "margin:0 auto;width:fit-content;z-index:2147483647;display:flex;" +
+      "gap:12px;align-items:center;background:#20242e;color:#fff;" +
+      "padding:10px 14px;border-radius:10px;border:1px solid #fff;" +
+      "box-shadow:0 8px 30px rgba(0,0,0,.35);" +
+      "font:14px/1.4 system-ui,sans-serif}" +
+      ".cladone-banner-btn{border:0;border-radius:6px;padding:6px 14px;" +
+      "cursor:pointer;font:inherit;color:#fff;background:#4a7c59}" +
+      ".cladone-banner-close{border:0;background:transparent;color:#aab;" +
+      "cursor:pointer;font:20px/1 system-ui,sans-serif;padding:0 2px}" +
+      ".cladone-forbidden{position:fixed;left:0;right:0;bottom:20px;" +
+      "margin:0 auto;width:fit-content;max-width:min(90vw,44em);" +
+      "z-index:2147483647;display:flex;gap:12px;box-sizing:border-box;" +
+      "align-items:center;background:#3a2f14;color:#fff;" +
+      "padding:10px 14px;border-radius:10px;border:1px solid #fff;" +
+      "box-shadow:0 8px 30px rgba(0,0,0,.35);" +
+      "font:14px/1.4 system-ui,sans-serif}" +
+      ".cladone-forbidden-close{border:0;background:transparent;" +
+      "color:#d9c9a0;cursor:pointer;font:20px/1 system-ui,sans-serif;" +
+      "padding:0 2px;flex:0 0 auto}";
     // anti-FOUC veil for uiGate rules: one CSS rule PER selector (an
     // invalid selector must kill only its own hiding, not the
     // others')
@@ -565,6 +609,7 @@
         UIGATE[gi].selector + "{display:none !important}";
     }
     var css = document.createElement("style");
+    if (CSP_NONCE) css.nonce = CSP_NONCE;
     css.textContent = cssText;
     (document.head || document.documentElement).appendChild(css);
   } catch (e) { /* never break the page over gating */ }
@@ -636,16 +681,14 @@
         }
       }
       if (!ok) {
-        n.style.display = "none";
         n.setAttribute("data-gtw-gated-off", "1");
       } else if (n.getAttribute("data-gtw-gated-off")) {
         n.removeAttribute("data-gtw-gated-off");
-        n.style.display = "";
       }
     }
     applyRuleGating();
-    // evaluation is done: lift the anti-FOUC veil (the inline hiding
-    // of non-passing elements stays in place)
+    // evaluation is done: lift the anti-FOUC veil (the hiding by
+    // [data-gtw-gated-off] stays in place)
     document.documentElement.classList.add("cladone-evaluated");
   }
 
@@ -699,29 +742,18 @@
         fs = Math.min(Math.max(siteFs * 0.9, 11), 15);
       }
     } catch (e) { /* measurement impossible: default 13px */ }
-    fs = Math.round(fs * 10) / 10;
+    fs = Math.round(fs);
+    if (fs < 11) fs = 11;
+    if (fs > 15) fs = 15;
     badgeEl = document.createElement("div");
-    badgeEl.className = "cladone-userbadge";
-    // stuck to the TOP edge, 12 px side offset, rounded corners at
-    // the bottom only (it touches the top)
-    badgeEl.style.cssText =
-      "position:fixed;top:0;" + pos + ":12px;z-index:2147483646;" +
-      "background:#20242e;color:#fff;padding:.46em .92em;" +
-      "font:" + fs + "px/1.4 system-ui,sans-serif;" +
-      "text-align:left;" +
-      // white ring: the dark badge must stay distinct on a black page.
-      // No top border: the badge is flush with the window edge.
-      "border:1px solid #fff;border-top:0;" +
-      "border-radius:0 0 .62em .62em;max-width:21.5em;" +
-      "box-shadow:0 4px 18px rgba(0,0,0,.3);" +
-      "max-height:2.3em;overflow:hidden;" +
-      "transition:opacity .2s ease,max-height .25s ease;cursor:default";
+    badgeEl.className = "cladone-userbadge" +
+      " cladone-userbadge-" + pos +
+      " cladone-userbadge-fs-" + fs;
     var tab = document.createElement("div");
     tab.className = "cladone-userbadge-tab";
     badgeEl.appendChild(tab);
     var body = document.createElement("div");
     body.className = "cladone-userbadge-body";
-    body.style.cssText = "padding:.46em 0 .15em 0";
     badgeEl.appendChild(body);
     document.body.appendChild(badgeEl);
   }
@@ -745,17 +777,12 @@
   // badge; ellipsis on overflow, same as the claim rows.
   function chipsRow(label, items) {
     var row = document.createElement("div");
-    row.style.cssText =
-      "margin-top:.38em;white-space:nowrap;overflow:hidden;" +
-      "text-overflow:ellipsis";
+    row.className = "cladone-badge-row cladone-badge-chips";
     row.appendChild(document.createTextNode(label + ":"));
     for (var i = 0; i < items.length; i++) {
       var chip = document.createElement("span");
+      chip.className = "cladone-badge-chip";
       chip.textContent = String(items[i]);
-      chip.style.cssText =
-        "display:inline-block;margin:0 .15em -.1em .38em;padding:" +
-        ".08em .5em;border-radius:.8em;background:rgba(255,255,255,.16);" +
-        "font-size:.86em";
       row.appendChild(chip);
     }
     return row;
@@ -789,9 +816,7 @@
       ? "Registered license"
       : "Evaluation / personal license";
     licIcon.setAttribute("aria-label", licIcon.title);
-    licIcon.style.cssText =
-      "border:0;background:transparent;color:inherit;cursor:pointer;" +
-      "font:inherit;padding:0;margin-left:.35em;line-height:1;vertical-align:baseline";
+    licIcon.className = "cladone-license-icon";
     tab.appendChild(licIcon);
     var body = badgeEl.lastChild;
     body.textContent = "";
@@ -804,8 +829,7 @@
       var v = sessionClaims[claimNames[i]];
       if (v === undefined) continue; // absent claim: line omitted
       var row = document.createElement("div");
-      row.style.cssText =
-        "white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+      row.className = "cladone-badge-row";
       row.textContent = claimNames[i] + ": " + String(v);
       body.appendChild(row);
     }
@@ -822,10 +846,8 @@
     }
     var btn = document.createElement("button");
     btn.type = "button";
+    btn.className = "cladone-badge-logout";
     btn.textContent = USERBADGE.logoutLabel || "Log out";
-    btn.style.cssText =
-      "margin-top:.46em;border:0;border-radius:.46em;padding:.38em .77em;" +
-      "cursor:pointer;font:inherit;color:#fff;background:#a04040";
     btn.onclick = function () {
       window.__cladoneAuth.logout();
     };
@@ -835,11 +857,7 @@
     // icon is clicked). Registered → "registered to:" + the signed
     // claims; otherwise eval/personal + a registration link.
     var licBox = document.createElement("div");
-    licBox.className = "cladone-license";
-    licBox.style.cssText =
-      "display:none;margin-top:.5em;padding-top:.42em;" +
-      "border-top:1px solid rgba(255,255,255,.18);font-size:.92em;" +
-      "line-height:1.45;white-space:normal";
+    licBox.className = "cladone-badge-license";
     function licLine(txt) {
       var d = document.createElement("div");
       d.textContent = txt;
@@ -864,8 +882,8 @@
         reg.href = String(lic.url);
         reg.target = "_blank";
         reg.rel = "noopener";
+        reg.className = "cladone-license-link";
         reg.textContent = "Register";
-        reg.style.cssText = "color:#9fd0ff;text-decoration:underline";
         licBox.appendChild(reg);
       }
     }
@@ -873,8 +891,7 @@
     licIcon.onclick = function (ev) {
       ev.preventDefault();
       ev.stopPropagation();
-      licBox.style.display =
-        licBox.style.display === "none" ? "block" : "none";
+      licBox.classList.toggle("cladone-license-visible");
       // unfold the badge so the details at the bottom become visible
       if (badgeEl) badgeEl.classList.add("cladone-userbadge-open");
     };
@@ -890,7 +907,7 @@
     removeBadge();
     makeBadgeEl();
     badgeEl.setAttribute("data-gtw-mode", "login");
-    badgeEl.style.cursor = "pointer";
+    badgeEl.classList.add("cladone-userbadge-login");
     badgeEl.title = "Sign in again";
     badgeEl.firstChild.textContent =
       "\uD83D\uDC64 " + "Sign in";
@@ -992,11 +1009,9 @@
         }
         var ok = rulePasses(rule);
         if (!ok) {
-          n.style.display = "none";
           n.setAttribute("data-gtw-gated-off", "1");
         } else if (n.getAttribute("data-gtw-gated-off")) {
           n.removeAttribute("data-gtw-gated-off");
-          n.style.display = "";
         }
       }
     }

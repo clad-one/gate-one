@@ -51,6 +51,7 @@ for target in "${targets[@]}"; do
 	cp examples/http.api-routes.json "$stage/examples/"
 	cp examples/oidc.api-routes.json "$stage/examples/"
 	cp doc/auth-providers.adoc "$stage/doc/"
+	cp doc/strict-csp.adoc "$stage/doc/"
 	cp doc/ui-gating.adoc "$stage/doc/"
 	cp README.md LICENSE VERSION "$stage/"
 

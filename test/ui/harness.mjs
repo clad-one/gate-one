@@ -123,6 +123,15 @@ export async function mkWindow(guard, html, sessionPayload, uiGate = "[]", opts 
       'console.log("NAV:" + LOGOUT_URL + "?returnTo=" + encodeURIComponent(location.href));'
     );
   w.console = { log: (...a) => { const s = a.join(" "); if (s.startsWith("NAV:")) st.navs.push(s.slice(4)); }, warn: () => {}, error: () => {} };
+  // tests of the CSP nonce: document.currentScript is null under
+  // w.eval(); expose a fake nonce so the guard's runtime <style>
+  // can be checked. Production reads the real script nonce.
+  if (opts.nonce) {
+    Object.defineProperty(w.document, "currentScript", {
+      configurable: true,
+      get: () => ({ nonce: opts.nonce }),
+    });
+  }
   // re-evaluates with the instrumented console
   const dom2 = { eval: (code) => w.eval(code) };
   dom2.eval(patched);

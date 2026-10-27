@@ -34,13 +34,13 @@ const GUARD = renderGuard({ uiGate: JSON.stringify(RULES) });
   const x = await mkWindow(GUARD, html, {
     roles: ["offline_access"], scopes: ["profile"], claims: {},
   });
-  x.doc.getElementById("legend").style.display !== "none"
+  !x.doc.getElementById("legend").hasAttribute("data-gtw-gated-off")
     ? ok("uiGate conforming → visible (rules in AND)")
     : fail("legend should be visible (offline_access ✓ + profile ✓)");
-  x.doc.getElementById("both").style.display !== "none"
+  !x.doc.getElementById("both").hasAttribute("data-gtw-gated-off")
     ? fail("both visible without admin (the data-gtw-roles markup must win over the gold rule)")
     : ok("markup precedence: data-gtw-roles wins over the uiGate rule");
-  x.doc.getElementById("bystander").style.display !== "none"
+  !x.doc.getElementById("bystander").hasAttribute("data-gtw-gated-off")
     ? ok("untargeted element unchanged")
     : fail("bystander wrongly hidden");
   x.doc.documentElement.classList.contains("cladone-evaluated")
@@ -51,7 +51,7 @@ const GUARD = renderGuard({ uiGate: JSON.stringify(RULES) });
 // ── 2. non-conforming: legend hidden ──
 {
   const x = await mkWindow(GUARD, html, { roles: [], scopes: [], claims: {} });
-  x.doc.getElementById("legend").style.display !== "none"
+  !x.doc.getElementById("legend").hasAttribute("data-gtw-gated-off")
     ? fail("legend visible without the conditions")
     : ok("uiGate non-conforming → hidden");
 }
