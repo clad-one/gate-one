@@ -9,18 +9,26 @@ declares a `csp` block. If you only proxy a page through Gate One,
 with no `csp` block and no custom injection, there is nothing to do:
 the page's own policy (if any) passes through unchanged.
 
-You need this guide if one of these is true:
+[options="header",cols="2,3"]
+|===
+| your situation | what to do
 
-* you enable `csp` on a route (`mode`: `nonce`, `hash` or `merge`);
-* your application already sends its own CSP;
-* you inject custom HTML, styles or scripts (`inject` bundle,
-  userscripts, plugins);
-* you proxy an external site that sends a CSP.
+| page proxied by Gate One, no `csp` block, no custom injection, and
+the page sends no CSP | nothing: Gate One adds no CSP.
+| page proxied, but **the page already sends a CSP** | the browser
+enforces it. The guard's inline script/style must be allowed by that
+policy, or the guard is blocked. Configure Gate One `csp.mode: "merge"`
+(script hashes) or `"nonce"`, and make the app's `style-src` compatible
+with the guard style. See “An application that already has a CSP”.
+| you enable `csp` on a route | this guide applies.
+| you inject custom HTML/CSS/JS (`inject`, userscripts, plugins) |
+this guide applies: your injected content must satisfy the policy.
+| you proxy an external site that sends a CSP | both policies are
+enforced; the origin's policy can block the guard. See “External sites
+and `upstream`”.
+|===
 
-The last two cases are the subtle ones: the gateway and the origin can
-both emit a policy, and **the browser enforces all of them**. A strict
-origin policy can block Gate One's guard; a strict gateway policy can
-block your application's inline code.
+You need this guide in the last four cases.
 
 == What Gate One injects
 
@@ -50,6 +58,9 @@ the hashes of its own injected scripts to `script-src-elem` /
 `script-src` / `default-src`. No policy of its own.
 | `hash` | Gate One emits its own policy; the guard and other injected
 scripts are allow-listed by SHA-256 hashes. The body is not rewritten.
+This mode is script-only: the guard's runtime `<style>` is not hashed,
+so pair it with a compatible `style-src` or use `nonce` for strict
+styles.
 | `nonce` | Gate One emits its own policy with a per-response nonce and
 stamps inline `<script>` tags. This is the recommended mode for
 applications that accept a per-response nonce.
@@ -222,6 +233,39 @@ origin's (the origin policy can still block it).
 Browser DevTools also shows the violating element and the computed
 policy; the gateway log is the aggregate view across users.
 
+== An application that already has a CSP
+
+If the application (or the proxified origin) sends its own
+`Content-Security-Policy`, the browser enforces **both** policies: the
+application's and Gate One's, whichever is stricter.
+
+For **scripts**, `csp.mode: "merge"` appends the SHA-256 hashes of the
+guard and other gateway-injected scripts to the origin's
+`script-src-elem` / `script-src` / `default-src`. The origin policy does
+not need `'unsafe-inline'` for the guard.
+
+For **styles**, two cases:
+
+* the origin policy has no `style-src` (or allows `'self'` and an
+  inline style): the guard's runtime `<style>` is nonced by the gateway
+  policy and passes;
+* the origin policy has a strict `style-src` without `'unsafe-inline'`
+  or a matching nonce/hash: the origin policy can block the guard's
+  `<style>`, because the gateway's nonce is not part of the origin
+  policy. Options:
+  ** let Gate One own the CSP (`mode: "nonce"` or `"hash"`) and stop
+  sending an app CSP on that route;
+  ** keep the app policy compatible (allow the guard style; the guard
+  CSS is dynamic because it includes the `uiGate` selectors, so a
+  static hash is not reliable);
+  ** serve the guard without its stylesheet (degraded UI) — not
+  recommended.
+
+There is no way for an application to reuse the gateway's per-response
+nonce in its own header. For a strict app-managed policy, the clean
+long-term design is an external guard stylesheet served same-origin
+(`style-src 'self'`), which is not yet the default.
+
 == External sites and `upstream`
 
 For a proxified external site that already sends a CSP, the browser
@@ -252,6 +296,11 @@ route.
 
 * **PWA**: `worker-src 'self'` for the service worker; `manifest-src
   'self'` if your policy declares it; the Workbox runtime is self-hosted.
+  A CSP nonce is **per response**: a cached HTML page keeps its nonce,
+  so the cached response must keep the matching CSP header. Workbox
+  caches the response headers with the body; verify this after a cache
+  version change. For long-lived cached HTML, `hash` mode is more
+  cache-friendly than a per-response nonce.
 * **MCP**: the MCP endpoint is same-origin (`/mcp`); `connect-src
   'self'` is enough for HTTP. If an MCP client uses a WebSocket, add its
   origin.
