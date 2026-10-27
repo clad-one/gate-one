@@ -162,12 +162,18 @@ independent of the short ID-token expiry: otherwise a 5-minute Keycloak
 token would force a full re-login every five minutes. A short TTL
 bounds revocation when no shared store is used.
 
-Do **not** request `offline_access` for the browser RP session: Keycloak
-then creates an *offline* session, and backchannel logout for offline
-tokens depends on the client's `backchannel.logout.revoke.offline.tokens`
-attribute (false by default). A confidential client still receives a
-refresh token without `offline_access`; the online session is the one
-Keycloak logs out and notifies through backchannel.
+For Keycloak, do **not** request `offline_access` for the browser RP
+session: it creates an *offline* session, and backchannel logout for
+offline tokens depends on the client's
+`backchannel.logout.revoke.offline.tokens` attribute (false by
+default). A confidential client still receives a refresh token without
+`offline_access`; the online session is the one Keycloak logs out and
+notifies through backchannel.
+
+Keycloak prefers **front-channel** logout when the client's
+`frontchannelLogout` flag is true, even if `backchannel.logout.url` is
+set. To use backchannel, set `frontchannelLogout: false` on the client
+and keep the backchannel URL; the front-channel URL is then ignored.
 
 Revocation state lives in a **bbolt** file (`sessionStore.type: bolt`,
 default `./gate-one-state.db` relative to the config file):
@@ -193,7 +199,10 @@ Logout clears the cookie, revokes the session `sid` locally (a copied
 cookie cannot be replayed), and redirects to the IdP
 `end_session_endpoint` with `id_token_hint` and
 `post_logout_redirect_uri` when the IdP advertises one. The ID token is
-kept only for that hint; refresh tokens are never stored.
+kept only for that hint. In native mode the refresh token is not stored
+by Gate One; with `legacyTokenCookies` (migration, see below) the
+access/refresh/id tokens are mirrored in cookies for auth-bridge, the
+same custody model auth-bridge has always used.
 
 == Sharing the login host with auth-bridge (migration)
 
@@ -208,6 +217,9 @@ token-broker proxy routes are still served by auth-bridge:
   `access_token` / `refresh_token` / `id_token` cookies on the shared
   cookie domain, so auth-bridge's `/connections` and `/connect` resolve
   the same session without a second login;
+* set `frontchannelLogout: false` on the `cladone-login` client (keep
+  its backchannel URL): Keycloak prefers frontchannel when this flag is
+  true and never calls `/backchannel-logout`;
 * set `backchannelForwardUrl: "http://auth-bridge:3000/backchannel-logout"`:
   the native endpoint forwards each valid logout token to auth-bridge,
   keeping its persistent `sid` list in sync for `/auth` (forwardAuth)
