@@ -799,10 +799,13 @@ func (o *OIDC) forwardBackchannelLogout(
 		return
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("BACKCHANNEL FORWARD %s: status %d",
-			o.backchannelForward, resp.StatusCode)
+		log.Printf(
+			"BACKCHANNEL FORWARD %s: status=%d formLen=%d "+
+				"contentLength=%d body=%q",
+			o.backchannelForward, resp.StatusCode, len(form),
+			req.ContentLength, strings.TrimSpace(string(body)))
 		return
 	}
 	log.Printf("BACKCHANNEL FORWARD %s: ok", o.backchannelForward)
