@@ -706,6 +706,12 @@
     if (!badgeEl) {
       makeBadgeEl();
       badgeEl.setAttribute("data-gtw-mode", "authed");
+      // transient one-line handle after login; then hidden until the
+      // mouse approaches the top edge.
+      badgeEl.classList.add("cladone-userbadge-reveal");
+      setTimeout(function () {
+        if (badgeEl) badgeEl.classList.remove("cladone-userbadge-reveal");
+      }, 2000);
     }
     // first line (visible even folded): the icon + the identity
     var tab = badgeEl.firstChild;
@@ -820,7 +826,6 @@
       licBox.classList.toggle("cladone-license-visible");
       // unfold the badge so the details at the bottom become visible
       if (badgeEl) {
-        badgeEl.classList.remove("cladone-userbadge-compact");
         badgeEl.classList.add("cladone-userbadge-open");
       }
     };
@@ -843,11 +848,33 @@
       ev.stopPropagation();
       ensureLogin();
     };
+    // transient one-line "Sign in" handle; then hidden until the
+    // mouse approaches.
+    badgeEl.classList.add("cladone-userbadge-reveal");
+    setTimeout(function () {
+      if (badgeEl) badgeEl.classList.remove("cladone-userbadge-reveal");
+    }, 2000);
   }
 
-  // The badge is always visible in its handle state; the click cycle
-  // (handle → compact → extended → compact) is the only state driver.
-  // No hover/proximity preview: it made the compact state transient.
+  // Handle visibility: the one-line handle is revealed transiently
+  // after login and re-appears when the mouse approaches the top edge
+  // (its own corner). Hovering it shows the compact view (CSS); a
+  // click opens the full view.
+  if (USERBADGE) {
+    window.addEventListener("mousemove", function (ev) {
+      if (!badgeEl) return;
+      var near = badgeEl.matches(":hover") ||
+        badgeEl.classList.contains("cladone-userbadge-open") ||
+        badgeEl.classList.contains("cladone-userbadge-reveal");
+      if (!near && ev.clientY <= 40) {
+        var r = badgeEl.getBoundingClientRect();
+        var margin = 150;
+        near = ev.clientX >= r.left - margin &&
+               ev.clientX <= r.right + margin;
+      }
+      badgeEl.classList.toggle("cladone-userbadge-near", near);
+    });
+  }
 
   // Gating by uiGate rules (config): same mechanisms as the markup
   // attributes, but elements are designated by CSS selector. An
@@ -1309,26 +1336,17 @@
     // it navigates (its own onclick).
     if (authed && badgeEl) {
       if (badgeEl.contains(t)) {
-        // Interactive children (links, buttons, fields) keep their
-        // native action; only a click on the badge chrome cycles the
-        // states.
+        // Interactive children keep their native action; a click on
+        // the badge chrome toggles the FULL view.
         if (t.closest("a,button,input,select,textarea,label")) {
           return;
         }
-        if (badgeEl.classList.contains("cladone-userbadge-open")) {
-          badgeEl.classList.remove("cladone-userbadge-open");
-          badgeEl.classList.add("cladone-userbadge-compact");
-        } else if (badgeEl.classList.contains("cladone-userbadge-compact")) {
-          badgeEl.classList.remove("cladone-userbadge-compact");
-          badgeEl.classList.add("cladone-userbadge-open");
-        } else {
-          badgeEl.classList.add("cladone-userbadge-compact");
-        }
+        badgeEl.classList.toggle("cladone-userbadge-open");
         return;
       }
-      // click outside: back to the one-line handle
+      // click outside: collapse the full view (hover/near still
+      // decide whether the compact/handle is visible)
       badgeEl.classList.remove("cladone-userbadge-open");
-      badgeEl.classList.remove("cladone-userbadge-compact");
     }
 
     // Logout (data-gtw-logout): the look is entirely up to the app,

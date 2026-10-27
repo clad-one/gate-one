@@ -225,12 +225,12 @@ const SESSION = {
   tab.textContent.startsWith("👤") && tab.textContent.includes("alice")
     ? ok("badge: first line = 👤 + username")
     : fail("badge: the handle must show 👤 + the user's name");
-  if (badge.classList.contains("cladone-userbadge-reveal") ||
-      badge.classList.contains("cladone-userbadge-compact") ||
-      badge.classList.contains("cladone-userbadge-open"))
-    fail("badge: must start in the one-line handle state");
-  else
-    ok("badge: one-line handle visible at rest (no transient preview)");
+  if (!badge.classList.contains("cladone-userbadge-reveal"))
+    fail("badge: transient one-line handle expected at login");
+  await tick(2200);
+  badge.classList.contains("cladone-userbadge-reveal")
+    ? fail("badge: transient handle not hidden after 2 s")
+    : ok("badge: handle hidden after the transient reveal");
   const body = badge.querySelector(".cladone-userbadge-body").textContent;
   !body.includes("alice") && body.includes("email_verified: false")
     ? ok("badge: body = claims (no duplicate of the name)")
@@ -329,7 +329,7 @@ const SESSION = {
     : fail("licence registered: details missing claims");
 }
 
-// ── 6d. badge: handle → compact → extended → compact, outside resets ──
+// ── 6d. badge: proximity handle, hover compact (CSS), click full ──
 {
   const guardBadge = renderGuard({
     userBadge:
@@ -341,39 +341,51 @@ const SESSION = {
   const x = await mkWindow(guardBadge, html, SESSION);
   const badge = x.doc.querySelector(".cladone-userbadge");
   const tab = badge.querySelector(".cladone-userbadge-tab");
-  const cycle = () => x.click(tab);
-  const state = () =>
-    badge.classList.contains("cladone-userbadge-open") ? "extended" :
-    badge.classList.contains("cladone-userbadge-compact") ? "compact" :
-    "handle";
+  await tick(2200); // transient reveal over
 
-  state() === "handle"
-    ? ok("badge cycle: starts in handle")
-    : fail(`badge cycle: starts in ${state()}`);
-  cycle();
-  state() === "compact"
-    ? ok("badge cycle: first click → compact")
-    : fail(`badge cycle: first click → ${state()}`);
-  cycle();
-  state() === "extended"
-    ? ok("badge cycle: second click → extended")
-    : fail(`badge cycle: second click → ${state()}`);
-  cycle();
-  state() === "compact"
-    ? ok("badge cycle: third click → compact")
-    : fail(`badge cycle: third click → ${state()}`);
-  // A link inside the badge must act, not cycle the state.
+  !badge.classList.contains("cladone-userbadge-reveal") &&
+  !badge.classList.contains("cladone-userbadge-near")
+    ? ok("badge: hidden after the transient handle")
+    : fail("badge: handle still visible after the transient reveal");
+
+  x.w.dispatchEvent(new x.w.MouseEvent("mousemove", {
+    bubbles: true, clientX: 100, clientY: 20,
+  }));
+  await tick();
+  badge.classList.contains("cladone-userbadge-near")
+    ? ok("badge: mouse approach → one-line handle")
+    : fail("badge: handle not revealed on mouse approach");
+
+  x.w.dispatchEvent(new x.w.MouseEvent("mousemove", {
+    bubbles: true, clientX: 100, clientY: 200,
+  }));
+  await tick();
+  !badge.classList.contains("cladone-userbadge-near")
+    ? ok("badge: handle hidden after moving away")
+    : fail("badge: handle kept after moving away");
+
+  x.click(tab);
+  badge.classList.contains("cladone-userbadge-open")
+    ? ok("badge: click → full view")
+    : fail("badge: click did not open the full view");
+
   const link = x.doc.querySelector(".cladone-badge-link");
-  const before = state();
   x.click(link);
-  state() === before
-    ? ok("badge cycle: link click does not toggle the badge")
-    : fail(`badge cycle: link click changed ${before} → ${state()}`);
-  // Outside click collapses to handle.
+  badge.classList.contains("cladone-userbadge-open")
+    ? ok("badge: link click does not toggle the full view")
+    : fail("badge: link click collapsed the full view");
+
   x.click(x.doc.body);
-  state() === "handle"
-    ? ok("badge cycle: outside click → handle")
-    : fail(`badge cycle: outside click → ${state()}`);
+  !badge.classList.contains("cladone-userbadge-open")
+    ? ok("badge: outside click collapses the full view")
+    : fail("badge: outside click left the full view open");
+
+  const cssText = x.doc.querySelector("style").textContent;
+  cssText.includes(":hover:not(.cladone-userbadge-open)") &&
+  cssText.includes("max-height:6.6em") &&
+  cssText.includes(".cladone-userbadge-open .cladone-badge-row{white-space:normal")
+    ? ok("badge: hover compact CSS + full view without ellipsis")
+    : fail("badge: compact/full CSS rules missing");
 }
 
 // ── 6e. refresh(): in-place session changes, no reload ──
