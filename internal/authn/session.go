@@ -22,6 +22,9 @@ type sessionCodec struct {
 	secret     []byte
 	ttl        time.Duration
 	now        func() time.Time
+	// storeID invalidates cookies when the state file is lost and
+	// recreated (no epoch on every restart).
+	storeID string
 }
 
 func newSessionCodec(
@@ -30,6 +33,7 @@ func newSessionCodec(
 	secret []byte,
 	ttl time.Duration,
 	now func() time.Time,
+	storeID string,
 ) *sessionCodec {
 	if now == nil {
 		now = time.Now
@@ -44,19 +48,22 @@ func newSessionCodec(
 		secret:     secret,
 		ttl:        ttl,
 		now:        now,
+		storeID:    storeID,
 	}
 }
 
 type sessionPayload struct {
-	UserID   string         `json:"uid,omitempty"`
-	User     string         `json:"u"`
-	Email    string         `json:"e,omitempty"`
-	Roles    []string       `json:"r,omitempty"`
-	Scopes   []string       `json:"s,omitempty"`
-	Claims   map[string]any `json:"c,omitempty"`
-	IDToken  string         `json:"idt,omitempty"`
-	Expires  int64          `json:"exp"`
-	IssuedAt int64          `json:"iat,omitempty"`
+	UserID    string         `json:"uid,omitempty"`
+	User      string         `json:"u"`
+	SessionID string         `json:"sid,omitempty"`
+	Email     string         `json:"e,omitempty"`
+	Roles     []string       `json:"r,omitempty"`
+	Scopes    []string       `json:"s,omitempty"`
+	Claims    map[string]any `json:"c,omitempty"`
+	IDToken   string         `json:"idt,omitempty"`
+	StoreID   string         `json:"st,omitempty"`
+	Expires   int64          `json:"exp"`
+	IssuedAt  int64          `json:"iat,omitempty"`
 }
 
 func (c *sessionCodec) encode(
@@ -70,15 +77,17 @@ func (c *sessionCodec) encode(
 		exp = expires
 	}
 	p := sessionPayload{
-		UserID:   id.UserID,
-		User:     id.Username,
-		Email:    id.Email,
-		Roles:    id.Roles,
-		Scopes:   id.Scopes,
-		Claims:   id.Claims,
-		IDToken:  idToken,
-		Expires:  exp.Unix(),
-		IssuedAt: now.Unix(),
+		UserID:    id.UserID,
+		User:      id.Username,
+		SessionID: id.SessionID,
+		Email:     id.Email,
+		Roles:     id.Roles,
+		Scopes:    id.Scopes,
+		Claims:    id.Claims,
+		IDToken:   idToken,
+		StoreID:   c.storeID,
+		Expires:   exp.Unix(),
+		IssuedAt:  now.Unix(),
 	}
 	raw, _ := json.Marshal(p)
 	body := base64.RawURLEncoding.EncodeToString(raw)
@@ -106,17 +115,24 @@ func (c *sessionCodec) decode(
 	if p.Expires == 0 || c.now().Unix() >= p.Expires {
 		return Identity{}, "", false
 	}
+	if c.storeID != "" && p.StoreID != c.storeID {
+		// The state file was recreated: reject cookies signed with a
+		// previous store identity (prevents revoked sessions from
+		// being reactivated after a lost file).
+		return Identity{}, "", false
+	}
 	userID := p.UserID
 	if userID == "" {
 		userID = p.User
 	}
 	return Identity{
-		UserID:   userID,
-		Username: p.User,
-		Email:    p.Email,
-		Roles:    p.Roles,
-		Scopes:   p.Scopes,
-		Claims:   p.Claims,
+		UserID:    userID,
+		SessionID: p.SessionID,
+		Username:  p.User,
+		Email:     p.Email,
+		Roles:     p.Roles,
+		Scopes:    p.Scopes,
+		Claims:    p.Claims,
 	}, p.IDToken, true
 }
 

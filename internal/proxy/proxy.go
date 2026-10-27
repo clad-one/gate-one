@@ -7,6 +7,7 @@ import (
 	"cladone/gate-one/internal/pwa"
 	"cladone/gate-one/internal/tokenbroker"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -695,30 +696,51 @@ func buildAuthProvider(
 		for i := range cfg.Routes {
 			allowed = append(allowed, cfg.Routes[i].Host)
 		}
+		if ap.SessionStore == nil {
+			ap.SessionStore = &core.SessionStoreConfig{
+				Type: "bolt", Path: "./gate-one-state.db"}
+		}
+		revocationTTL := time.Duration(
+			ap.RevocationTTLSeconds) * time.Second
+		store, err := authn.OpenBoltShared(
+			ap.SessionStore.Path, revocationTTL)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"authProvider.sessionStore: %w", err)
+		}
+		var sessionKey []byte
+		if ap.SessionKeyEnv != "" {
+			sum := sha256.Sum256([]byte(os.Getenv(ap.SessionKeyEnv)))
+			sessionKey = sum[:]
+		}
 		ctx, cancel := context.WithTimeout(
 			context.Background(), 10*time.Second)
 		defer cancel()
 		p, err := authn.NewOIDC(ctx, authn.OIDCConfig{
-			Issuer:       ap.Issuer,
-			ClientID:     ap.ClientID,
-			ClientSecret: ap.ClientSecret,
-			LoginBaseURL: ap.LoginBaseURL,
-			CookieDomain: ap.CookieDomain,
-			AllowedHosts: allowed,
-			Scopes:       ap.Scopes,
-			RedirectURL:  ap.RedirectURL,
-			RoleClaims:   ap.RoleClaims,
-			ScopesClaim:  ap.ScopesClaim,
-			MCPAudience:  ap.MCPAudience,
-			SessionTTL: time.Duration(
-				ap.SessionTTLSeconds) * time.Second,
+			Issuer:            ap.Issuer,
+			ClientID:          ap.ClientID,
+			ClientSecret:      ap.ClientSecret,
+			LoginBaseURL:      ap.LoginBaseURL,
+			CookieDomain:      ap.CookieDomain,
+			AllowedHosts:      allowed,
+			Scopes:            ap.Scopes,
+			RedirectURL:       ap.RedirectURL,
+			RoleClaims:        ap.RoleClaims,
+			ScopesClaim:       ap.ScopesClaim,
+			MCPAudience:       ap.MCPAudience,
+			SessionTTL:        time.Duration(ap.SessionTTLSeconds) * time.Second,
+			Store:             store,
+			SessionKey:        sessionKey,
+			BackchannelLogout: ap.BackchannelLogout,
+			RevocationTTL:     revocationTTL,
 		})
 		if err != nil {
 			return nil, nil, err
 		}
 		log.Printf(
-			"OIDC enabled issuer=%s login=%s redirect=%s",
-			ap.Issuer, p.LoginURL(), ap.RedirectURL)
+			"OIDC enabled issuer=%s login=%s redirect=%s store=bolt(%s)",
+			ap.Issuer, p.LoginURL(), ap.RedirectURL,
+			ap.SessionStore.Path)
 		return p, p, nil
 
 	case "http", "":

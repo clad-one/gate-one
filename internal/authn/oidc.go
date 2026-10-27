@@ -26,7 +26,7 @@ const (
 	oidcSessionCookie = "gate_one_session"
 	oidcTxCookie      = "gate_one_oidc_tx"
 	oidcTxTTL         = 5 * time.Minute
-	oidcSessionTTL    = 12 * time.Hour
+	oidcSessionTTL    = time.Hour
 )
 
 // OIDCConfig configures the native OpenID Connect Relying Party.
@@ -51,6 +51,22 @@ type OIDCConfig struct {
 	MCPAudience string
 	SessionTTL  time.Duration
 
+	// Store persists back-channel logout revocations. Default: an
+	// in-memory store (tests/dev). Production passes bbolt.
+	Store RevocationStore
+	// SessionKey is the cookie signing key. Empty = use the store's
+	// persisted key when available, else generate one.
+	SessionKey []byte
+	// StoreID is the store generation (invalidates cookies when the
+	// backing file is lost/recreated).
+	StoreID string
+	// BackchannelLogout: nil = auto (enable when the IdP advertises
+	// backchannel_logout_supported), true/false = explicit override.
+	BackchannelLogout *bool
+	// RevocationTTL: how long a revocation entry is kept. Default
+	// 24h, never shorter than the session TTL.
+	RevocationTTL time.Duration
+
 	// test seams
 	Now        func() time.Time
 	Rand       io.Reader
@@ -60,21 +76,25 @@ type OIDCConfig struct {
 // OIDC is the native Relying Party. It implements Provider and
 // LoginHandler.
 type OIDC struct {
-	provider    *oidc.Provider
-	verifier    *oidc.IDTokenVerifier
-	mcpVerifier *oidc.IDTokenVerifier
-	oauth2      *oauth2.Config
-	issuer      string
+	provider       *oidc.Provider
+	verifier       *oidc.IDTokenVerifier
+	logoutVerifier *oidc.IDTokenVerifier
+	mcpVerifier    *oidc.IDTokenVerifier
+	oauth2         *oauth2.Config
+	issuer         string
 
 	loginBase    *url.URL
 	cookieDomain string
 	secure       bool
 	origins      *originPolicy
 
-	roleClaims  []string
-	scopesClaim string
-	mcpAudience string
-	endSession  string
+	roleClaims    []string
+	scopesClaim   string
+	mcpAudience   string
+	endSession    string
+	backchannel   bool
+	revocationTTL time.Duration
+	store         RevocationStore
 
 	session *sessionCodec
 	tx      *txCodec
@@ -164,7 +184,9 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 	}
 
 	var discovery struct {
-		EndSessionEndpoint string `json:"end_session_endpoint"`
+		EndSessionEndpoint                string `json:"end_session_endpoint"`
+		BackchannelLogoutSupported        bool   `json:"backchannel_logout_supported"`
+		BackchannelLogoutSessionSupported bool   `json:"backchannel_logout_session_supported"`
 	}
 	_ = provider.Claims(&discovery)
 
@@ -176,17 +198,64 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 	if rnd == nil {
 		rnd = rand.Reader
 	}
-	sessionSecret := make([]byte, 32)
-	if _, err := io.ReadFull(rnd, sessionSecret); err != nil {
-		return nil, fmt.Errorf("authProvider.type oidc: session key: %w", err)
-	}
-	txSecret := make([]byte, 32)
-	if _, err := io.ReadFull(rnd, txSecret); err != nil {
-		return nil, fmt.Errorf("authProvider.type oidc: state key: %w", err)
-	}
 	ttl := cfg.SessionTTL
 	if ttl <= 0 {
 		ttl = oidcSessionTTL
+	}
+
+	store := cfg.Store
+	if store == nil {
+		store = NewMemoryStore()
+		log.Printf(
+			"OIDC: no revocation store configured — using memory " +
+				"(single instance, revocations lost on restart)")
+	}
+	sessionKey := append([]byte(nil), cfg.SessionKey...)
+	if len(sessionKey) == 0 {
+		if ks, ok := store.(SessionKeyStore); ok {
+			sessionKey = ks.SessionKey()
+		}
+	}
+	if len(sessionKey) == 0 {
+		sessionKey = make([]byte, 32)
+		if _, err := io.ReadFull(rnd, sessionKey); err != nil {
+			return nil, fmt.Errorf(
+				"authProvider.type oidc: session key: %w", err)
+		}
+	}
+	storeID := cfg.StoreID
+	if storeID == "" {
+		if ks, ok := store.(SessionKeyStore); ok {
+			storeID = ks.StoreID()
+		}
+	}
+
+	backchannel := discovery.BackchannelLogoutSupported
+	if cfg.BackchannelLogout != nil {
+		backchannel = *cfg.BackchannelLogout
+	}
+	if backchannel && !discovery.BackchannelLogoutSupported &&
+		cfg.BackchannelLogout != nil && *cfg.BackchannelLogout {
+		log.Printf(
+			"OIDC: backchannelLogout forced, but the IdP discovery does " +
+				"not advertise backchannel_logout_supported")
+	}
+	if backchannel && !discovery.BackchannelLogoutSessionSupported {
+		log.Printf(
+			"OIDC: backchannel logout enabled without session-id support: " +
+				"revocation falls back to sub (all user sessions)")
+	}
+	revocationTTL := cfg.RevocationTTL
+	if revocationTTL <= 0 {
+		revocationTTL = 24 * time.Hour
+	}
+	if revocationTTL < ttl {
+		revocationTTL = ttl
+	}
+
+	txSecret := make([]byte, 32)
+	if _, err := io.ReadFull(rnd, txSecret); err != nil {
+		return nil, fmt.Errorf("authProvider.type oidc: state key: %w", err)
 	}
 
 	roleClaims := cfg.RoleClaims
@@ -221,13 +290,16 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 		secure:       u.Scheme == "https",
 		origins: newOriginPolicy(
 			domain, append([]string{u.Host}, cfg.AllowedHosts...)),
-		roleClaims:  roleClaims,
-		scopesClaim: scopesClaim,
-		mcpAudience: strings.TrimSpace(cfg.MCPAudience),
-		endSession:  discovery.EndSessionEndpoint,
+		roleClaims:    roleClaims,
+		scopesClaim:   scopesClaim,
+		mcpAudience:   strings.TrimSpace(cfg.MCPAudience),
+		endSession:    discovery.EndSessionEndpoint,
+		backchannel:   backchannel,
+		revocationTTL: revocationTTL,
+		store:         store,
 		session: newSessionCodec(
 			oidcSessionCookie, domain, u.Scheme == "https",
-			sessionSecret, ttl, now),
+			sessionKey, ttl, now, storeID),
 		tx: &txCodec{
 			secret: txSecret,
 			secure: u.Scheme == "https",
@@ -256,15 +328,41 @@ func (o *OIDC) Health(ctx context.Context) error {
 	return nil
 }
 
-// Verify reads the signed session cookie.
+// Verify reads the signed session cookie and enforces RP-side
+// revocation (back-channel logout, RP logout) BEFORE the identity is
+// returned. The proxy also calls CheckRevoked on cache hits.
 func (o *OIDC) Verify(
-	_ context.Context,
+	ctx context.Context,
 	r *http.Request,
 ) (*Result, error) {
-	if id, _, ok := o.session.read(r); ok {
-		return &Result{Identity: id}, nil
+	id, _, ok := o.session.read(r)
+	if !ok {
+		return nil, ErrUnauthenticated
 	}
-	return nil, ErrUnauthenticated
+	revoked, err := o.CheckRevoked(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if revoked {
+		return nil, ErrUnauthenticated
+	}
+	return &Result{Identity: id}, nil
+}
+
+// CheckRevoked implements Provider.
+func (o *OIDC) CheckRevoked(
+	ctx context.Context,
+	id Identity,
+) (bool, error) {
+	if o.store == nil {
+		return false, nil
+	}
+	revoked, err := o.store.IsRevoked(
+		ctx, o.issuer, id.SessionID, id.UserID)
+	if err != nil {
+		return false, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	return revoked, nil
 }
 
 // VerifyMCP validates the Bearer access token locally (JWKS) and
@@ -301,9 +399,15 @@ func (o *OIDC) VerifyMCP(
 	if scope != "" && !contains(scopes, scope) {
 		return nil, ErrInsufficientScope
 	}
-	return &Result{
-		Identity: o.identityFromClaims(claims, scopes),
-	}, nil
+	id := o.identityFromClaims(claims, scopes)
+	revoked, err := o.CheckRevoked(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if revoked {
+		return nil, ErrUnauthenticated
+	}
+	return &Result{Identity: id}, nil
 }
 
 // ServeLogin implements LoginHandler: /login, /auth/callback,
@@ -320,6 +424,8 @@ func (o *OIDC) ServeLogin(w http.ResponseWriter, r *http.Request) {
 		o.handleCallback(w, r)
 	case "/logout":
 		o.handleLogout(w, r)
+	case "/backchannel-logout":
+		o.handleBackchannelLogout(w, r)
 	case "/auth/popup-done":
 		o.renderPopupDone(w, r)
 	default:
@@ -428,8 +534,15 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (o *OIDC) handleLogout(w http.ResponseWriter, r *http.Request) {
-	_, idToken, _ := o.session.read(r)
+	id, idToken, ok := o.session.read(r)
 	o.session.clear(w)
+	// A copied cookie must not survive an RP-initiated logout: revoke
+	// the session id locally (never all sessions of the user).
+	if ok && o.store != nil && id.SessionID != "" {
+		_ = o.store.Revoke(
+			r.Context(), o.issuer, id.SessionID, "",
+			o.now().Add(o.revocationTTL))
+	}
 
 	returnTo := o.origins.safeReturnTo(
 		r.URL.Query().Get("returnTo"))
@@ -449,6 +562,88 @@ func (o *OIDC) handleLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.Redirect(w, r, returnTo, http.StatusFound)
+}
+
+// handleBackchannelLogout receives the OIDC Back-Channel Logout 1.0
+// token from the IdP. The IdP owns the SSO session; this handler
+// makes the RP enforce the revocation on its own cookie.
+func (o *OIDC) handleBackchannelLogout(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if !o.backchannel {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	raw := r.PostFormValue("logout_token")
+	if raw == "" {
+		http.Error(w, "missing logout_token", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	lt, err := o.verifier.VerifyLogout(ctx, raw)
+	if err != nil {
+		log.Printf("BACKCHANNEL LOGOUT rejected: %v", err)
+		http.Error(w, "invalid logout_token", http.StatusBadRequest)
+		return
+	}
+	now := o.now()
+	if lt.IssuedAt.IsZero() ||
+		now.Sub(lt.IssuedAt) > 5*time.Minute ||
+		lt.IssuedAt.After(now.Add(time.Minute)) {
+		log.Printf("BACKCHANNEL LOGOUT rejected: stale iat")
+		http.Error(w, "invalid logout_token", http.StatusBadRequest)
+		return
+	}
+
+	jtiExpiry := now.Add(10 * time.Minute)
+	if !lt.Expiry.IsZero() && lt.Expiry.After(jtiExpiry) {
+		jtiExpiry = lt.Expiry
+	}
+	fresh, err := o.store.UseJTI(
+		ctx, o.issuer, lt.TokenID, jtiExpiry)
+	if err != nil {
+		log.Printf("BACKCHANNEL LOGOUT store error: %v", err)
+		http.Error(w, "state store unavailable",
+			http.StatusServiceUnavailable)
+		return
+	}
+	if !fresh {
+		http.Error(w, "replayed logout_token", http.StatusBadRequest)
+		return
+	}
+
+	expires := now.Add(o.revocationTTL)
+	if !lt.Expiry.IsZero() && lt.Expiry.After(expires) {
+		expires = lt.Expiry
+	}
+	sid, sub := lt.SessionID, ""
+	if sid == "" {
+		// No session id: revoke every session of this user.
+		sub = lt.Subject
+	}
+	if err := o.store.Revoke(
+		ctx, o.issuer, sid, sub, expires); err != nil {
+		log.Printf("BACKCHANNEL LOGOUT store error: %v", err)
+		http.Error(w, "state store unavailable",
+			http.StatusServiceUnavailable)
+		return
+	}
+	log.Printf(
+		"BACKCHANNEL LOGOUT issuer=%s sid=%q sub=%q",
+		o.issuer, sid, sub)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (o *OIDC) renderPopupDone(w http.ResponseWriter, r *http.Request) {
@@ -473,12 +668,13 @@ func (o *OIDC) identityFromClaims(
 		username = userID
 	}
 	return Identity{
-		UserID:   userID,
-		Username: username,
-		Email:    stringClaim(claims, "email"),
-		Roles:    rolesFromClaims(claims, o.roleClaims),
-		Scopes:   scopes,
-		Claims:   claims,
+		UserID:    userID,
+		SessionID: stringClaim(claims, "sid"),
+		Username:  username,
+		Email:     stringClaim(claims, "email"),
+		Roles:     rolesFromClaims(claims, o.roleClaims),
+		Scopes:    scopes,
+		Claims:    claims,
 	}
 }
 

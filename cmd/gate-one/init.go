@@ -35,6 +35,14 @@ func runInit(args []string) int {
 	loginBaseFlag := fs.String(
 		"login-base", "",
 		"public login origin (with --oidc; default https://login.<domain>)")
+	stateFile := fs.String(
+		"state-file", "./gate-one-state.db",
+		"bbolt revocation store (with --oidc)")
+	sessionTTL := fs.Int(
+		"session-ttl", 3600, "OIDC session TTL in seconds")
+	noBackchannel := fs.Bool(
+		"no-backchannel", false,
+		"disable back-channel logout (default: enabled when the IdP advertises it)")
 	out := fs.String("out", "api-routes.json", "output config file")
 	port := fs.String("port", "3000", "public listen port (dev login URL)")
 	printOnly := fs.Bool("print", false, "print the config, do not write a file")
@@ -67,13 +75,16 @@ func runInit(args []string) int {
 		UserBadge map[string]any `json:"userBadge,omitempty"`
 	}
 	type provider struct {
-		Type            string         `json:"type"`
-		LoginBaseURL    string         `json:"loginBaseUrl"`
-		CookieDomain    string         `json:"cookieDomain"`
-		Issuer          string         `json:"issuer,omitempty"`
-		ClientID        string         `json:"clientId,omitempty"`
-		ClientSecretEnv string         `json:"clientSecretEnv,omitempty"`
-		Dev             map[string]any `json:"dev,omitempty"`
+		Type              string         `json:"type"`
+		LoginBaseURL      string         `json:"loginBaseUrl"`
+		CookieDomain      string         `json:"cookieDomain"`
+		Issuer            string         `json:"issuer,omitempty"`
+		ClientID          string         `json:"clientId,omitempty"`
+		ClientSecretEnv   string         `json:"clientSecretEnv,omitempty"`
+		SessionTTLSeconds int            `json:"sessionTtlSeconds,omitempty"`
+		SessionStore      map[string]any `json:"sessionStore,omitempty"`
+		BackchannelLogout *bool          `json:"backchannelLogout,omitempty"`
+		Dev               map[string]any `json:"dev,omitempty"`
 	}
 	type config struct {
 		AuthProvider *provider `json:"authProvider,omitempty"`
@@ -99,12 +110,21 @@ func runInit(args []string) int {
 			loginBase = "https://" + loginHost
 		}
 		cfg.AuthProvider = &provider{
-			Type:            "oidc",
-			LoginBaseURL:    loginBase,
-			CookieDomain:    cookieDomain,
-			Issuer:          *issuer,
-			ClientID:        *clientID,
-			ClientSecretEnv: *clientSecretEnv,
+			Type:              "oidc",
+			LoginBaseURL:      loginBase,
+			CookieDomain:      cookieDomain,
+			Issuer:            *issuer,
+			ClientID:          *clientID,
+			ClientSecretEnv:   *clientSecretEnv,
+			SessionTTLSeconds: *sessionTTL,
+			SessionStore: map[string]any{
+				"type": "bolt",
+				"path": *stateFile,
+			},
+		}
+		if *noBackchannel {
+			off := false
+			cfg.AuthProvider.BackchannelLogout = &off
 		}
 		routeCfg.Auth = &struct{}{}
 		routeCfg.UserBadge = map[string]any{
@@ -176,7 +196,12 @@ func runInit(args []string) int {
 		fmt.Printf("register at the IdP:\n")
 		fmt.Printf("  redirect URI:      %s/auth/callback\n", loginBase)
 		fmt.Printf("  post-logout URI:   https://%s/\n", hostName)
+		if !*noBackchannel {
+			fmt.Printf("  backchannel URI:   %s/backchannel-logout\n", loginBase)
+		}
 		fmt.Printf("export %s=<client-secret>\n", *clientSecretEnv)
+		fmt.Printf("state file: %s (relative to the config file)\n",
+			*stateFile)
 	default:
 		fmt.Printf("open http://%s:%s\n", hostName, *port)
 		fmt.Printf("login http://%s:%s/login\n", devLoginHost(hostName), *port)

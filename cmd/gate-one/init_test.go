@@ -139,12 +139,17 @@ func TestRunInitOIDC(t *testing.T) {
 	}
 	var cfg struct {
 		AuthProvider struct {
-			Type            string `json:"type"`
-			LoginBaseURL    string `json:"loginBaseUrl"`
-			CookieDomain    string `json:"cookieDomain"`
-			Issuer          string `json:"issuer"`
-			ClientID        string `json:"clientId"`
-			ClientSecretEnv string `json:"clientSecretEnv"`
+			Type              string `json:"type"`
+			LoginBaseURL      string `json:"loginBaseUrl"`
+			CookieDomain      string `json:"cookieDomain"`
+			Issuer            string `json:"issuer"`
+			ClientID          string `json:"clientId"`
+			ClientSecretEnv   string `json:"clientSecretEnv"`
+			SessionTTLSeconds int    `json:"sessionTtlSeconds"`
+			SessionStore      struct {
+				Type string `json:"type"`
+				Path string `json:"path"`
+			} `json:"sessionStore"`
 		} `json:"authProvider"`
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
@@ -161,5 +166,12 @@ func TestRunInitOIDC(t *testing.T) {
 	}
 	if ap.CookieDomain != "demo.localhost" {
 		t.Errorf("cookieDomain = %q", ap.CookieDomain)
+	}
+	if ap.SessionTTLSeconds != 3600 {
+		t.Errorf("sessionTtlSeconds = %d", ap.SessionTTLSeconds)
+	}
+	if ap.SessionStore.Type != "bolt" ||
+		ap.SessionStore.Path != "./gate-one-state.db" {
+		t.Errorf("sessionStore = %+v", ap.SessionStore)
 	}
 }

@@ -18,12 +18,13 @@ type RequestContext struct {
 	Body    map[string]any
 	RawBody []byte
 
-	UserID   string
-	Username string
-	Email    string
-	Roles    []string
-	Scopes   []string
-	Claims   map[string]any
+	UserID    string
+	SessionID string
+	Username  string
+	Email     string
+	Roles     []string
+	Scopes    []string
+	Claims    map[string]any
 }
 
 // HasRole / HasScope / HasClaim: helpers matching the identity

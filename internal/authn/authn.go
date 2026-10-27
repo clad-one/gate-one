@@ -25,12 +25,13 @@ import (
 // Identity is the authenticated user, normalized across providers.
 // Header/claim details stay in Claims.
 type Identity struct {
-	UserID   string
-	Username string
-	Email    string
-	Roles    []string
-	Scopes   []string
-	Claims   map[string]any
+	UserID    string
+	SessionID string
+	Username  string
+	Email     string
+	Roles     []string
+	Scopes    []string
+	Claims    map[string]any
 }
 
 // Result is the outcome of a successful verification. SetCookies
@@ -81,6 +82,12 @@ type Provider interface {
 		r *http.Request,
 		scope, resource string,
 	) (*Result, error)
+
+	// CheckRevoked is consulted before reusing a cached identity: a
+	// back-channel logout may have revoked a session while its
+	// identity was still in the gateway cache. Providers that do not
+	// own revocation state (dev, external http) return false.
+	CheckRevoked(ctx context.Context, id Identity) (bool, error)
 
 	// LoginURL is the absolute login page. Empty when the provider
 	// cannot offer a browser login (an authenticated request then

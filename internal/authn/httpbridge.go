@@ -133,6 +133,13 @@ func (h *HTTP) LoginURL() string {
 	return h.loginURL
 }
 
+// CheckRevoked implements Provider. Auth-bridge owns its revocation
+// state; the gateway cannot see it (its 30s identity cache is the
+// documented window).
+func (h *HTTP) CheckRevoked(context.Context, Identity) (bool, error) {
+	return false, nil
+}
+
 // Verify implements Provider.
 func (h *HTTP) Verify(
 	ctx context.Context,

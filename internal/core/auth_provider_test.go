@@ -157,6 +157,65 @@ func TestAuthProviderOIDCConfig(t *testing.T) {
 	if got := cfg.AuthIssuer(); got != "https://auth.example.com/realms/acme" {
 		t.Errorf("issuer = %q", got)
 	}
+	if ap.SessionStore == nil || ap.SessionStore.Type != "bolt" {
+		t.Fatalf("sessionStore = %+v, want bolt", ap.SessionStore)
+	}
+	if !filepath.IsAbs(ap.SessionStore.Path) ||
+		!strings.HasSuffix(ap.SessionStore.Path, "gate-one-state.db") {
+		t.Errorf("sessionStore.path = %q, want an absolute gate-one-state.db",
+			ap.SessionStore.Path)
+	}
+}
+
+func TestOIDCSessionStoreRedisNotImplemented(t *testing.T) {
+	_, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "oidc",
+			"issuer": "https://auth.example.com/realms/acme",
+			"clientId": "gate-one",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com",
+			"sessionStore": {"type": "redis"}
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("err = %v, want redis refusal", err)
+	}
+}
+
+func TestOIDCSessionKeyEnvMissing(t *testing.T) {
+	_, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "oidc",
+			"issuer": "https://auth.example.com/realms/acme",
+			"clientId": "gate-one",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com",
+			"sessionKeyEnv": "MISSING_SESSION_KEY"
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "MISSING_SESSION_KEY") {
+		t.Fatalf("err = %v, want missing session key refusal", err)
+	}
+}
+
+func TestSessionStoreRejectedForHTTP(t *testing.T) {
+	_, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "http",
+			"baseUrl": "http://auth-bridge:3000",
+			"sessionStore": {"type": "bolt"}
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "only valid for type oidc") {
+		t.Fatalf("err = %v, want sessionStore rejection", err)
+	}
 }
 
 func TestAuthProviderOIDCRequiresIssuerAndClient(t *testing.T) {

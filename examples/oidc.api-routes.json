@@ -5,7 +5,13 @@
     "clientId": "gate-one",
     "clientSecretEnv": "OIDC_CLIENT_SECRET",
     "loginBaseUrl": "https://login.example.com",
-    "cookieDomain": "example.com"
+    "cookieDomain": "example.com",
+    "sessionStore": {
+      "type": "bolt",
+      "path": "./gate-one-state.db"
+    },
+    "sessionTtlSeconds": 3600,
+    "backchannelLogout": true
   },
   "routes": [
     {

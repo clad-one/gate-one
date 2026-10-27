@@ -167,7 +167,36 @@
         "sessionTtlSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "OIDC session lifetime cap (the ID token expiry also applies). Default 43200 (12h)."
+          "description": "OIDC RP session lifetime. Default 3600 (1h): a short TTL bounds revocation when no shared store is used. The refresh/reauth flow renews it."
+        },
+        "sessionKeyEnv": {
+          "type": "string",
+          "description": "Environment variable holding the RP cookie signing key (base64/random string, hashed to 32 bytes). Empty = the key is generated and persisted in the bbolt store. Required for multi-instance (shared key)."
+        },
+        "sessionStore": {
+          "type": "object",
+          "description": "RP-side revocation store (back-channel logout, RP logout). Default: bbolt at ./gate-one-state.db, relative to the config file. bbolt is single-writer: a second Gate One instance on the same file is refused. Redis is reserved for the HA backend (not implemented in this release).",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["bolt", "redis"],
+              "description": "bolt (default, single instance) or redis (future HA backend; refused by this release)."
+            },
+            "path": {
+              "type": "string",
+              "description": "bbolt file path. Default ./gate-one-state.db (relative to the config file)."
+            }
+          }
+        },
+        "backchannelLogout": {
+          "type": "boolean",
+          "description": "OIDC Back-Channel Logout. Absent = auto: enabled when the IdP discovery advertises backchannel_logout_supported. false disables it. Register <loginBaseUrl>/backchannel-logout at the IdP."
+        },
+        "revocationTtlSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Retention of revocation entries. Default 86400 (24h), never shorter than the session TTL."
         },
         "dev": {
           "type": "object",

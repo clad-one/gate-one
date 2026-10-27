@@ -94,6 +94,12 @@ script never pushes, tags or uploads.
   Keycloak, Entra, Google, Authentik, Okta, Auth0 or any OIDC IdP —
   without auth-bridge. auth-bridge remains available as
   \`type: "http"\`, including in front of Keycloak.
+- **Persistent revocation (bbolt).** Back-channel logout tokens are
+  validated and their \`sid\`/\`sub\` revocations persisted in a local
+  bbolt file, checked before the identity cache. Sessions and
+  revocations survive a restart; losing the file invalidates old
+  cookies instead of reactivating revoked sessions. Redis is reserved
+  for the future HA backend.
 - **Authentication provider abstraction.** \`authProvider.type: "http"\`
   keeps auth-bridge (Keycloak) as the reference adapter. Any other
   service must implement the Gate One auth contract (a custom adapter);
@@ -119,9 +125,18 @@ script never pushes, tags or uploads.
 - The embedded \`dev\` provider refuses a non-loopback bind. Use
   \`--dev-allow-remote\` only for a demo.
 - Native OIDC is available (\`authProvider.type: "oidc"\`). The IdP must
-  register the redirect URI \`<loginBaseUrl>/auth/callback\`. For MCP
+  register the redirect URI \`<loginBaseUrl>/auth/callback\` and, for
+  immediate revocation, \`<loginBaseUrl>/backchannel-logout\`. For MCP
   tokens, the scope is the gate; set \`mcpAudience\` for a strict
   \`aud\` check. auth-bridge remains fully supported (type \`http\`).
+- OIDC sessions default to 1h (\`sessionTtlSeconds\`) and revocations are
+  persisted in \`./gate-one-state.db\` (relative to the config file).
+  Mount a volume for that file in Docker; bbolt is single-writer, so do
+  not share it between instances. Losing the file invalidates old
+  cookies (store identity mismatch) rather than reactivating revoked
+  sessions.
+- Back-channel logout is auto-enabled when the IdP discovery advertises
+  it; set \`backchannelLogout: false\` to opt out.
 
 ## Artifacts
 

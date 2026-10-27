@@ -197,6 +197,7 @@ func main() {
 		log.Fatal(err)
 	}
 	handler.Store(g)
+	proxy.ResetAuthCache()
 
 	// SIGHUP reload: re-read, validate, then swap (the previous config
 	// stays active if the new one is refused).
@@ -213,6 +214,7 @@ func main() {
 			return err
 		}
 		handler.Store(g)
+		proxy.ResetAuthCache()
 		return nil
 	}
 

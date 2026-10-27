@@ -94,10 +94,11 @@ mapping only cover the verification call.
 session change, no auth-bridge change) and is the recommended first
 step before considering native OIDC. Examples:
 `examples/http.api-routes.json` (auth-bridge) and
-`examples/oidc.api-routes.json` (native, future migration).
+`examples/oidc.api-routes.json` (native OIDC).
 
 Native OIDC (no auth-bridge; the IdP must register
-`https://login.example.com/auth/callback`):
+`https://login.example.com/auth/callback` and, for immediate
+revocation, `https://login.example.com/backchannel-logout`):
 
 ```json
 {
@@ -107,13 +108,21 @@ Native OIDC (no auth-bridge; the IdP must register
     "clientId": "gate-one",
     "clientSecretEnv": "OIDC_CLIENT_SECRET",
     "loginBaseUrl": "https://login.example.com",
-    "cookieDomain": "example.com"
+    "cookieDomain": "example.com",
+    "sessionStore": {"type": "bolt", "path": "./gate-one-state.db"},
+    "sessionTtlSeconds": 3600,
+    "backchannelLogout": true
   }
 }
 ```
 
+The bbolt file persists back-channel logout revocations across
+restarts; the revocation is checked before the gateway identity cache.
+bbolt is single-writer (one Gate One instance); HA will use a shared
+Redis store later.
+
 `gate-one init --oidc --issuer ... --client-id ...` writes this block and
-prints the redirect URI to register. auth-bridge stays fully supported
+prints the URIs to register. auth-bridge stays fully supported
 for OIDC too: use `type: "http"` when you want the bridge in front of
 Keycloak.
 
@@ -349,7 +358,7 @@ Go toolchain on the server.
 ```
 cmd/gate-one/       entrypoint (flags, init/doctor, SIGHUP reload, shutdown)
 cmd/gate-one-license/ vendor-side licence keygen/sign
-internal/authn/     provider SPI: dev IdP, http adapter, native OIDC
+internal/authn/     provider SPI: dev IdP, http adapter, native OIDC, bbolt revocation store
 internal/core/      config grammar + route loading/validation
 internal/proxy/     reverse proxy, auth, guards, rewriting, limits
 internal/pwa/       PWA wrap (manifest, service worker, Workbox)

@@ -66,7 +66,10 @@ The generated configuration:
     "clientId": "gate-one",
     "clientSecretEnv": "OIDC_CLIENT_SECRET",
     "loginBaseUrl": "https://login.example.com",
-    "cookieDomain": "example.com"
+    "cookieDomain": "example.com",
+    "sessionStore": {"type": "bolt", "path": "./gate-one-state.db"},
+    "sessionTtlSeconds": 3600,
+    "backchannelLogout": true
   },
   "routes": [{
     "host": "app.example.com", "path": "/*", "frontend": true,
@@ -82,13 +85,17 @@ Register a confidential (or public + PKCE) client at the IdP:
 * redirect URI: `https://login.example.com/auth/callback`
 * post-logout redirect URI: `https://app.example.com/` (and every
   other public host that uses the badge/logout)
+* back-channel logout URI: `https://login.example.com/backchannel-logout`
+  (optional; Gate One auto-enables the endpoint when the IdP discovery
+  advertises `backchannel_logout_supported`)
 * scopes: `openid profile email` (add `offline_access` only if a later
   refresh-token lot needs it)
 
 `login.example.com` must resolve to Gate One and be covered by the TLS
 certificate; Gate One serves `/login`, `/auth/callback`, `/logout`,
-`/auth/popup-done` and `/health` on that host before any application
-route. The session cookie is set on `cookieDomain` (e.g.
+`/backchannel-logout`, `/auth/popup-done` and `/health` on that host
+before any application route. The session cookie is set on `cookieDomain`
+(e.g.
 `example.com`), so every `*.example.com` app shares the session.
 
 If the client is public (no secret), omit `clientSecretEnv`: PKCE S256
@@ -126,19 +133,39 @@ check. Opaque access tokens are not accepted by the native provider;
 use `type: http` with auth-bridge when the IdP only issues opaque
 tokens.
 
-== Sessions and logout
+== Sessions, revocation and logout
 
-The RP session is a signed HttpOnly cookie (HMAC, no server-side
-store), set on `cookieDomain`, default lifetime 12h
-(`sessionTtlSeconds`). It is independent of the short ID-token expiry;
-otherwise a 5-minute Keycloak token would force a full re-login every
-five minutes. Backchannel logout / silent refresh is a later lot; set a
-shorter TTL if immediate revocation matters more than UX.
+The RP session is a signed HttpOnly cookie (HMAC) set on
+`cookieDomain`; the default lifetime is 1h (`sessionTtlSeconds`). It is
+independent of the short ID-token expiry: otherwise a 5-minute Keycloak
+token would force a full re-login every five minutes. A short TTL
+bounds revocation when no shared store is used.
 
-Logout clears the cookie and redirects to the IdP `end_session_endpoint`
-with `id_token_hint` and `post_logout_redirect_uri` when the IdP
-advertises one. The ID token is kept only for that hint; refresh tokens
-are never stored.
+Revocation state lives in a **bbolt** file (`sessionStore.type: bolt`,
+default `./gate-one-state.db` relative to the config file):
+
+* `/backchannel-logout` validates the OIDC logout token (signature,
+  `iss`, `aud`, `iat`, `events`, `sid`/`sub`, replay `jti`) and records
+  the revocation synchronously;
+* `sid` revokes one session, `sub` (when no `sid`) revokes every session
+  of the user;
+* the revocation is checked **before** the gateway identity cache, so a
+  cached identity cannot survive a logout;
+* entries expire after `revocationTtlSeconds` (default 24h).
+
+bbolt is single-writer: a second Gate One instance on the same file is
+refused. For HA, `sessionStore.type: redis` is the planned backend; it
+also requires `sessionKeyEnv` so all instances share the cookie key.
+Losing/recreating the state file changes the store identity embedded in
+the cookie, so old sessions are rejected instead of being reactivated.
+`sessionKeyEnv` is optional for a single instance (the key is persisted
+in bbolt); set it when multiple instances must accept the same cookie.
+
+Logout clears the cookie, revokes the session `sid` locally (a copied
+cookie cannot be replayed), and redirects to the IdP
+`end_session_endpoint` with `id_token_hint` and
+`post_logout_redirect_uri` when the IdP advertises one. The ID token is
+kept only for that hint; refresh tokens are never stored.
 
 == auth-bridge remains an option
 

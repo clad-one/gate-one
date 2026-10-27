@@ -59,6 +59,8 @@ func newMockOIDC(t *testing.T) *mockOIDC {
 				"token_endpoint":                        m.srv.URL + "/token",
 				"jwks_uri":                              m.srv.URL + "/jwks",
 				"end_session_endpoint":                  m.srv.URL + "/logout",
+				"backchannel_logout_supported":          true,
+				"backchannel_logout_session_supported":  true,
 				"response_types_supported":              []string{"code"},
 				"subject_types_supported":               []string{"public"},
 				"id_token_signing_alg_values_supported": []string{"RS256"},
@@ -118,7 +120,7 @@ func newMockOIDC(t *testing.T) *mockOIDC {
 		now := time.Now()
 		idClaims := map[string]any{
 			"iss": m.srv.URL, "aud": "gate-one",
-			"sub": "user-123", "nonce": c.nonce,
+			"sub": "user-123", "sid": "sid-123", "nonce": c.nonce,
 			"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(),
 			"preferred_username": "alice",
 			"email":              "alice@example.com",
@@ -136,7 +138,7 @@ func newMockOIDC(t *testing.T) *mockOIDC {
 		}
 		accessClaims := map[string]any{
 			"iss": m.srv.URL, "aud": "mcp-resource",
-			"sub": "user-123",
+			"sub": "user-123", "sid": "sid-123",
 			"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(),
 			"preferred_username": "alice",
 			"email":              "alice@example.com",
@@ -186,6 +188,29 @@ func (m *mockOIDC) sign(claims map[string]any) string {
 	return input + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
+func (m *mockOIDC) logoutToken(
+	sid, sub, jti string,
+	iat time.Time,
+) string {
+	claims := map[string]any{
+		"iss": m.srv.URL,
+		"aud": "gate-one",
+		"iat": iat.Unix(),
+		"exp": iat.Add(2 * time.Minute).Unix(),
+		"jti": jti,
+		"events": map[string]any{
+			"http://schemas.openid.net/event/backchannel-logout": map[string]any{},
+		},
+	}
+	if sid != "" {
+		claims["sid"] = sid
+	}
+	if sub != "" {
+		claims["sub"] = sub
+	}
+	return m.sign(claims)
+}
+
 func newTestOIDC(t *testing.T, m *mockOIDC, now *time.Time) *OIDC {
 	t.Helper()
 	o, err := NewOIDC(context.Background(), OIDCConfig{
@@ -198,6 +223,7 @@ func newTestOIDC(t *testing.T, m *mockOIDC, now *time.Time) *OIDC {
 		RedirectURL:  "http://login.test:3000/auth/callback",
 		HTTPClient:   m.srv.Client(),
 		SessionTTL:   time.Hour,
+		Store:        NewMemoryStore(),
 		Now:          func() time.Time { return *now },
 	})
 	if err != nil {
@@ -213,6 +239,70 @@ func findCookie(rec *httptest.ResponseRecorder, name string) *http.Cookie {
 		}
 	}
 	return nil
+}
+
+// performLogin runs the full code + PKCE flow against the mock IdP and
+// returns the RP session cookie.
+func performLogin(t *testing.T, m *mockOIDC, o *OIDC) *http.Cookie {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"http://login.test:3000/login?returnTo=http://app.test/",
+		nil,
+	)
+	o.ServeLogin(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("login = %d, want 302", rec.Code)
+	}
+	tx := findCookie(rec, oidcTxCookie)
+	if tx == nil {
+		t.Fatal("tx cookie missing")
+	}
+	client := m.srv.Client()
+	client.CheckRedirect = func(
+		req *http.Request, via []*http.Request,
+	) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := client.Get(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	callback := resp.Header.Get("Location")
+	if callback == "" {
+		t.Fatalf("authorize = %d, no Location", resp.StatusCode)
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, callback, nil)
+	req.AddCookie(tx)
+	o.ServeLogin(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("callback = %d: %s", rec.Code, rec.Body.String())
+	}
+	session := findCookie(rec, oidcSessionCookie)
+	if session == nil {
+		t.Fatal("session cookie missing")
+	}
+	return session
+}
+
+func backchannelRequest(
+	t *testing.T,
+	o *OIDC,
+	token string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	form := url.Values{"logout_token": {token}}
+	req := httptest.NewRequest(
+		http.MethodPost, "http://login.test:3000/backchannel-logout",
+		strings.NewReader(form.Encode()),
+	)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	o.ServeLogin(rec, req)
+	return rec
 }
 
 func TestOIDCLoginAndMCP(t *testing.T) {
@@ -358,6 +448,99 @@ func TestOIDCLoginAndMCP(t *testing.T) {
 		context.Background(), req,
 	); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("expired session = %v, want ErrUnauthenticated", err)
+	}
+}
+
+func TestOIDCBackchannelLogout(t *testing.T) {
+	m := newMockOIDC(t)
+	now := time.Now()
+	o := newTestOIDC(t, m, &now)
+	session := performLogin(t, m, o)
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
+	req.AddCookie(session)
+	res, err := o.Verify(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Verify before logout = %v", err)
+	}
+	if res.SessionID != "sid-123" {
+		t.Errorf("SessionID = %q, want sid-123", res.SessionID)
+	}
+
+	// A back-channel logout token revokes the session.
+	token := m.logoutToken("sid-123", "user-123", "jti-1", now)
+	rec := backchannelRequest(t, o, token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("backchannel = %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := o.Verify(context.Background(), req); !errors.Is(
+		err, ErrUnauthenticated,
+	) {
+		t.Errorf("Verify after logout = %v, want ErrUnauthenticated", err)
+	}
+
+	// The same jti is a replay.
+	if rec := backchannelRequest(t, o, token); rec.Code != http.StatusBadRequest {
+		t.Errorf("replayed backchannel = %d, want 400", rec.Code)
+	}
+
+	// A stale iat is refused.
+	stale := m.logoutToken("sid-999", "", "jti-stale", now.Add(-10*time.Minute))
+	if rec := backchannelRequest(t, o, stale); rec.Code != http.StatusBadRequest {
+		t.Errorf("stale backchannel = %d, want 400", rec.Code)
+	}
+
+	// An invalid token is refused.
+	if rec := backchannelRequest(t, o, "not-a-jwt"); rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid backchannel = %d, want 400", rec.Code)
+	}
+}
+
+func TestOIDCBackchannelLogoutBySubject(t *testing.T) {
+	m := newMockOIDC(t)
+	now := time.Now()
+	o := newTestOIDC(t, m, &now)
+	session := performLogin(t, m, o)
+
+	// No sid: the revocation applies to every session of the user.
+	token := m.logoutToken("", "user-123", "jti-sub", now)
+	rec := backchannelRequest(t, o, token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("backchannel = %d: %s", rec.Code, rec.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
+	req.AddCookie(session)
+	if _, err := o.Verify(
+		context.Background(), req,
+	); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("Verify after sub logout = %v, want ErrUnauthenticated", err)
+	}
+}
+
+func TestOIDCBackchannelOptOut(t *testing.T) {
+	m := newMockOIDC(t)
+	now := time.Now()
+	off := false
+	o, err := NewOIDC(context.Background(), OIDCConfig{
+		Issuer:            m.srv.URL,
+		ClientID:          "gate-one",
+		ClientSecret:      "secret",
+		LoginBaseURL:      "http://login.test:3000",
+		CookieDomain:      "test",
+		AllowedHosts:      []string{"app.test"},
+		RedirectURL:       "http://login.test:3000/auth/callback",
+		HTTPClient:        m.srv.Client(),
+		SessionTTL:        time.Hour,
+		Store:             NewMemoryStore(),
+		BackchannelLogout: &off,
+		Now:               func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := backchannelRequest(t, o, "irrelevant")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("disabled backchannel = %d, want 404", rec.Code)
 	}
 }
 

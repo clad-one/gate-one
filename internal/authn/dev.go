@@ -155,7 +155,7 @@ func NewDev(cfg DevConfig) (*Dev, error) {
 		ttl = devSessionTTL
 	}
 	d.session = newSessionCodec(
-		devSessionCookie, domain, d.secure, secret, ttl, d.now)
+		devSessionCookie, domain, d.secure, secret, ttl, d.now, "")
 
 	// Allowed returnTo/postMessage origins: the cookie domain (and
 	// its subdomains), the login host and every configured
@@ -203,6 +203,12 @@ func NewDev(cfg DevConfig) (*Dev, error) {
 }
 
 func (d *Dev) Name() string { return "dev" }
+
+// CheckRevoked implements Provider: dev sessions have no IdP
+// back-channel; the loopback provider never revokes.
+func (d *Dev) CheckRevoked(context.Context, Identity) (bool, error) {
+	return false, nil
+}
 
 func (d *Dev) Issuer() string {
 	return strings.TrimRight(d.loginBase.String(), "/") + "/dev"

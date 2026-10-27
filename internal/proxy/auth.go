@@ -117,6 +117,13 @@ func cachedAuth(key string) (*RequestContext, bool) {
 	return e.identity, true
 }
 
+// deleteAuth drops one cached identity (revoked session).
+func deleteAuth(key string) {
+	if _, ok := authCache.LoadAndDelete(key); ok {
+		authCacheSize--
+	}
+}
+
 func cacheAuth(key string, identity *RequestContext) {
 	if authCacheSize > 500 {
 		// soft bound: purge expired entries before adding
@@ -151,6 +158,11 @@ func clearAuthCache() {
 	authCacheSize = 0
 }
 
+// ResetAuthCache drops every cached identity. Called on SIGHUP: a new
+// config may select another provider/store/key, and a cached identity
+// must not survive it.
+func ResetAuthCache() { clearAuthCache() }
+
 func (g *Gateway) checkAuth(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -179,14 +191,28 @@ func (g *Gateway) checkAuth(
 	if cached, ok := cachedAuth(key); ok {
 		atomic.AddInt64(&statAuthCacheHi, 1)
 		log.Printf("AUTH CACHE hit user=%q", cached.Username)
-		applyIdentity(ctx, authn.Identity{
-			UserID:   cached.UserID,
-			Username: cached.Username,
-			Email:    cached.Email,
-			Roles:    cached.Roles,
-			Scopes:   cached.Scopes,
-			Claims:   cached.Claims,
-		})
+		id := authn.Identity{
+			UserID:    cached.UserID,
+			SessionID: cached.SessionID,
+			Username:  cached.Username,
+			Email:     cached.Email,
+			Roles:     cached.Roles,
+			Scopes:    cached.Scopes,
+			Claims:    cached.Claims,
+		}
+		// Revocation is checked BEFORE the cache: a back-channel
+		// logout can kill the session while its identity is still
+		// cached. A store error is fail-closed.
+		revoked, rerr := provider.CheckRevoked(r.Context(), id)
+		if rerr != nil {
+			return nil, fmt.Errorf(
+				"%w: %v", authn.ErrProviderUnavailable, rerr)
+		}
+		if revoked {
+			deleteAuth(key)
+			return nil, authn.ErrUnauthenticated
+		}
+		applyIdentity(ctx, id)
 		return ctx, nil
 	}
 
@@ -221,6 +247,7 @@ func (g *Gateway) checkAuth(
 
 func applyIdentity(ctx *RequestContext, id authn.Identity) {
 	ctx.UserID = id.UserID
+	ctx.SessionID = id.SessionID
 	ctx.Username = id.Username
 	ctx.Email = id.Email
 	ctx.Roles = id.Roles

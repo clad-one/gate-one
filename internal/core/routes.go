@@ -1384,8 +1384,34 @@ type AuthProviderConfig struct {
 	MCPAudience       string   `json:"mcpAudience,omitempty"`
 	SessionTTLSeconds int      `json:"sessionTtlSeconds,omitempty"`
 
+	// SessionKeyEnv: env var holding the RP cookie signing key. Empty
+	// = the key is generated and persisted in the bbolt store.
+	SessionKeyEnv string `json:"sessionKeyEnv,omitempty"`
+
+	// SessionStore: RP-side revocation state. Default: bbolt at
+	// ./gate-one-state.db. redis is a later HA backend.
+	SessionStore *SessionStoreConfig `json:"sessionStore,omitempty"`
+
+	// BackchannelLogout: nil = auto (enable when the IdP discovery
+	// advertises backchannel_logout_supported); true/false = force.
+	BackchannelLogout *bool `json:"backchannelLogout,omitempty"`
+
+	// RevocationTTLSeconds: retention of revocation entries. Default
+	// 86400 (24h), never shorter than the session TTL.
+	RevocationTTLSeconds int `json:"revocationTtlSeconds,omitempty"`
+
 	// Dev configures the embedded provider.
 	Dev *DevAuthConfig `json:"dev,omitempty"`
+}
+
+// SessionStoreConfig selects the RP-side revocation store.
+type SessionStoreConfig struct {
+	// Type: bolt (default, single instance). redis is reserved for
+	// the HA backend (not implemented in this release).
+	Type string `json:"type,omitempty"`
+	// Path: bbolt file (default ./gate-one-state.db). Single-writer:
+	// a second Gate One process on the same file is refused.
+	Path string `json:"path,omitempty"`
 }
 
 // AuthHeadersConfig maps the Gate One identity contract to the
@@ -1572,6 +1598,13 @@ func LoadWithOptions(path string, opts LoadOptions) (*Config, error) {
 	// validation so LoginURLFor/AuthIssuer see the final values.
 	if err := cfg.resolveAuthProvider(opts.AuthBridgeURL); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+	// The bbolt state file is relative to the config file, not to the
+	// process working directory (predictable in Docker and systemd).
+	if ap := cfg.AuthProvider; ap != nil && ap.Type == "oidc" &&
+		ap.SessionStore != nil && !filepath.IsAbs(ap.SessionStore.Path) {
+		ap.SessionStore.Path = filepath.Join(
+			filepath.Dir(path), ap.SessionStore.Path)
 	}
 
 	// Injection bundles resolved (files read at load: a faulty
@@ -2303,6 +2336,14 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 		}
 	}
 
+	if ap.Type != "oidc" &&
+		(ap.SessionStore != nil || ap.SessionKeyEnv != "" ||
+			ap.BackchannelLogout != nil || ap.RevocationTTLSeconds != 0) {
+		return fmt.Errorf(
+			"authProvider.sessionStore/sessionKeyEnv/backchannelLogout " +
+				"are only valid for type oidc")
+	}
+
 	switch ap.Type {
 
 	case "dev":
@@ -2473,6 +2514,46 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 		if ap.SessionTTLSeconds < 0 {
 			return fmt.Errorf(
 				"authProvider.sessionTtlSeconds: must be positive")
+		}
+		if ap.SessionStore == nil {
+			ap.SessionStore = &SessionStoreConfig{}
+		}
+		if ap.SessionStore.Type == "" {
+			ap.SessionStore.Type = "bolt"
+		}
+		switch ap.SessionStore.Type {
+		case "bolt":
+			ap.SessionStore.Path = strings.TrimSpace(
+				ap.SessionStore.Path)
+			if ap.SessionStore.Path == "" {
+				ap.SessionStore.Path = "./gate-one-state.db"
+			}
+		case "redis":
+			return fmt.Errorf(
+				"authProvider.sessionStore.type \"redis\": not " +
+					"implemented in this release (HA backend); use " +
+					"\"bolt\" for a single instance")
+		default:
+			return fmt.Errorf(
+				"authProvider.sessionStore.type %q: unknown "+
+					"(expected bolt)", ap.SessionStore.Type)
+		}
+		ap.SessionKeyEnv = strings.TrimSpace(ap.SessionKeyEnv)
+		if ap.SessionKeyEnv != "" {
+			if !envVarName.MatchString(ap.SessionKeyEnv) {
+				return fmt.Errorf(
+					"authProvider.sessionKeyEnv %q: invalid environment variable name",
+					ap.SessionKeyEnv)
+			}
+			if v, ok := os.LookupEnv(ap.SessionKeyEnv); !ok || v == "" {
+				return fmt.Errorf(
+					"authProvider.sessionKeyEnv %s is empty",
+					ap.SessionKeyEnv)
+			}
+		}
+		if ap.RevocationTTLSeconds < 0 {
+			return fmt.Errorf(
+				"authProvider.revocationTtlSeconds: must be positive")
 		}
 
 	case "http":
