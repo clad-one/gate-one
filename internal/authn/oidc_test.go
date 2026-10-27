@@ -143,6 +143,9 @@ func newMockOIDC(t *testing.T) *mockOIDC {
 			"preferred_username": "alice",
 			"email":              "alice@example.com",
 			"scope":              "openid mcp-tools",
+			"realm_access": map[string]any{
+				"roles": []string{"offline_access", "from-access-token"},
+			},
 		}
 		idToken := m.sign(idClaims)
 		accessToken := m.sign(accessClaims)
@@ -414,6 +417,7 @@ func TestOIDCLoginAndMCP(t *testing.T) {
 	}
 	for _, role := range []string{
 		"user", "offline_access", "admin", "team-a",
+		"from-access-token",
 	} {
 		if !contains(res.Roles, role) {
 			t.Errorf("roles = %v, missing %q", res.Roles, role)

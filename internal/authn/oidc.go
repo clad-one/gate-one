@@ -542,11 +542,24 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	id := o.identityFromClaims(
 		claims, scopesFromClaims(claims, o.scopesClaim))
-	// The RP session lifetime is our own (SessionTTL, default 12h),
+	// Keycloak puts realm/client roles in the ACCESS token (the `roles`
+	// client scope maps them there), not necessarily in the ID token.
+	// Merge them so auth.identity.roles / uiGate / the user badge see
+	// the same roles auth-bridge used to expose. The access token is
+	// verified by the same JWKS; an opaque/failed token is not fatal.
+	if accessClaims, ok := o.accessTokenClaims(
+		r.Context(), token.AccessToken,
+	); ok {
+		id.Roles = mergeUnique(
+			id.Roles, rolesFromClaims(accessClaims, o.roleClaims))
+		if len(id.Scopes) == 0 {
+			id.Scopes = scopesFromClaims(
+				accessClaims, o.scopesClaim)
+		}
+	}
+	// The RP session lifetime is our own (SessionTTL, default 1h),
 	// independent of the ID token's short exp: otherwise a 5-minute
 	// Keycloak ID token would force a full re-login every 5 minutes.
-	// Silent refresh/backchannel revocation is a later lot; a shorter
-	// sessionTtlSeconds is the conservative option today.
 	o.session.set(w, id, rawID, time.Time{})
 	o.setLegacyCookies(w, token)
 
@@ -773,6 +786,47 @@ func (o *OIDC) renderPopupDone(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = o.doneTmpl.Execute(w, map[string]any{"Origin": origin})
+}
+
+// accessTokenClaims verifies the access token (JWKS/issuer/expiry) and
+// returns its claims. Keycloak maps realm/client roles into the access
+// token; the ID token does not always carry them. An opaque token or a
+// verification failure is non-fatal (roles stay as the ID token gave).
+func (o *OIDC) accessTokenClaims(
+	ctx context.Context,
+	raw string,
+) (map[string]any, bool) {
+	if raw == "" {
+		return nil, false
+	}
+	vctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tok, err := o.mcpVerifier.Verify(vctx, raw)
+	if err != nil {
+		log.Printf("OIDC access token claims: %v", err)
+		return nil, false
+	}
+	var claims map[string]any
+	if err := tok.Claims(&claims); err != nil {
+		log.Printf("OIDC access token claims: %v", err)
+		return nil, false
+	}
+	return claims, true
+}
+
+func mergeUnique(base, extra []string) []string {
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, list := range [][]string{base, extra} {
+		for _, v := range list {
+			if v == "" || seen[v] {
+				continue
+			}
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func (o *OIDC) identityFromClaims(
