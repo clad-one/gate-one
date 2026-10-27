@@ -50,10 +50,13 @@ export function renderGuard(opts = {}) {
 // extraction of the script injected into a SERVED page
 export function extractGuardFromHtml(html) {
   const m = html.match(
-    /<script>\s*\(function\(\)[\s\S]*?__cladoneAuthGuard[\s\S]*?<\/script>/
+    /<script[^>]*>\s*\(function\(\)[\s\S]*?__cladoneAuthGuard[\s\S]*?<\/script>/
   );
   if (!m) throw new Error("guard missing from the served page");
-  return m[0].replace(/^<script>/, "").replace(/<\/script>$/, "");
+  return m[0]
+    .replace(/^<script[^>]*>/, "")
+    .replace(/<\/script>$/, "")
+    .replace(/\s+$/, "");
 }
 
 export const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));

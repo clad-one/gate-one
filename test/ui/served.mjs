@@ -32,6 +32,10 @@ const servedArgs = {
   authState: arg(/var AUTH_STATE = "(.*)";/),
   uiGate: arg(/var UIGATE = (.*);/) || "[]",
   userBadge: arg(/var USERBADGE = (.*);/) || "null",
+  rewrite: arg(/var REWRITE = (.*);/) || "null",
+  patch: arg(/var PATCH = (.*);/) || "[]",
+  forbidden: arg(/var FORBIDDEN = (.*);/) || "null",
+  license: arg(/var LICENSE = (.*);/) || "null",
 };
 const sourceGuard = renderGuard(servedArgs);
 if (servedGuard === sourceGuard) {
@@ -68,11 +72,18 @@ if (servedGuard === sourceGuard) {
     ? ok("authenticated: user badge created")
     : fail("badge expected once authenticated (userBadge config)");
   if (badge) {
-    x.click(badge.querySelector("button"));
-    await tick();
-    x.st.navs.length
-      ? ok("badge: Log out → /logout?returnTo=… navigation")
-      : fail("badge: the logout button does not navigate");
+    const buttons = [...badge.querySelectorAll("button")];
+    const logout = buttons.find(b => /Log out|D[ée]connexion/i.test(b.textContent)) ||
+      buttons[buttons.length - 1];
+    if (!logout) {
+      fail("badge: logout button not found");
+    } else {
+      x.click(logout);
+      await tick();
+      x.st.navs.length
+        ? ok("badge: Log out → /logout?returnTo=… navigation")
+        : fail("badge: the logout button does not navigate");
+    }
   }
 }
 
