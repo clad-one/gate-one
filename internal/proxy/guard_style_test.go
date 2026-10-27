@@ -3,6 +3,8 @@ package proxy
 import (
 	"strings"
 	"testing"
+
+	"cladone/gate-one/internal/core"
 )
 
 // The guard must not set element.style / a style attribute: style
@@ -25,14 +27,41 @@ func TestGuardUsesClassesNotInlineStyles(t *testing.T) {
 	for _, want := range []string{
 		"document.currentScript.nonce",
 		"css.nonce = CSP_NONCE",
+		"GUARD_CSS",
+	} {
+		if !strings.Contains(guardScript, want) {
+			t.Errorf("guard missing %q", want)
+		}
+	}
+
+	css := buildGuardCSS(nil)
+	for _, want := range []string{
 		"[data-gtw-gated-off]",
 		".cladone-userbadge-fs-11",
 		".cladone-banner",
 		".cladone-forbidden",
 		".cladone-badge-logout",
 	} {
-		if !strings.Contains(guardScript, want) {
-			t.Errorf("guard missing %q", want)
+		if !strings.Contains(css, want) {
+			t.Errorf("guard stylesheet missing %q", want)
 		}
+	}
+}
+
+func TestBuildGuardCSSIncludesUIGate(t *testing.T) {
+	route := &core.Route{UIGate: []*core.UIGateRule{
+		{Selector: ".legend"},
+		nil,
+		{Selector: ""},
+	}}
+	css := buildGuardCSS(route)
+	if !strings.Contains(css, ".legend{display:none !important}") {
+		t.Errorf("uiGate selector absent from guard CSS: %s", css)
+	}
+	if strings.Count(css, "[data-gtw-gated-off]") != 1 {
+		t.Errorf("gating rule duplicated or missing")
+	}
+	if inlineStyleHash(css) == "" {
+		t.Error("empty style hash")
 	}
 }

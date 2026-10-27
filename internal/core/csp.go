@@ -43,6 +43,15 @@ type CSPPolicy struct {
 	// collected, nothing is blocked).
 	ReportOnly bool `json:"reportOnly,omitempty"`
 
+	// Own: the gateway OWNS the policy — the origin's enforced and
+	// report-only CSP headers are removed before ours is emitted.
+	// This is the only way to avoid a second, independent policy; it
+	// is opt-in and never silent (logged at build time). Requires
+	// mode nonce or hash and reportOnly=false: stripping the origin's
+	// enforcing policy to replace it with a report-only one would
+	// remove protection without enforcing anything.
+	Own bool `json:"own,omitempty"`
+
 	// ReportTo: path served by the gateway collecting the reports.
 	// Default: /__gate-one_csp/report.
 	ReportTo string `json:"reportTo,omitempty"`
@@ -127,6 +136,20 @@ func validateCSP(c *CSPPolicy) error {
 		return fmt.Errorf(
 			"csp.reportOnly requires mode \"nonce\" or \"hash\" (mode %q emits no policy)",
 			c.Mode)
+	}
+
+	if c.Own {
+		if c.Mode != "nonce" && c.Mode != "hash" {
+			return fmt.Errorf(
+				"csp.own requires mode \"nonce\" or \"hash\" " +
+					"(it removes the origin policy and emits ours)")
+		}
+		if c.ReportOnly {
+			return fmt.Errorf(
+				"csp.own cannot be reportOnly: removing the origin's " +
+					"enforcing policy to emit a report-only one would " +
+					"remove protection without enforcing anything")
+		}
 	}
 
 	if c.ReportTo != "" {

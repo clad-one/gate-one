@@ -733,6 +733,7 @@ func guardInjectedLen(t *testing.T) int {
 		patchJSONFor(route),
 		forbiddenBannerJSON(route),
 		licenseJSON(gw.config),
+		core.AsciiJSON(buildGuardCSS(route), `""`),
 	)
 	return len(script)
 }

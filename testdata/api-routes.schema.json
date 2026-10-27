@@ -760,7 +760,7 @@
     },
     "upstreamResponseHeaders": {
       "type": "object",
-      "description": "Adjustment of the backend's RESPONSE headers before sending to the browser — typically remove an origin Content-Security-Policy that would block the injected guard script, or set a deployment header.",
+      "description": "Adjustment of the backend's RESPONSE headers before sending to the browser — typically remove an origin Content-Security-Policy that would block the injected guard script, or set a deployment header. Prefer csp.merge (hashes) or csp.own (explicit removal, logged) for CSP: removing the origin's CSP here is a blunt, unlogged operation and loses the origin's protections.",
       "additionalProperties": false,
       "properties": {
         "set": {
@@ -777,7 +777,7 @@
     },
     "cspPolicy": {
       "type": "object",
-      "description": "Content-Security-Policy emitted (or amended) by the gateway — the only component able to generate a per-response nonce and write it into the HTML it already rewrites (guard, PWA, custom injections). The origin's policy is NEVER removed or weakened: the gateway's policy is added as a SECOND header (browsers enforce all of them, so the effective rule is the strictest) and the hashes of the gateway's own injected scripts are APPENDED to the origin's script-src (script-src-elem > script-src > default-src). Applied to HTML responses only.",
+      "description": "Content-Security-Policy emitted (or amended) by the gateway — the only component able to generate a per-response nonce and write it into the HTML it already rewrites (guard, PWA, custom injections). By default the origin's policy is NEVER removed or weakened: the gateway's policy is added as a SECOND header (browsers enforce all of them, so the effective rule is the strictest) and the hashes of the gateway's own injected script and guard stylesheet are APPENDED to the origin's script-src / style-src (script-src-elem > script-src > default-src, style-src-elem > style-src > default-src). Set own=true to remove the origin policy explicitly and let the gateway own it (opt-in, logged, requires mode nonce/hash and reportOnly=false). Applied to HTML responses only.",
       "additionalProperties": false,
       "required": ["mode"],
       "properties": {
@@ -789,6 +789,10 @@
         "reportOnly": {
           "type": "boolean",
           "description": "Emit Content-Security-Policy-Report-Only instead of the enforcing header (progressive rollout: violations are collected, nothing is blocked). Requires mode nonce or hash."
+        },
+        "own": {
+          "type": "boolean",
+          "description": "The gateway OWNS the policy: the origin's enforced and report-only CSP headers are removed before ours is emitted. Opt-in and logged (never silent). Requires mode nonce or hash and reportOnly=false: removing the origin's enforcing policy to replace it with a report-only one would remove protection without enforcing anything. Use only for a site you control/accept, with a complete policy."
         },
         "reportTo": {
           "type": "string",
@@ -802,7 +806,7 @@
         },
         "directives": {
           "type": "object",
-          "description": "Directive name → sources, as one string (\"'self' https://x\") or an array. The gateway appends the nonce (nonce mode) and the injected scripts' hashes to script-src, and report-uri when reportTo is set.",
+          "description": "Directive name → sources, as one string (\"'self' https://x\") or an array. The gateway appends the nonce (nonce mode) and the injected scripts' / guard stylesheet's hashes to the effective script-src / style-src, and report-uri when reportTo is set. To let the guard's nonce/hash pass, declare style-src (e.g. \"'self'\").",
           "additionalProperties": {
             "oneOf": [
               { "type": "string", "minLength": 1 },

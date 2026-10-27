@@ -137,6 +137,64 @@ func TestCSPNonceScriptSrcElemWins(t *testing.T) {
 	}
 }
 
+func TestCSPAmendOriginAddsStyleHash(t *testing.T) {
+	csp := &core.CSPPolicy{Mode: "merge"}
+	req := httptest.NewRequest(http.MethodGet, "http://public.test/", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": {"text/html; charset=utf-8"},
+			"Content-Security-Policy": {
+				"default-src 'self'; script-src 'self'; style-src 'self'",
+			},
+		},
+		Body:    io.NopCloser(strings.NewReader("<html></html>")),
+		Request: req,
+	}
+	inj := &cspInjector{
+		policy: csp,
+		hashes: []string{"'sha256-SCRIPT'"},
+		styles: []string{"'sha256-STYLE'"},
+	}
+	if err := inj.modify(resp); err != nil {
+		t.Fatal(err)
+	}
+	got := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(got, "script-src 'self' 'sha256-SCRIPT'") {
+		t.Errorf("script hash not appended to origin: %q", got)
+	}
+	if !strings.Contains(got, "style-src 'self' 'sha256-STYLE'") {
+		t.Errorf("style hash not appended to origin: %q", got)
+	}
+	if !strings.Contains(got, "default-src 'self'") {
+		t.Errorf("origin directive removed: %q", got)
+	}
+}
+
+func TestCSPOwnRemovesOriginPolicy(t *testing.T) {
+	csp := &core.CSPPolicy{
+		Mode: "nonce",
+		Own:  true,
+		Directives: map[string]core.DirectiveSources{
+			"default-src": {"'self'"},
+			"script-src":  {"'self'"},
+		},
+	}
+	resp, _ := cspInject(
+		t, csp, `<script>x()</script>`,
+		"default-src 'none'; script-src 'none'", "N")
+	values := resp.Header.Values("Content-Security-Policy")
+	if len(values) != 1 {
+		t.Fatalf("headers = %#v, want only the gateway policy", values)
+	}
+	if strings.Contains(values[0], "'none'") {
+		t.Errorf("origin policy still present: %q", values[0])
+	}
+	if !strings.Contains(values[0], "'nonce-N'") {
+		t.Errorf("gateway policy lacks the nonce: %q", values[0])
+	}
+}
+
 // A JS string containing "<script" must not be rewritten: the state
 // machine never scans a script body.
 func TestCSPNonceDoesNotCorruptScriptBody(t *testing.T) {

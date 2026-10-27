@@ -1,0 +1,32 @@
+html:not(.cladone-authed) [data-gtw-auth-hidden='before']{display:none !important}
+html.cladone-authed [data-gtw-auth-hidden='after']{display:none !important}
+html:not(.cladone-evaluated) [data-gtw-roles],html:not(.cladone-evaluated) [data-gtw-scopes],html:not(.cladone-evaluated) [data-gtw-claims]{display:none !important}
+html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}
+[data-gtw-gated-off]{display:none !important}
+.cladone-userbadge{position:fixed;top:0;z-index:2147483646;background:#20242e;color:#fff;padding:.46em .92em;text-align:left;border:1px solid #fff;border-top:0;border-radius:0 0 .62em .62em;max-width:21.5em;box-shadow:0 4px 18px rgba(0,0,0,.3);max-height:2.3em;overflow:hidden;transition:opacity .2s ease,max-height .25s ease;cursor:default;opacity:0;pointer-events:none}
+.cladone-userbadge-left{left:12px}
+.cladone-userbadge-right{right:12px}
+.cladone-userbadge-fs-11{font:11px/1.4 system-ui,sans-serif}
+.cladone-userbadge-fs-12{font:12px/1.4 system-ui,sans-serif}
+.cladone-userbadge-fs-13{font:13px/1.4 system-ui,sans-serif}
+.cladone-userbadge-fs-14{font:14px/1.4 system-ui,sans-serif}
+.cladone-userbadge-fs-15{font:15px/1.4 system-ui,sans-serif}
+.cladone-userbadge-near,.cladone-userbadge-reveal{opacity:1;pointer-events:auto}
+.cladone-userbadge:focus-within{opacity:1;pointer-events:auto}
+.cladone-userbadge:hover,.cladone-userbadge:focus-within,.cladone-userbadge-reveal{max-height:4.6em !important}
+.cladone-userbadge.cladone-userbadge-open{max-height:34em !important;opacity:1;pointer-events:auto}
+.cladone-userbadge-login{cursor:pointer}
+.cladone-userbadge-body{padding:.46em 0 .15em 0}
+.cladone-badge-row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cladone-badge-chips{margin-top:.38em}
+.cladone-badge-chip{display:inline-block;margin:0 .15em -.1em .38em;padding:.08em .5em;border-radius:.8em;background:rgba(255,255,255,.16);font-size:.86em}
+.cladone-badge-logout{margin-top:.46em;border:0;border-radius:.46em;padding:.38em .77em;cursor:pointer;font:inherit;color:#fff;background:#a04040}
+.cladone-badge-license{display:none;margin-top:.5em;padding-top:.42em;border-top:1px solid rgba(255,255,255,.18);font-size:.92em;line-height:1.45;white-space:normal}
+.cladone-badge-license.cladone-license-visible{display:block}
+.cladone-license-icon{border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;padding:0;margin-left:.35em;line-height:1;vertical-align:baseline}
+.cladone-license-link{color:#9fd0ff;text-decoration:underline}
+.cladone-banner{position:fixed;left:0;right:0;bottom:20px;margin:0 auto;width:fit-content;z-index:2147483647;display:flex;gap:12px;align-items:center;background:#20242e;color:#fff;padding:10px 14px;border-radius:10px;border:1px solid #fff;box-shadow:0 8px 30px rgba(0,0,0,.35);font:14px/1.4 system-ui,sans-serif}
+.cladone-banner-btn{border:0;border-radius:6px;padding:6px 14px;cursor:pointer;font:inherit;color:#fff;background:#4a7c59}
+.cladone-banner-close{border:0;background:transparent;color:#aab;cursor:pointer;font:20px/1 system-ui,sans-serif;padding:0 2px}
+.cladone-forbidden{position:fixed;left:0;right:0;bottom:20px;margin:0 auto;width:fit-content;max-width:min(90vw,44em);z-index:2147483647;display:flex;gap:12px;box-sizing:border-box;align-items:center;background:#3a2f14;color:#fff;padding:10px 14px;border-radius:10px;border:1px solid #fff;box-shadow:0 8px 30px rgba(0,0,0,.35);font:14px/1.4 system-ui,sans-serif}
+.cladone-forbidden-close{border:0;background:transparent;color:#d9c9a0;cursor:pointer;font:20px/1 system-ui,sans-serif;padding:0 2px;flex:0 0 auto}

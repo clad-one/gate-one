@@ -54,17 +54,25 @@ runtime `<style>` is nonced from `document.currentScript.nonce`.
 | `off` | Nothing is emitted or amended. The origin's policy (if any)
 is the only one.
 | `merge` | The origin policy is preserved; the gateway only appends
-the hashes of its own injected scripts to `script-src-elem` /
-`script-src` / `default-src`. No policy of its own.
-| `hash` | Gate One emits its own policy; the guard and other injected
-scripts are allow-listed by SHA-256 hashes. The body is not rewritten.
-This mode is script-only: the guard's runtime `<style>` is not hashed,
-so pair it with a compatible `style-src` or use `nonce` for strict
-styles.
+the hashes of its own injected scripts and of the guard stylesheet to
+`script-src-elem` / `script-src` / `default-src` and `style-src-elem` /
+`style-src` / `default-src`. No policy of its own. This is the default
+for a proxified external site that already sends a CSP.
+| `hash` | Gate One emits its own policy; the guard script and the
+guard stylesheet are allow-listed by SHA-256 hashes, and explicit
+`script-src` / `style-src` sources apply. The body is not rewritten.
 | `nonce` | Gate One emits its own policy with a per-response nonce and
-stamps inline `<script>` tags. This is the recommended mode for
-applications that accept a per-response nonce.
+stamps inline `<script>` tags. The guard's runtime `<style>` carries
+the same nonce. This is the recommended mode for applications that
+accept a per-response nonce.
 |===
+
+`own: true` removes the origin's `Content-Security-Policy` (and
+`-Report-Only`) headers and lets the gateway's policy be the only one.
+It is opt-in, logged, and only valid with `mode: "nonce"` or `"hash"`
+and `reportOnly: false`. Use it only for a site you control/accept and
+for which the configured policy is complete. Without `own`, the origin
+policy remains enforced in addition to the gateway's.
 
 `reportOnly: true` emits `Content-Security-Policy-Report-Only`: the
 policy is evaluated and violations are reported, but nothing is
@@ -109,7 +117,9 @@ a strict policy without `'unsafe-inline'`:
 
 * use external CSS files (`style-src 'self'`);
 * use classes instead of `element.style` / `style="..."`;
-* let Gate One nonce its own runtime `<style>` (it already does);
+* let Gate One nonce or hash its own runtime `<style>` (it already
+  does: nonce in `nonce` mode, guard-stylesheet hash in `hash`/`merge`
+  mode);
 * for third-party widgets that insist on style attributes, isolate the
   exception with `style-src-attr 'unsafe-inline'` rather than relaxing
   the whole `style-src`.
@@ -198,6 +208,23 @@ Keep `reportOnly: true` until the reports are clean, then switch to
 `false`. A policy that emits violations is not protecting the page in
 report-only mode.
 
+For a site that **you control** and whose origin CSP is structurally
+incompatible (e.g. hosts pinned to the origin), Gate One can own the
+policy:
+
+[source,json]
+----
+"csp": {
+  "mode": "nonce",
+  "own": true,
+  "directives": { "...": "a COMPLETE policy for this site" }
+}
+----
+
+`own` removes the origin's `Content-Security-Policy` and
+`-Report-Only` headers, logs a warning, and cannot be combined with
+`reportOnly: true`. Do not use it for a site you do not control.
+
 == Reading violations
 
 The gateway serves a collector (default
@@ -244,27 +271,29 @@ guard and other gateway-injected scripts to the origin's
 `script-src-elem` / `script-src` / `default-src`. The origin policy does
 not need `'unsafe-inline'` for the guard.
 
-For **styles**, two cases:
+For **styles**, `merge` appends the SHA-256 hash of the guard's
+stylesheet to the origin's `style-src-elem` / `style-src` /
+`default-src`. The guard's runtime `<style>` is then allowed by hash,
+without `'unsafe-inline'`, and the origin policy stays in place. The
+guard stylesheet is deterministic per route (static classes + the
+route's `uiGate` selectors), so the hash is stable and cache-friendly.
 
-* the origin policy has no `style-src` (or allows `'self'` and an
-  inline style): the guard's runtime `<style>` is nonced by the gateway
-  policy and passes;
-* the origin policy has a strict `style-src` without `'unsafe-inline'`
-  or a matching nonce/hash: the origin policy can block the guard's
-  `<style>`, because the gateway's nonce is not part of the origin
-  policy. Options:
-  ** let Gate One own the CSP (`mode: "nonce"` or `"hash"`) and stop
-  sending an app CSP on that route;
-  ** keep the app policy compatible (allow the guard style; the guard
-  CSS is dynamic because it includes the `uiGate` selectors, so a
-  static hash is not reliable);
-  ** serve the guard without its stylesheet (degraded UI) — not
-  recommended.
+This covers **the guard**, not the application's own inline styles:
+`style="..."` attributes and application `<style>` tags still need to
+be refactored to classes/external CSS (or covered by the application's
+own nonce/hash). If the origin policy says `style-src 'none'`, the
+gateway appends the guard hash, so the guard style is allowed while the
+origin's other restrictions remain.
 
-There is no way for an application to reuse the gateway's per-response
-nonce in its own header. For a strict app-managed policy, the clean
-long-term design is an external guard stylesheet served same-origin
-(`style-src 'self'`), which is not yet the default.
+`nonce` mode still adds the gateway's nonce for the guard style; the
+origin policy is not amended with that nonce (a per-response nonce
+cannot be known by the origin), but the guard stylesheet hash is
+appended by `merge`/`hash`/`nonce` modes via the origin amendment.
+
+`own: true` is the explicit alternative when the origin policy is
+fundamentally incompatible: the origin headers are removed and only the
+gateway policy applies. Use it only for a site you control/accept and
+with a complete policy.
 
 == External sites and `upstream`
 
@@ -274,23 +303,22 @@ is stricter. Gate One never removes or weakens the origin policy.
 
 Consequences:
 
-* the guard's inline script/style must be allowed by the origin policy;
-  `merge` appends the script hashes to the origin's `script-src-elem`,
-  but the guard's runtime `<style>` is nonced in the **gateway** policy,
-  not the origin's. A strict origin `style-src` can therefore block the
-  guard;
-* if you control the origin, allow `'self'` (or the guard's style) in
-  its `style-src`, or remove the origin CSP only for a site you fully
-  trust;
-* `upstream.responseHeaders.remove` can strip the origin's CSP, but do
-  it consciously: you are removing the origin's protection. Prefer
-  `merge` and a compatible origin policy;
+* `merge` appends the hashes of the guard script **and of the guard
+  stylesheet** to the origin's `script-src-elem` and `style-src-elem`
+  (fallbacks `script-src`/`style-src`/`default-src`). A strict origin
+  policy no longer blocks the guard, without `'unsafe-inline'`.
+* if the origin policy is incompatible for another reason (hosts pinned
+  to the origin, `script-src 'none'` for the site's own code, etc.), use
+  `own: true` or `upstream.responseHeaders.remove` **only** for a site
+  you control/accept, and provide a complete policy;
+* `upstream.responseHeaders.remove` is still a blunt tool: it is not
+  logged by the CSP layer and removes the origin's protections. Prefer
+  `merge` or `own`.
 * external sites that use inline styles themselves will need
   `style-src-attr 'unsafe-inline'` or a refactor you do not control.
 
-This is the one case where "strict CSP without `'unsafe-inline'`" may
-be impossible without changing the origin. Document the exception per
-route.
+The guard is handled by hash; the remaining difficulty is the site's
+own content, not the guard. Document the exception per route.
 
 == PWA, MCP, SSE and WebSocket
 

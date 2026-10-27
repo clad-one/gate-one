@@ -75,6 +75,10 @@ func buildInjectors(
 	// time (a strict origin policy must not block what the gateway
 	// itself injects).
 	var injectedHTML []string
+	// guardStylesheet: the exact CSS given to the guard (static
+	// classes + uiGate rules). Its hash is added to the CSP so a
+	// strict origin style-src accepts the guard's <style>.
+	var guardStylesheet string
 
 	if injectsBody {
 		injectors = append(injectors, &gzipDecodeInjector{host: route.Host})
@@ -92,11 +96,11 @@ func buildInjectors(
 
 	if guardEnabledFor(route) {
 		log.Printf(
-			"GUARD enabled host=%s path=%s loginUrl=%s",
-			route.Host,
+			"GUARD enabled host=%s path=%s loginUrl=%s", route.Host,
 			route.Path,
 			cfg.LoginURLFor(route),
 		)
+		guardStylesheet = buildGuardCSS(route)
 		script := fmt.Sprintf(
 			guardScript,
 			cfg.LoginURLFor(route),
@@ -107,6 +111,7 @@ func buildInjectors(
 			patchJSONFor(route),
 			forbiddenBannerJSON(route),
 			licenseJSON(cfg),
+			core.AsciiJSON(guardStylesheet, `""`),
 		)
 		injectors = append(injectors, &guardInjector{
 			host:   route.Host,
@@ -170,17 +175,32 @@ func buildInjectors(
 			hashes = append(hashes, inlineScriptHashes([]byte(frag))...)
 		}
 		hashes = dedupeStrings(hashes)
+		var styles []string
+		if guardStylesheet != "" {
+			styles = append(styles, inlineStyleHash(guardStylesheet))
+		}
 		log.Printf(
-			"CSP enabled host=%s mode=%s reportOnly=%v stamp=%q hashes=%d",
+			"CSP enabled host=%s mode=%s reportOnly=%v own=%v "+
+				"stamp=%q scriptHashes=%d styleHashes=%d",
 			route.Host,
 			csp.Mode,
 			csp.ReportOnly,
+			csp.Own,
 			csp.StampScripts,
 			len(hashes),
+			len(styles),
 		)
+		if csp.Own {
+			log.Printf(
+				"CSP own: ORIGIN POLICY REMOVED host=%s path=%s "+
+					"(the route's policy is the only one)",
+				route.Host, route.Path,
+			)
+		}
 		injectors = append(injectors, &cspInjector{
 			policy: csp,
 			hashes: hashes,
+			styles: styles,
 		})
 	}
 

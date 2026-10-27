@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -67,6 +68,11 @@ type cspInjector struct {
 	// hashes: 'sha256-…' of every inline script the gateway injects
 	// (computed at route compile time).
 	hashes []string
+	// styles: 'sha256-…' of the guard stylesheet. A strict origin
+	// style-src would otherwise block the guard's runtime <style>;
+	// the hash is appended to the origin policy (and to our own
+	// policy in hash mode), so no unsafe-inline is needed.
+	styles []string
 }
 
 func (i *cspInjector) name() string { return "csp" }
@@ -77,10 +83,19 @@ func (i *cspInjector) modify(resp *http.Response) error {
 		return nil
 	}
 
-	// Never weaken the origin: append our injected scripts' hashes to
-	// its own policy (script-src-elem, else script-src, else
-	// default-src).
-	i.amendOrigin(resp)
+	// own: remove the origin policy explicitly. This is the ONLY
+	// way the gateway owns the policy; without it, the origin policy
+	// remains enforced in addition to ours. Opt-in, never silent.
+	if i.policy.Own {
+		resp.Header.Del("Content-Security-Policy")
+		resp.Header.Del("Content-Security-Policy-Report-Only")
+	} else {
+		// Never weaken the origin: append the hashes of what the
+		// gateway injects (guard script + guard stylesheet) to its
+		// own policy (script-src-elem/script-src/default-src and
+		// style-src-elem/style-src/default-src).
+		i.amendOrigin(resp)
+	}
 
 	switch i.policy.Mode {
 
@@ -128,21 +143,22 @@ func (i *cspInjector) policyString(nonce string) string {
 		directives[scriptTarget] = dedupeStrings(script)
 	}
 
-	// Styles: the guard creates a <style> at runtime and sets its
-	// nonce from document.currentScript.nonce. Append the same
-	// per-response nonce to the directive that governs <style>
+	// Styles: the guard creates a <style> at runtime. Append the
+	// per-response nonce (nonce mode) and/or the guard stylesheet's
+	// hash (hash mode) to the directive that governs <style>
 	// elements (style-src-elem > style-src). A config without either
 	// directive keeps its default-src fallback and must declare
 	// style-src explicitly to allow the guard's stylesheet.
-	if nonce != "" {
-		styleTarget := "style-src"
-		if _, ok := directives["style-src-elem"]; ok {
-			styleTarget = "style-src-elem"
+	styleTarget := "style-src"
+	if _, ok := directives["style-src-elem"]; ok {
+		styleTarget = "style-src-elem"
+	}
+	if style, ok := directives[styleTarget]; ok {
+		if nonce != "" {
+			style = append(style, "'nonce-"+nonce+"'")
 		}
-		if style, ok := directives[styleTarget]; ok {
-			directives[styleTarget] = dedupeStrings(
-				append(style, "'nonce-"+nonce+"'"))
-		}
+		style = append(style, i.styles...)
+		directives[styleTarget] = dedupeStrings(style)
 	}
 
 	if _, ok := directives["report-uri"]; !ok {
@@ -181,7 +197,7 @@ func (i *cspInjector) policyString(nonce string) string {
 // pass, nothing to add.
 func (i *cspInjector) amendOrigin(resp *http.Response) {
 
-	if len(i.hashes) == 0 {
+	if len(i.hashes) == 0 && len(i.styles) == 0 {
 		return
 	}
 	values := resp.Header.Values("Content-Security-Policy")
@@ -191,7 +207,21 @@ func (i *cspInjector) amendOrigin(resp *http.Response) {
 
 	amended := make([]string, 0, len(values))
 	for _, policy := range values {
-		amended = append(amended, appendHashesToPolicy(policy, i.hashes))
+		// Scripts: script-src-elem > script-src > default-src.
+		p := appendSourcesToPolicy(
+			policy,
+			[]string{"script-src-elem", "script-src", "default-src"},
+			i.hashes,
+		)
+		// Styles: style-src-elem > style-src > default-src. This is
+		// what lets a strict origin style-src accept the guard's
+		// runtime <style> by hash, without unsafe-inline.
+		p = appendSourcesToPolicy(
+			p,
+			[]string{"style-src-elem", "style-src", "default-src"},
+			i.styles,
+		)
+		amended = append(amended, p)
 	}
 	resp.Header["Content-Security-Policy"] = amended
 }
@@ -201,12 +231,26 @@ type cspDirective struct {
 	sources []string
 }
 
-// appendHashesToPolicy: union with the origin's policy, never a
-// removal. The target directive must be the one the browser actually
-// uses for parser-inserted scripts (script-src-elem > script-src >
-// default-src).
+// appendHashesToPolicy: script-hash compatibility wrapper (tests).
 func appendHashesToPolicy(policy string, hashes []string) string {
+	return appendSourcesToPolicy(
+		policy,
+		[]string{"script-src-elem", "script-src", "default-src"},
+		hashes,
+	)
+}
 
+// appendSourcesToPolicy appends sources to the first directive of
+// targets present in the policy (the browser's precedence order). It
+// is a union: an existing source is never removed, and an unknown
+// target leaves the policy untouched.
+func appendSourcesToPolicy(
+	policy string,
+	targets, sources []string,
+) string {
+	if len(sources) == 0 {
+		return policy
+	}
 	var parsed []cspDirective
 	for _, part := range strings.Split(policy, ";") {
 		fields := strings.Fields(part)
@@ -220,34 +264,23 @@ func appendHashesToPolicy(policy string, hashes []string) string {
 	}
 
 	target := -1
-	for i, d := range parsed {
-		if d.name == "script-src-elem" {
-			target = i
+	for _, name := range targets {
+		for i := range parsed {
+			if parsed[i].name == name {
+				target = i
+				break
+			}
+		}
+		if target >= 0 {
 			break
-		}
-	}
-	if target < 0 {
-		for i, d := range parsed {
-			if d.name == "script-src" {
-				target = i
-				break
-			}
-		}
-	}
-	if target < 0 {
-		for i, d := range parsed {
-			if d.name == "default-src" {
-				target = i
-				break
-			}
 		}
 	}
 	if target < 0 {
 		return policy
 	}
 
-	missing := make([]string, 0, len(hashes))
-	for _, h := range hashes {
+	missing := make([]string, 0, len(sources))
+	for _, h := range sources {
 		found := false
 		for _, src := range parsed[target].sources {
 			if src == h {
@@ -276,6 +309,12 @@ func appendHashesToPolicy(policy string, hashes []string) string {
 		}
 	}
 	return b.String()
+}
+
+// inlineStyleHash: a CSP source for a <style> element's exact text.
+func inlineStyleHash(css string) string {
+	sum := sha256.Sum256([]byte(css))
+	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 }
 
 func dedupeStrings(in []string) []string {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"cladone/gate-one/internal/core"
 )
@@ -125,6 +126,28 @@ const AuthStatePath = "/__gate-one/auth"
 // data-gtw-*). No login is offered (a rights refusal would loop); the
 // JSON 403 is returned to the app unchanged.
 //
+//go:embed guard/guard.css
+var guardCSSFile string
+
+// buildGuardCSS returns the full stylesheet injected by the guard:
+// the static classes plus one anti-FOUC rule per uiGate selector. It
+// is the EXACT text given to the browser, so the CSP layer can hash it
+// and amend an origin style-src (merge mode) without unsafe-inline.
+func buildGuardCSS(route *core.Route) string {
+	css := strings.TrimRight(guardCSSFile, "\n")
+	if route == nil {
+		return css
+	}
+	for _, rule := range route.UIGate {
+		if rule == nil || rule.Selector == "" {
+			continue
+		}
+		css += "\nhtml:not(.cladone-evaluated) " +
+			rule.Selector + "{display:none !important}"
+	}
+	return css
+}
+
 // guardScript: the guard script, LOCKED by tests (guardInjectedLen,
 // node parity). The JS lives outside the Go code:
 // guard/guard.js.tmpl (go:embed); the %[n]s are substituted by the

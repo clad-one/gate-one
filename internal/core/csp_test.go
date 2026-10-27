@@ -129,3 +129,18 @@ func TestCSPMergeMode(t *testing.T) {
 		t.Errorf("merge must not emit a policy of its own: %+v", csp)
 	}
 }
+
+func TestCSPOwnValidation(t *testing.T) {
+	for _, c := range []*CSPPolicy{
+		{Mode: "off", Own: true},
+		{Mode: "merge", Own: true},
+		{Mode: "nonce", Own: true, ReportOnly: true},
+	} {
+		if err := validateCSP(c); err == nil {
+			t.Errorf("policy %+v accepted, want refusal", c)
+		}
+	}
+	if err := validateCSP(&CSPPolicy{Mode: "nonce", Own: true}); err != nil {
+		t.Errorf("valid own policy refused: %v", err)
+	}
+}

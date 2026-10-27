@@ -15,6 +15,10 @@ const GUARD_TMPL = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "..", "..", "internal", "proxy", "guard", "guard.js.tmpl"
 );
+const GUARD_CSS_FILE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "internal", "proxy", "guard", "guard.css"
+);
 const SERVED_URL = process.env.GATEWAY_UI_URL || "https://vers.cladone.com/";
 
 // rendering of guardScript: the 8 Sprintf verbs (loginUrl, authState,
@@ -30,6 +34,15 @@ export function renderGuard(opts = {}) {
   const patch = opts.patch || "[]";
   const forbidden = opts.forbidden || "null";
   const license = opts.license || "null";
+  const baseCSS = readFileSync(GUARD_CSS_FILE, "utf8").replace(/\n+$/, "");
+  const rules = JSON.parse(uiGate);
+  let css = baseCSS;
+  for (const r of rules) {
+    if (r && r.selector) {
+      css += "\nhtml:not(.cladone-evaluated) " +
+        r.selector + "{display:none !important}";
+    }
+  }
   const rendered = tmpl
     .replace("%[1]s", loginUrl)
     .replace("%[2]s", authState)
@@ -38,7 +51,8 @@ export function renderGuard(opts = {}) {
     .replace("%[5]s", rewrite)
     .replace("%[6]s", patch)
     .replace("%[7]s", forbidden)
-    .replace("%[8]s", license);
+    .replace("%[8]s", license)
+    .replace("%[9]s", JSON.stringify(css));
   if (rendered.includes("%[")) {
     throw new Error("residual % verb in the rendered script");
   }
