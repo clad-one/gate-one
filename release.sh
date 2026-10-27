@@ -106,6 +106,12 @@ script never pushes, tags or uploads.
   overriding \`verifyUrl\`/\`headers\` only adapts the verification call.
   The legacy \`oidc\` block and \`-authBridge\` flag keep working
   unchanged: existing deployments do not need a config edit.
+- **Migration bridge to native OIDC.** \`legacyTokenCookies\` mirrors
+  auth-bridge's access/refresh/id-token cookies on the shared domain
+  (its token-broker pages keep resolving the session), and
+  \`backchannelForwardUrl\` forwards logout tokens to auth-bridge so its
+  persistent sid list stays in sync. \`mcpAudience: "auto"\` enforces the
+  endpoint's own protected-resource audience.
 - **No silent login loops.** An unreachable provider now answers
   \`502 authentication_unavailable\` (readable HTML for a navigation,
   JSON for a fetch) instead of a 401/login redirect.
