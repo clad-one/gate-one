@@ -10,7 +10,7 @@
     "issuer": "https://auth.cladone.com/realms/cladone",
     "clientId": "cladone-login",
     "clientSecretEnv": "KEYCLOAK_CLIENT_SECRET",
-    "scopes": ["openid", "profile", "email", "offline_access"],
+    "scopes": ["openid", "profile", "email"],
     "loginBaseUrl": "https://login.cladone.com",
     "cookieDomain": "cladone.com",
     "sessionStore": {

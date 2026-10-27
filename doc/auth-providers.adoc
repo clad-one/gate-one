@@ -162,6 +162,13 @@ independent of the short ID-token expiry: otherwise a 5-minute Keycloak
 token would force a full re-login every five minutes. A short TTL
 bounds revocation when no shared store is used.
 
+Do **not** request `offline_access` for the browser RP session: Keycloak
+then creates an *offline* session, and backchannel logout for offline
+tokens depends on the client's `backchannel.logout.revoke.offline.tokens`
+attribute (false by default). A confidential client still receives a
+refresh token without `offline_access`; the online session is the one
+Keycloak logs out and notifies through backchannel.
+
 Revocation state lives in a **bbolt** file (`sessionStore.type: bolt`,
 default `./gate-one-state.db` relative to the config file):
 
