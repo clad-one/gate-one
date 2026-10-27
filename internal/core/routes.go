@@ -119,7 +119,10 @@ type UIGateRule struct {
 	// Claims: all must match ("*" = presence).
 	Claims map[string]string `json:"claims,omitempty"`
 	// Auth: "after" (native action preserved + invitation tab)
-	// or "before" (click neutralized + direct tab).
+	// or "before" (click neutralized + direct tab). Same activation-
+	// only semantics as data-gtw-auth: value controls (select/range/
+	// date/…) are gated on change, with their default value as the
+	// OFF value (data-gtw-auth-off on the element overrides it).
 	Auth string `json:"auth,omitempty"`
 	// Hidden: "before" (hidden before authentication) or "after"
 	// (hidden once authenticated).

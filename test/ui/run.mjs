@@ -12,6 +12,7 @@ if (served) {
 } else {
   await import(pathToFileURL(path.join(here, "matrix.mjs")).href);
   await import(pathToFileURL(path.join(here, "rules.mjs")).href);
+  await import(pathToFileURL(path.join(here, "controls.mjs")).href);
   await import(pathToFileURL(path.join(here, "forbidden.mjs")).href);
   console.log(
     globalThis.__uiFailures === 0

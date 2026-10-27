@@ -131,7 +131,11 @@ go test ./...
 ```
 
 `test/ui` contains the jsdom harness for the injected guard script
-(`npm install && npm test`).
+(`npm install && npm test`). `npm run preview` serves the controls
+fixture at http://127.0.0.1:8787/ with the guard injected, each case
+labelled with the tested `data-gtw-*` attribute/value, and a demo login
+flow (useful to see the gating in a real browser). Force-auth and the
+demo logout refresh the session in place, without reloading the page.
 
 ## Authentication policy
 
@@ -202,6 +206,18 @@ Optional UX (`authGuard.forbidden`):
 - `pageUrl` — navigations refused on identity are redirected there (`302`)
   instead of the built-in page.
 - `message` — overrides the built-in page's text.
+
+## Declarative UI gating
+
+Frontend markup can declare auth-aware UI with `data-gtw-auth`,
+`data-gtw-auth-off`, `data-gtw-auth-hidden`, `data-gtw-roles`,
+`data-gtw-scopes`, `data-gtw-claims` and `data-gtw-logout`. The guard
+gates **activation**, never deactivation. Value controls (`select`,
+`range`, date/time/color) are gated on `change`, with
+`data-gtw-auth-off` (or the default value) as the OFF value. Text-entry
+clicks are focus, not action: put the attribute on the submit button.
+
+Full contract and behavioural test matrix: `doc/ui-gating.adoc`.
 
 ## Delegated upstream credentials
 

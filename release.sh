@@ -50,6 +50,7 @@ for target in "${targets[@]}"; do
 	cp examples/dev.api-routes.json "$stage/examples/"
 	cp examples/oidc.api-routes.json "$stage/examples/"
 	cp doc/auth-providers.adoc "$stage/doc/"
+	cp doc/ui-gating.adoc "$stage/doc/"
 	cp README.md LICENSE VERSION "$stage/"
 
 	tar -czf "$dist/gate-one_${version}_${os}_${arch}.tar.gz" \

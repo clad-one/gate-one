@@ -1,0 +1,253 @@
+= Gate One — Declarative UI gating (`data-gtw-*`)
+:toc:
+
+This guide is the contract for the declarative gating attributes read
+by the injected guard script. The behavioural matrix at the end is the
+one executed by `test/ui/controls.mjs` against the page fixture
+`test/ui/controls.html`.
+
+== Attributes
+
+[cols="1,3",options="header"]
+|===
+| Attribute | Meaning
+
+| `data-gtw-auth="before"` |
+The action is neutralised while anonymous: `preventDefault()` +
+`stopPropagation()`, then the login tab opens. Authenticate first, act
+after. **Activation only**: turning a feature OFF is a deactivation and
+is always let through without login.
+
+| `data-gtw-auth="after"` |
+The native action proceeds while anonymous; the login tab opens as an
+invitation. The 401 request produced by the action is queued and
+replayed after login. **Activation only**: a deactivation does not open
+the login tab.
+
+| `data-gtw-auth-off="value"` |
+For value controls (`select`, `range`, `date`, `time`,
+`datetime-local`, `month`, `week`, `color`): the value considered OFF.
+Moving *to* it is a deactivation (free); moving *away* from it is an
+activation. Default: the control's default value (for a `select`: the
+option carrying `selected`, otherwise the first option). Ignored by the
+other control families.
+
+| `data-gtw-auth-hidden="before"` |
+Hidden while anonymous, shown once authenticated. Activating clicks
+are neutralised and show the sign-in banner; a checked checkbox may
+still be unchecked (deactivation).
+
+| `data-gtw-auth-hidden="after"` |
+Visible while anonymous, hidden once authenticated (pure affordance,
+composable with `data-gtw-auth="before"` for padlocks).
+
+| `data-gtw-roles`, `data-gtw-scopes`, `data-gtw-claims` |
+Identity-conditioned visibility, evaluated after the session probe.
+
+| `data-gtw-logout` |
+Wires the click to the OIDC logout navigation. Authenticated only.
+|===
+
+Markup wins over the equivalent `uiGate` rule: an element carrying a
+`data-gtw-auth` (or `data-gtw-auth-hidden`) attribute is not affected
+by a config rule for the same dimension.
+
+== Control families
+
+The guard distinguishes three kinds of interaction:
+
+[cols="1,2,2",options="header"]
+|===
+| Family | Controls | Rule
+
+| Click is the action |
+`checkbox`, `radio`, `details`/`summary`,
+`aria-pressed`/`aria-checked`/`aria-expanded`, `reset`, `submit`,
+`button`, `file`, links |
+Gated on click. The state read at click time decides activation vs
+deactivation.
+
+| Change is the action |
+`select`, `range`, `date`, `time`, `datetime-local`, `month`, `week`,
+`color` |
+The click only opens the picker and is never gated. The `change` event
+is gated, with `data-gtw-auth-off` (or the default value) as the OFF
+value.
+
+| Click is focus |
+`text`, `search`, `email`, `url`, `tel`, `password`, `number`,
+`textarea` |
+Never gated on click: the click only focuses the field. Put
+`data-gtw-auth` on the submit button instead.
+|===
+
+Notes:
+
+* `reset` is always a deactivation: it never opens a login, even with
+  `data-gtw-auth`. Use a normal button if the reset itself must be
+  gated.
+* `file` is an activation: the picker is opened only after login. To
+  allow choosing a file anonymously and gate the upload, put the
+  attribute on the submit button.
+* A radio's pre-click state is remembered on `pointerdown`/`keydown`;
+  clicking the already-selected radio is a no-op and does not open the
+  login. A synthesised click without those events is treated as an
+  activation.
+* `details` uses `open` at click time: closed → opening is an
+  activation; open → closing is a deactivation.
+* `aria-*` toggles use the attribute value at click time: `"false"` →
+  activating; `"true"` → deactivating. The application toggles the
+  attribute in its own click handler (which the guard lets run only when
+  the action is allowed).
+* `data-gtw-auth-off` is read from the element, its gating ancestor or
+  its `label[for]`; a value on the element overrides a value on the
+  ancestor.
+
+== Behavioural test matrix
+
+The matrix is executed by `test/ui/controls.mjs`. Each row runs in a
+fresh jsdom window with the guard rendered from
+`internal/proxy/guard/guard.js.tmpl`; `login` is a counted tab stub.
+
+[cols="2,2,2,3",options="header"]
+|===
+| Case | Interaction | State before | Expected
+
+| Checkbox `before` | click | unchecked | login, box stays unchecked
+| Checkbox `before` | click | checked | no login, box unchecked
+| Checkbox `before` | click on wrapping label | checked | no login, box unchecked
+| Checkbox `after` | click | unchecked | login, box checked
+| Checkbox `after` | click | checked | no login, box unchecked
+| Checkbox, programmatic | `checked = true` alone | unchecked | no login (no DOM event; documented limit)
+| Radio `before` | pointerdown + click on label | already selected | no login, stays selected
+| Radio `before` | pointerdown + click on label | not selected | login, stays unselected
+| Radio `before`, attribute on labels | pointerdown + click on label | already selected | no login, stays selected
+| Radio `before`, attribute on labels | pointerdown + click on label | not selected | login, stays unselected
+| Select `before` | click (open picker) | any | no login
+| Select `before` | change to a non-off value | off | login, value reverted; app change handler not run
+| Select `before` | change to the off value | non-off | no login; app change handler runs
+| Select `after` | click (open picker) | any | no login
+| Select `after` | change to a non-off value | off | login, value kept; app change handler runs
+| Select `after` | change to the off value | non-off | no login; app change handler runs
+| Select, default off | change away from the default | default | login, reverted to the default
+| Select, default off | change back to the default | non-default | no login
+| Select, explicit off | change to `data-gtw-auth-off` | other | no login, value kept
+| Select, explicit off | change away from it | off | login, reverted to the off value
+| Select, attribute on `label[for]` | click on the label | any | no login (click is passive)
+| Select, attribute on `label[for]` | change to a non-off value | off | login, value reverted
+| Select, attribute on a wrapper | click on the select | any | no login
+| Select, attribute on a wrapper | change to a non-off value | off | login, value reverted
+| Range `before` | click | any | no login
+| Range `before` | change to a non-off value | off | login, value reverted; app change handler not run
+| Range `before` | change to the off value | non-off | no login; app change handler runs
+| Range, default off | change away from the default | default | login, reverted to the default
+| Range, default off | change back to the default | non-default | no login
+| Date `before` | click | any | no login
+| Date `before` | change to a non-off value | off | login, value reverted
+| Date `before` | change to the off value | non-off | no login
+| Text / textarea / number | click | any | no login; native click preserved
+| File | click | any | login; native click neutralised
+| Button | click | any | login; native click neutralised
+| Submit | click | any | login; native click neutralised
+| Reset | click | any | no login; native click preserved
+| Details `before` | click on summary | closed | login, stays closed
+| Details `before` | click on summary | open | no login, closes
+| Details `after` | click on summary | closed | login, opens
+| Details `after` | click on summary | open | no login, closes
+| `aria-pressed` `before` | click | `"false"` | login, stays `"false"`
+| `aria-pressed` `before` | click | `"true"` | no login, becomes `"false"`
+| `aria-pressed` `after` | click | `"false"` | login, becomes `"true"`
+| `aria-pressed` `after` | click | `"true"` | no login, becomes `"false"`
+| `aria-checked` `before` | click | `"false"` | login, stays `"false"`
+| `aria-checked` `before` | click | `"true"` | no login, becomes `"false"`
+| `aria-expanded` `before` | click | `"false"` | login, stays `"false"`
+| `aria-expanded` `before` | click | `"true"` | no login, becomes `"false"`
+| Hidden checkbox, via label | click | checked | no login, unchecked; no banner
+| Hidden checkbox, via label | click | unchecked | sign-in banner, stays unchecked; no tab
+| Checkbox, `label[for]` | click on label | checked | no login, unchecked
+| Checkbox, `label[for]` | click on label | unchecked | login, stays unchecked
+| Checkbox, wrapper | click | checked | no login, unchecked
+| Checkbox, wrapper | click | unchecked | login, stays unchecked
+| `uiGate` select, `auth:"before"` | click | any | no login
+| `uiGate` select, `auth:"before"` | change to a non-off value | off | login, value reverted
+| `uiGate` select, `auth:"before"` | change to the off value | non-off | no login
+| `uiGate` text, `auth:"before"` | click | any | no login
+| `uiGate` reset, `auth:"before"` | click | any | no login
+| `uiGate` submit, `auth:"before"` | click | any | login
+|===
+
+== `uiGate` equivalence
+
+A config rule `{"selector": "...", "auth": "before"|"after"}` has the
+same semantics as `data-gtw-auth`, including the activation-only rule,
+the passive-control exemption and the `change`-based gating of value
+controls. For a value control the OFF value is the control's default
+value; a `data-gtw-auth-off` attribute on the element overrides it.
+
+A config rule `{"selector": "...", "hidden": "before"}` keeps the
+hidden dimension: it neutralises activating clicks and shows the
+banner, but a deactivation of a checked checkbox is still free.
+
+== Limitations
+
+* **Single-select only**: `select multiple` is not covered by the
+  value-off comparison in this version.
+* **`input` events are not gated**: for `range` and date/time/color
+  pickers, the guard reacts to `change`. An application that updates
+  live on `input` sees the transient value before a `before` revert.
+* **Programmatic checkbox/radio changes are invisible**: setting
+  `el.checked = true` fires no DOM event. The login is requested at the
+  first real request (401 → banner) or explicitly by the application
+  through `window.__cladoneAuth.login()`.
+* **Radio arrow-key selection is not click-gated**: moving the selection
+  with the arrow keys fires `change` without `click`. Clicking (or
+  Space) is gated; arrow-key selection is left to the server-side
+  `auth.when` policy. A dispatched `change` on a gated radio is also
+  not reverted by the click-based state machine.
+* **Ambiguous wrappers**: with several controls under one gated
+  wrapper, put `data-gtw-auth` on each control. The guard resolves the
+  target's own control when it can, otherwise the first match.
+* **`reset` is always free**: use a normal button to gate a reset.
+* **`file` click is an activation**: gate the submit button if the
+  picker itself must stay available anonymously.
+
+== Running the tests
+
+[source,sh]
+----
+cd test/ui
+npm install
+npm test              # matrix + uiGate + controls + forbidden suites
+npm run preview       # visual preview: http://127.0.0.1:8787/
+node run.mjs --served # behavioural smoke against the deployed page
+----
+
+The fixture page is `test/ui/controls.html`; the assertions are in
+`test/ui/controls.mjs`. The guard script is rendered from the source at
+every run, so a stale embedded script can never pass the suite.
+
+=== Local visual preview
+
+`npm run preview` starts a small local server that injects the guard
+into `controls.html` and provides a demo auth-bridge:
+
+* `http://127.0.0.1:8787/` — the controls page with the guard injected;
+  each case is preceded by a label naming the element, the
+  `data-gtw-*` attribute and the value exercised;
+* a gated control opens a login tab with a **Sign in (demo)** button;
+  the demo session is stored in a cookie and the tab posts
+  `cladone-auth:ok` back to the page;
+* **Force authenticated**, **Reset demo session**, and the user-card
+  logout change the demo session **in place**: no redirect, no reload,
+  so the page keeps its scroll position and the focused feature;
+* the user-card logout is a preview override of
+  `window.__cladoneAuth.logout()`; production still performs the OIDC
+  `end_session` navigation;
+* `/?authed=1` and `/logout` remain available as manual shortcuts;
+* the toolbar shows the current state;
+* the badge is at the top right: approach the top edge (the toolbar
+  reserves that corner and stays below the badge) to reveal it, then
+  click it to unfold the claims and the logout button.
+
+The preview is for visual inspection; the assertions remain in
+`controls.mjs` and are run by `npm test`.

@@ -69,6 +69,21 @@ const GUARD = renderGuard({ uiGate: JSON.stringify(RULES) });
     : ok("auth=before rule → click neutralized");
 }
 
+// ── 3b. auth=before rule: unchecking a checked box → native, no tab ──
+{
+  const x = await mkWindow(GUARD, html, null);
+  const cb = x.doc.getElementById("rule_before");
+  cb.checked = true;
+  x.click(cb);
+  await tick();
+  x.st.openCalls === 0
+    ? ok("auth=before rule: unchecking → no tab")
+    : fail(`auth=before rule uncheck: openCalls=${x.st.openCalls} (want 0)`);
+  cb.checked
+    ? fail("auth=before rule uncheck: the box stayed checked")
+    : ok("auth=before rule: unchecking is native");
+}
+
 // ── 4. hidden=before rule: neutralization + banner, never a tab ──
 {
   const x = await mkWindow(GUARD, html, null);

@@ -2,6 +2,10 @@
   "private": true,
   "type": "module",
   "description": "Behavioral harness of the guard script (jsdom): local matrix from guard.go + --served mode against the deployed page.",
+  "scripts": {
+    "test": "node run.mjs",
+    "preview": "node preview.mjs"
+  },
   "dependencies": {
     "jsdom": "^24"
   }

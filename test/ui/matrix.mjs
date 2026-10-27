@@ -51,6 +51,79 @@ const SESSION = {
   if (x.banner()) fail("anonymous before: unexpected banner");
 }
 
+// ── 1b. anonymous: unchecking a checked before box → native, no login ──
+{
+  const x = await mkWindow(guard, html, null);
+  const cb = x.doc.getElementById("opt_coupes");
+  cb.checked = true; // programmatic check (the app's applyUI does this)
+  x.click(cb);
+  await tick();
+  x.st.openCalls === 0
+    ? ok("anonymous: unchecking a before box → no login")
+    : fail(`anonymous uncheck: openCalls=${x.st.openCalls} (want 0)`);
+  cb.checked
+    ? fail("anonymous uncheck: the box stayed checked")
+    : ok("anonymous: unchecking a before box → native uncheck");
+}
+
+// ── 1c. anonymous: unchecking via the wrapping label → no login ──
+{
+  const x = await mkWindow(guard, html, null);
+  const cb = x.doc.getElementById("opt_coupes");
+  cb.checked = true;
+  x.click(x.doc.getElementById("coupes_label"));
+  await tick();
+  x.st.openCalls === 0
+    ? ok("anonymous: unchecking via the label → no login")
+    : fail(`anonymous label uncheck: openCalls=${x.st.openCalls} (want 0)`);
+  cb.checked
+    ? fail("anonymous label uncheck: the box stayed checked")
+    : ok("anonymous: unchecking via the label → native uncheck");
+}
+
+// ── 1d. the attribute may sit on the label itself ──
+{
+  const labelHtml = `<!DOCTYPE html><html><head></head><body>
+<label id="gated_label" data-gtw-auth="before">Cuts
+  <input type="checkbox" id="gated_box" checked></label>
+</body></html>`;
+
+  // checked → label click unchecks without login
+  const x = await mkWindow(guard, labelHtml, null);
+  const cb = x.doc.getElementById("gated_box");
+  x.click(x.doc.getElementById("gated_label"));
+  await tick();
+  x.st.openCalls === 0
+    ? ok("anonymous: label-gated checked box → no login")
+    : fail(`label-gated uncheck: openCalls=${x.st.openCalls} (want 0)`);
+  cb.checked
+    ? fail("label-gated uncheck: the box stayed checked")
+    : ok("anonymous: label-gated checked box → native uncheck");
+
+  // unchecked → label click still gates
+  const y = await mkWindow(guard, labelHtml, null);
+  const cb2 = y.doc.getElementById("gated_box");
+  cb2.checked = false;
+  y.click(y.doc.getElementById("gated_label"));
+  await tick();
+  y.st.openCalls === 1
+    ? ok("anonymous: label-gated unchecked box → login tab")
+    : fail(`label-gated activation: openCalls=${y.st.openCalls} (want 1)`);
+  cb2.checked
+    ? fail("label-gated activation: the box was ticked")
+    : ok("anonymous: label-gated unchecked box → no pre-tick");
+}
+
+// ── 1e. programmatic check alone fires no event (documented limit) ──
+{
+  const x = await mkWindow(guard, html, null);
+  x.doc.getElementById("opt_coupes").checked = true;
+  await tick();
+  x.st.openCalls === 0
+    ? ok("programmatic check alone → no login (no DOM event)")
+    : fail(`programmatic check: openCalls=${x.st.openCalls} (want 0)`);
+}
+
 // ── 2. anonymous: after click → tab + native action ──
 {
   const x = await mkWindow(guard, html, null);
@@ -64,6 +137,21 @@ const SESSION = {
     : fail("anonymous after: native action lost");
 }
 
+// ── 2b. anonymous: unchecking an after box → no login ──
+{
+  const x = await mkWindow(guard, html, null);
+  const cb = x.doc.getElementById("opt_liaisons");
+  cb.checked = true;
+  x.click(cb);
+  await tick();
+  x.st.openCalls === 0
+    ? ok("anonymous: unchecking an after box → no login")
+    : fail(`anonymous after uncheck: openCalls=${x.st.openCalls} (want 0)`);
+  cb.checked
+    ? fail("anonymous after uncheck: the box stayed checked")
+    : ok("anonymous: unchecking an after box → native uncheck");
+}
+
 // ── 3. anonymous: 401 without affordance → banner, never a tab ──
 {
   const x = await mkWindow(guard, html, null);
@@ -74,6 +162,11 @@ const SESSION = {
   x.banner()
     ? ok("anonymous: mid-flow 401 → banner")
     : fail("anonymous mid-flow: banner expected");
+  const ab = x.doc.querySelector("[data-gtw-auth-banner]");
+  ab && ab.style.borderTopWidth === "1px" &&
+  ab.style.borderTopColor === "rgb(255, 255, 255)"
+    ? ok("auth banner: white outline for dark pages")
+    : fail("auth banner: white outline expected");
   x.st.openCalls === 0
     ? ok("anonymous: never an automatic tab")
     : fail(`anonymous mid-flow: openCalls=${x.st.openCalls} (want 0)`);
@@ -122,6 +215,13 @@ const SESSION = {
   const x = await mkWindow(guardBadge, html, SESSION);
   if (!x.doc.querySelector(".cladone-userbadge")) fail("badge expected (authenticated + userBadge configured)");
   const badge = x.doc.querySelector(".cladone-userbadge");
+  badge.style.borderLeftWidth === "1px" &&
+  badge.style.borderRightWidth === "1px" &&
+  badge.style.borderBottomWidth === "1px" &&
+  badge.style.borderTopWidth === "0px" &&
+  badge.style.borderLeftColor === "rgb(255, 255, 255)"
+    ? ok("badge: white outline except the top window edge")
+    : fail("badge: white outline expected except the top edge");
   const tab = badge.querySelector(".cladone-userbadge-tab");
   tab.textContent.startsWith("👤") && tab.textContent.includes("alice")
     ? ok("badge: first line = 👤 + username")
@@ -228,6 +328,75 @@ const SESSION = {
   boxR.textContent.includes("plan: pro")
     ? ok("licence registered: details = registered to + signed claims")
     : fail("licence registered: details missing claims");
+}
+
+// ── 6d. badge: top-edge proximity reveals the menu ──
+{
+  const guardBadge = renderGuard({
+    userBadge:
+      '{"position":"right","claims":["preferred_username"],"logoutLabel":"Log out"}',
+  });
+  const x = await mkWindow(guardBadge, html, SESSION);
+  const badge = x.doc.querySelector(".cladone-userbadge");
+  await tick(2200); // the post-login manifestation is over
+  badge.classList.contains("cladone-userbadge-near")
+    ? fail("badge proximity: near class before approach")
+    : ok("badge proximity: folded after the manifestation");
+  x.w.dispatchEvent(new x.w.MouseEvent("mousemove", {
+    bubbles: true, clientX: 100, clientY: 20,
+  }));
+  await tick();
+  badge.classList.contains("cladone-userbadge-near")
+    ? ok("badge proximity: top-edge approach reveals the menu")
+    : fail("badge proximity: the menu was not revealed");
+  x.w.dispatchEvent(new x.w.MouseEvent("mousemove", {
+    bubbles: true, clientX: 100, clientY: 200,
+  }));
+  await tick();
+  badge.classList.contains("cladone-userbadge-near")
+    ? fail("badge proximity: near class kept after moving away")
+    : ok("badge proximity: folded again after moving away");
+}
+
+// ── 6e. refresh(): in-place session changes, no reload ──
+{
+  const x = await mkWindow(guard, html, null);
+  const off = await x.w.__cladoneAuth.refresh();
+  off === false
+    ? ok("refresh: anonymous → false")
+    : fail(`refresh anonymous: got ${off} (want false)`);
+  x.st.session = SESSION;
+  const on = await x.w.__cladoneAuth.refresh();
+  on === true
+    ? ok("refresh: session acquired in place")
+    : fail(`refresh session: got ${on} (want true)`);
+  x.doc.documentElement.classList.contains("cladone-authed")
+    ? ok("refresh: cladone-authed applied")
+    : fail("refresh: cladone-authed missing");
+  x.st.session = null;
+  const dead = await x.w.__cladoneAuth.refresh({
+    quiet: true, sessionDeath: false,
+  });
+  dead === false
+    ? ok("refresh: deliberate logout → false")
+    : fail(`refresh logout: got ${dead} (want false)`);
+  !x.banner()
+    ? ok("refresh: quiet deliberate logout → no banner")
+    : fail("refresh: quiet deliberate logout showed the banner");
+  !x.doc.documentElement.classList.contains("cladone-authed")
+    ? ok("refresh: cladone-authed removed")
+    : fail("refresh: cladone-authed still present");
+}
+{
+  const x = await mkWindow(guard, html, SESSION);
+  x.st.session = null;
+  const dead = await x.w.__cladoneAuth.refresh();
+  dead === false
+    ? ok("refresh: authoritative 401 → false")
+    : fail(`refresh 401: got ${dead} (want false)`);
+  x.banner()
+    ? ok("refresh: session death → reconnection banner")
+    : fail("refresh: session death banner expected");
 }
 
 // ── 7. authenticated: silent tab abandonment (option C) ──

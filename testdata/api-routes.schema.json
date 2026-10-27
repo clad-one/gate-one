@@ -444,7 +444,7 @@
         "auth": {
           "type": "string",
           "enum": ["after", "before"],
-          "description": "Turns the selected elements into login triggers: after = native action preserved + invitation tab; before = click neutralized + direct tab."
+          "description": "Turns the selected elements into login triggers: after = native action preserved + invitation tab; before = click neutralized + direct tab. Activation only: deactivations (unchecking, closing details, reset, returning a value control to its OFF value) are never gated. Value controls (select/range/date/…) are gated on change, with their default value as the OFF value (data-gtw-auth-off on the element overrides it)."
         },
         "hidden": {
           "type": "string",

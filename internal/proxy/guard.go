@@ -54,7 +54,8 @@ const AuthStatePath = "/__gate-one/auth"
 //     unavailable.
 //
 // Declarative gating (opt-in, zero app code) — two orthogonal
-// dimensions:
+// dimensions. Full contract and behavioural test matrix:
+// doc/ui-gating.adoc.
 //
 //	data-gtw-auth — when auth happens:
 //	  "after"  : native click preserved, auth enforced at the request
@@ -64,6 +65,30 @@ const AuthStatePath = "/__gate-one/auth"
 //	    login tab opens directly — authenticate first, act after ;
 //	  absent   : fully transparent — first 401 → dismissable banner
 //	    (never an auto-opened tab).
+//
+//	ACTIVATION only: turning a feature OFF is a deactivation — it is
+//	let through without login. Turning a feature off never needs
+//	authentication (the route policy usually only requires auth for
+//	the request that turns it ON). A programmatic `el.checked = true`
+//	fires no event and is NOT seen by the guard: the login is then
+//	requested at the first real request (401 → banner), or by the app
+//	through window.__cladoneAuth.login().
+//
+//	Control families:
+//	  click = action: checkbox, radio, details/summary,
+//	    aria-pressed/aria-checked/aria-expanded, reset (always a
+//	    deactivation, never gated), submit/button/file/link (always
+//	    an activation) ;
+//	  change = action: select, range, date/time/datetime-local/month/
+//	    week/color — clicking only opens the picker ;
+//	  click = focus (never gated): text/search/email/url/tel/password/
+//	    number/textarea — put the attribute on the submit button.
+//
+//	data-gtw-auth-off — value considered OFF for value controls
+//	(select/range/date/time/color): moving TO it is a deactivation
+//	(free), moving AWAY from it is an activation. Default: the
+//	control's default value (select: the selected option, else the
+//	first option). Ignored by the other control families.
 //
 //	data-gtw-auth-hidden — visibility:
 //	  "before" : hidden while anonymous, shown once authed (silent
@@ -84,6 +109,13 @@ const AuthStatePath = "/__gate-one/auth"
 //   - window.__cladoneAuth.login() exposes the same flow to apps that
 //     want to trigger authentication from their own UI (opt-in; the
 //     zero-code-change contract holds for everyone else)
+//   - window.__cladoneAuth.refresh(opts) re-probes in place and
+//     resolves to the new auth boolean; {quiet:true} suppresses the
+//     reconnection banner, {sessionDeath:false} marks a deliberate
+//     local logout (no session-death reload on a later re-login)
+//   - window.__cladoneAuth.logout() is the production OIDC
+//     end_session navigation; an app (or the local preview) may
+//     override it for an in-place demo logout
 //
 // Gateway identity 403 (opt-in, authGuard.forbidden.banner): a fetch
 // answer carrying the gateway's OWN marker (X-Gate-One-Forbidden — set

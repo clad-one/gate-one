@@ -66,15 +66,19 @@ export async function mkWindow(guard, html, sessionPayload, uiGate = "[]", opts 
     runScripts: "outside-only",
   });
   const w = dom.window;
-  const st = { openCalls: 0, lastTab: null, msgListeners: [], navs: [] };
+  const st = {
+    openCalls: 0, lastTab: null, msgListeners: [], navs: [],
+    // mutable: refresh() tests can flip the session between probes
+    session: sessionPayload,
+  };
   // opts.forbidden: {path, marked=true, contentType="application/json"}
   // — URLs containing `path` answer 403 (with/without the gateway
   // marker) so the identity-403 banner can be exercised.
   const forbidden = opts.forbidden || null;
   w.fetch = async (url) => {
     if (url === "/__gate-one/auth") {
-      return sessionPayload
-        ? new w.Response(JSON.stringify(sessionPayload), { status: 200 })
+      return st.session
+        ? new w.Response(JSON.stringify(st.session), { status: 200 })
         : new w.Response('{"error":"authentication_required"}', { status: 401 });
     }
     if (forbidden && String(url).indexOf(forbidden.path) !== -1) {

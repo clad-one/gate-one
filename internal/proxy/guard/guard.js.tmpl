@@ -306,8 +306,11 @@
       "width:fit-content;z-index:2147483647;display:flex;gap:12px;" +
       "align-items:center;background:#20242e;color:#fff;" +
       "padding:10px 14px;border-radius:10px;" +
+      // white ring: the dark banner must stay distinct on a black page
+      "border:1px solid #fff;" +
       "box-shadow:0 8px 30px rgba(0,0,0,0.35);" +
       "font:14px/1.4 system-ui,sans-serif";
+    banner.setAttribute("data-gtw-auth-banner", "1");
     var msg = document.createElement("span");
     msg.textContent = "Sign-in required to continue.";
     var btn = document.createElement("button");
@@ -363,6 +366,8 @@
       "display:flex;gap:12px;box-sizing:border-box;" +
       "align-items:center;background:#3a2f14;color:#fff;" +
       "padding:10px 14px;border-radius:10px;" +
+      // white ring: the dark banner must stay distinct on a black page
+      "border:1px solid #fff;" +
       "box-shadow:0 8px 30px rgba(0,0,0,0.35);" +
       "font:14px/1.4 system-ui,sans-serif";
     var msg = document.createElement("span");
@@ -484,15 +489,19 @@
   // then).
   var sessionDied = false;
 
-  function settleState(v, force) {
+  function settleState(v, force, noDeath) {
     // A session acquired (successful login, popup-done message) must
     // not be downgraded by a probe response arriving late or being
     // transient (network, 5xx): state never goes down from true to
     // false. ONLY exception: an AUTHORITATIVE 401 from the probe
     // (force) — the session really died mid-flight: the veil closes,
     // the badge disappears, the banner offers signing in again.
+    // noDeath: a DELIBERATE local logout (preview/demo): do not enter
+    // the session-death state, so a later re-login does not reload the
+    // page to restore content.
     if (authed && !v && !force) return;
-    if (authed && !v && force) sessionDied = true;
+    if (authed && !v && force) sessionDied = !noDeath;
+    if (v) sessionDied = false;
     probeDone = true;
     authed = v;
     if (v) {
@@ -700,6 +709,9 @@
       "background:#20242e;color:#fff;padding:.46em .92em;" +
       "font:" + fs + "px/1.4 system-ui,sans-serif;" +
       "text-align:left;" +
+      // white ring: the dark badge must stay distinct on a black page.
+      // No top border: the badge is flush with the window edge.
+      "border:1px solid #fff;border-top:0;" +
       "border-radius:0 0 .62em .62em;max-width:21.5em;" +
       "box-shadow:0 4px 18px rgba(0,0,0,.3);" +
       "max-height:2.3em;overflow:hidden;" +
@@ -774,8 +786,8 @@
     licIcon.type = "button";
     licIcon.textContent = lic.state === "registered" ? "\uD83D\uDD11" : "\u2696\uFE0F";
     licIcon.title = lic.state === "registered"
-      ? "Licence enregistrée"
-      : "Licence d'évaluation / usage personnel";
+      ? "Registered license"
+      : "Evaluation / personal license";
     licIcon.setAttribute("aria-label", licIcon.title);
     licIcon.style.cssText =
       "border:0;background:transparent;color:inherit;cursor:pointer;" +
@@ -815,8 +827,7 @@
       "margin-top:.46em;border:0;border-radius:.46em;padding:.38em .77em;" +
       "cursor:pointer;font:inherit;color:#fff;background:#a04040";
     btn.onclick = function () {
-      location.href = LOGOUT_URL + "?returnTo=" +
-        encodeURIComponent(location.href);
+      window.__cladoneAuth.logout();
     };
     body.appendChild(btn);
 
@@ -991,8 +1002,14 @@
     }
   }
 
-  function fetchSession() {
-    orig(AUTH_STATE, { cache: "no-store" }).then(function (res) {
+  // fetchSession(opts) re-probes the session and resolves to the new
+  // auth boolean. opts.quiet suppresses the reconnection banner;
+  // opts.sessionDeath === false marks a deliberate local logout (see
+  // settleState). The probe callers ignore the promise.
+  function fetchSession(opts) {
+    var quiet = !!(opts && opts.quiet);
+    var noDeath = !!(opts && opts.sessionDeath === false);
+    return orig(AUTH_STATE, { cache: "no-store" }).then(function (res) {
       if (res.status === 401) {
         // 401 = the truth of the moment (the server just checked):
         // the session expired or was revoked during the read.
@@ -1000,29 +1017,32 @@
         sessionScopes = [];
         sessionClaims = {};
         applyRoleGating();
-        settleState(false, true);
-        if (sessionDied) showBanner(); // invitation to sign in again
-        return;
+        settleState(false, true, noDeath);
+        if (sessionDied && !quiet) showBanner(); // invitation to sign in again
+        return false;
       }
       if (res.status !== 200) {
         // 5xx/429…: transient — the displayed state does not move.
         settleState(false);
-        return;
+        return authed;
       }
-      res.json().then(function (s) {
+      return res.json().then(function (s) {
         sessionRoles = s.roles || [];
         sessionScopes = s.scopes || [];
         sessionClaims = s.claims || {};
         applyRoleGating();
         settleState(true);
+        return true;
       }).catch(function () {
         applyRoleGating();
         settleState(false);
+        return authed;
       });
     }).catch(function () {
       // network/SW in error: fail-closed — no revelation of
       // identity-conditioned elements
       settleState(false);
+      return authed;
     });
   }
 
@@ -1090,6 +1110,29 @@
   //     "before" : the click is neutralized (no native request) and
   //                the login tab opens directly — authenticate
   //                first, act after.
+  //     ACTIVATION only: a click that turns a checkbox OFF is a
+  //     DEACTIVATION — it is let through without login. Turning a
+  //     feature off never needs authentication (the route policy
+  //     usually only requires auth for the request that turns it ON).
+  //     A programmatic `el.checked = true` fires no event and is NOT
+  //     seen by the guard: the login is then requested at the first
+  //     real request (401 → banner), or by the app through
+  //     window.__cladoneAuth.login().
+  //
+  //   data-gtw-auth-off — value considered OFF for value controls
+  //     (select/range/date/time/color): moving TO it is a
+  //     deactivation (free), moving AWAY from it is an activation.
+  //     Default: the control's default value (select: the selected
+  //     option, else the first option).
+  //
+  //   Control families:
+  //     click = action: checkbox, radio, details/summary,
+  //       aria-pressed/checked/expanded, reset (always free),
+  //       submit/button/file/link (always activation) ;
+  //     change = action: select, range, date/time/datetime-local/
+  //       month/week/color ;
+  //     click = focus (free): text/search/email/url/tel/password/
+  //       number/textarea — gate the submit button instead.
   //
   //   data-gtw-auth-hidden — visibility:
   //     "before" : hidden while anonymous — activating clicks
@@ -1098,6 +1141,247 @@
   //                offers "Sign in" ;
   //     "after"  : no click interception (pure affordance hiding,
   //                composable with gtw-auth="before" for padlocks).
+  // == State-aware gating: activation vs deactivation ==
+  // The browser runs a checkbox/radio's "pre-click activation steps"
+  // BEFORE dispatching click (and reverts them if the event is
+  // canceled). On the control itself, `checked` at click time is
+  // therefore the POST-click state; on a <label>/wrapper the forwarded
+  // click has not happened yet at the first click, so `checked` is the
+  // PRE-click state.
+  //
+  // Value controls (select/range/date/time/color) are gated on
+  // `change`, not click: clicking only opens the picker. Text entry
+  // (text/number/textarea/…) is focus, not action: gate the submit
+  // button instead. Reset is always a deactivation. Details and aria
+  // toggles expose their state in `open` / aria-*.
+  var preRadio = new WeakMap();  // radio: checkedness before the click
+  var lastValue = new WeakMap(); // value control: value before change
+
+  function labelWith(el, attr, value) {
+    if (!el || !el.labels) return null;
+    for (var i = 0; i < el.labels.length; i++) {
+      if (el.labels[i].getAttribute(attr) === value) return el.labels[i];
+    }
+    return null;
+  }
+
+  function isValueControl(el) {
+    if (!el || !el.tagName) return false;
+    if (el.tagName === "SELECT") return true;
+    if (el.tagName !== "INPUT") return false;
+    var type = (el.type || "").toLowerCase();
+    return type === "range" || type === "date" || type === "time" ||
+           type === "datetime-local" || type === "month" ||
+           type === "week" || type === "color";
+  }
+
+  function defaultValueOf(el) {
+    if (el.tagName === "SELECT") {
+      for (var i = 0; i < el.options.length; i++) {
+        if (el.options[i].defaultSelected) return el.options[i].value;
+      }
+      return el.options.length ? el.options[0].value : "";
+    }
+    return el.defaultValue;
+  }
+
+  function isPassiveControl(el) {
+    if (!el || !el.tagName) return false;
+    if (el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+    if (el.tagName !== "INPUT") return false;
+    var type = (el.type || "text").toLowerCase();
+    return type === "text" || type === "search" || type === "email" ||
+           type === "url" || type === "tel" || type === "password" ||
+           type === "number" || isValueControl(el);
+  }
+
+  function passiveControlOf(hit, target) {
+    var c = target.closest && target.closest("select,textarea,input");
+    if (c) return c;
+    if (target.closest && target.closest("a,button")) return null;
+    if (hit && hit.tagName === "LABEL" && hit.control) return hit.control;
+    return null;
+  }
+
+  function skipPassive(hit, target) {
+    var c = passiveControlOf(hit, target);
+    return !!(c && isPassiveControl(c));
+  }
+
+  function toggleControl(hit, target) {
+    var c = target.closest &&
+      target.closest('input[type="checkbox"],input[type="radio"]');
+    if (c) return c;
+    // a click on another interactive element is not a toggle of the
+    // label's control
+    if (target.closest && target.closest("a,button,input,select,textarea"))
+      return null;
+    if (hit && hit.tagName === "LABEL") {
+      if (hit.control) return hit.control;
+      var fid = hit.getAttribute("for");
+      if (fid) return document.getElementById(fid);
+    }
+    if (hit && hit.tagName === "INPUT" &&
+        (hit.type === "checkbox" || hit.type === "radio")) return hit;
+    return hit && hit.querySelector ?
+      hit.querySelector('input[type="checkbox"],input[type="radio"]') : null;
+  }
+
+  function detailsOf(hit, target) {
+    if (target.closest && target.closest("a,button,input,select,textarea"))
+      return null; // interactive content inside a summary: not a toggle
+    var sum = target.closest && target.closest("summary");
+    if (!sum) return null;
+    var d = sum.closest("details");
+    if (!d) return null;
+    if (hit && !(hit === d || hit === sum ||
+                 (hit.contains && (hit.contains(d) || hit.contains(sum)))))
+      return null;
+    return d;
+  }
+
+  function ariaToggleOf(hit, target) {
+    var a = target.closest &&
+      target.closest('[aria-pressed],[aria-checked],[aria-expanded]');
+    if (!a && target.closest) {
+      var lbl = target.closest("label");
+      if (lbl && lbl.control) a = lbl.control;
+    }
+    if (!a) return null;
+    if (!a.hasAttribute("aria-pressed") && !a.hasAttribute("aria-checked") &&
+        !a.hasAttribute("aria-expanded")) return null;
+    if (hit && !(hit === a || (hit.contains && hit.contains(a)) ||
+                 (hit.tagName === "LABEL" && hit.control === a))) return null;
+    return a;
+  }
+
+  function resetControlOf(hit, target) {
+    var r = target.closest &&
+      target.closest('input[type="reset"],button[type="reset"]');
+    if (!r && target.labels) {
+      for (var i = 0; i < target.labels.length; i++) {
+        var c = target.labels[i].control;
+        if (c && (c.tagName === "INPUT" || c.tagName === "BUTTON") &&
+            c.type === "reset") { r = c; break; }
+      }
+    }
+    if (!r && hit && (hit.tagName === "INPUT" || hit.tagName === "BUTTON") &&
+        hit.type === "reset") r = hit;
+    if (!r && hit && hit.tagName === "LABEL" && hit.control) {
+      var hc = hit.control;
+      if ((hc.tagName === "INPUT" || hc.tagName === "BUTTON") &&
+          hc.type === "reset") r = hc;
+    }
+    return r || null;
+  }
+
+  function isResetClick(hit, target) {
+    var r = resetControlOf(hit, target);
+    if (!r) return false;
+    return r === hit || (hit.contains && hit.contains(r)) ||
+           (hit.tagName === "LABEL" && hit.control === r);
+  }
+
+  function isDeactivation(hit, target) {
+    if (isResetClick(hit, target)) return true; // reset = undo
+    var c = toggleControl(hit, target);
+    if (c) {
+      if (c.type === "checkbox") {
+        // target === control: post-click state; label/wrapper: pre-click
+        return (target === c) ? !c.checked : c.checked;
+      }
+      if (c.type === "radio") {
+        var was = preRadio.get(c);
+        // Keep the pre-state for the forwarded click when the first
+        // click lands on a label/wrapper; only the control click
+        // consumes it.
+        if (target === c) preRadio.delete(c);
+        return was === true; // already selected: no-op
+      }
+    }
+    var d = detailsOf(hit, target);
+    if (d) return d.open; // open → this click closes it
+    var a = ariaToggleOf(hit, target);
+    if (a) {
+      var v = a.getAttribute("aria-pressed");
+      if (v === null) v = a.getAttribute("aria-checked");
+      if (v === null) v = a.getAttribute("aria-expanded");
+      return v === "true"; // on → this click turns it off
+    }
+    return false;
+  }
+
+  function hiddenGate(el, ev, t) {
+    if (isDeactivation(el, t)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    showBanner(ev);
+  }
+
+  function hiddenGateFor(t, ev) {
+    var h = t.closest && t.closest('[data-gtw-auth-hidden="before"]');
+    if (!h) h = labelWith(t, "data-gtw-auth-hidden", "before");
+    if (!h) {
+      var lbl = t.closest && t.closest("label");
+      if (lbl) h = lbl.querySelector('[data-gtw-auth-hidden="before"]');
+    }
+    if (!h) return false;
+    hiddenGate(h, ev, t);
+    return true;
+  }
+
+  function rememberValue(target) {
+    var el = target.closest && target.closest("select,input");
+    if (!el) {
+      var lbl = target.closest && target.closest("label");
+      if (lbl && lbl.control) el = lbl.control;
+    }
+    if (el && isValueControl(el)) lastValue.set(el, el.value);
+  }
+
+  function rememberRadio(target) {
+    var r = target.closest && target.closest('input[type="radio"]');
+    if (!r) {
+      var lbl = target.closest && target.closest("label");
+      if (lbl && lbl.control && lbl.control.type === "radio") r = lbl.control;
+    }
+    if (r) preRadio.set(r, r.checked);
+  }
+
+  function gatedAuthFor(el) {
+    var hit = el.closest &&
+      el.closest('[data-gtw-auth="before"],[data-gtw-auth="after"]');
+    if (!hit) hit = labelWith(el, "data-gtw-auth", "before") ||
+                    labelWith(el, "data-gtw-auth", "after");
+    if (hit) {
+      var off = hit.getAttribute("data-gtw-auth-off");
+      if (off === null) off = el.getAttribute("data-gtw-auth-off");
+      return { hit: hit, auth: hit.getAttribute("data-gtw-auth"), off: off };
+    }
+    for (var i = 0; i < UIGATE.length; i++) {
+      var rule = UIGATE[i];
+      if (!rule || !rule.selector || !rule.auth) continue;
+      var h = null;
+      try { h = el.closest(rule.selector); } catch (e) { continue; }
+      if (!h) continue;
+      var off2 = h.getAttribute("data-gtw-auth-off");
+      if (off2 === null) off2 = el.getAttribute("data-gtw-auth-off");
+      return { hit: h, auth: rule.auth, off: off2 };
+    }
+    return null;
+  }
+
+  document.addEventListener("pointerdown", function (ev) {
+    rememberValue(ev.target);
+    rememberRadio(ev.target);
+  }, true);
+  document.addEventListener("focusin", function (ev) {
+    rememberValue(ev.target);
+  }, true);
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === " " || ev.key === "Spacebar") rememberRadio(ev.target);
+  }, true);
+
   document.addEventListener("click", function (ev) {
     var t = ev.target;
     if (!t || !t.closest) return;
@@ -1121,31 +1405,39 @@
     // is inherent: OIDC end_session is a redirect; back on this
     // page, now anonymous (gating re-applied).
     if (authed && t.closest("[data-gtw-logout]")) {
-      location.href = LOGOUT_URL + "?returnTo=" +
-        encodeURIComponent(location.href);
+      window.__cladoneAuth.logout();
       return;
     }
 
     if (authed) return; // authenticated: native clicks (passthrough)
     var before = t.closest('[data-gtw-auth="before"]');
-    if (before) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      window.__cladoneAuth.login();
-      return;
-    }
+    if (!before) before = labelWith(t, "data-gtw-auth", "before");
     var after = t.closest('[data-gtw-auth="after"]');
-    if (after) {
-      // the native action proceeds (ticking the box…); the 401
-      // request resulting from it is queued then replayed after login
+    if (!after) after = labelWith(t, "data-gtw-auth", "after");
+    var authHit = before || after;
+    if (authHit) {
+      if (skipPassive(authHit, t)) {
+        // Passive control (text entry, select/range/date picker): the
+        // click is focus/open, not the action — no click gate. Markup
+        // wins over uiGate; only the hidden dimension may still apply.
+        hiddenGateFor(t, ev);
+        return;
+      }
+      if (isDeactivation(authHit, t)) return; // OFF: native, no login
+      if (before) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      // "after": the native action proceeds (ticking the box, opening
+      // details, toggling aria…); the 401 request resulting from it is
+      // queued then replayed after login.
       window.__cladoneAuth.login();
       return;
     }
     var hiddenPre = t.closest('[data-gtw-auth-hidden="before"]');
+    if (!hiddenPre) hiddenPre = labelWith(t, "data-gtw-auth-hidden", "before");
     if (hiddenPre) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      showBanner(ev);
+      hiddenGate(hiddenPre, ev, t);
       return;
     }
 
@@ -1166,12 +1458,15 @@
       if (rule.hidden === "before") {
         // control hidden while anonymous: any click reaching it is
         // synthetic (label activation) — never a pre-tick
-        ev.preventDefault();
-        ev.stopPropagation();
-        showBanner(ev);
+        hiddenGate(hit, ev, t);
         return;
       }
       if (rule.auth) {
+        if (skipPassive(hit, t)) {
+          hiddenGateFor(t, ev);
+          return;
+        }
+        if (isDeactivation(hit, t)) return; // OFF: native, no login
         if (rule.auth === "before") {
           ev.preventDefault();
           ev.stopPropagation();
@@ -1183,11 +1478,39 @@
     }
 
     var lbl = t.closest("label");
-    if (lbl && lbl.querySelector('[data-gtw-auth-hidden="before"]')) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      showBanner(ev);
+    if (lbl) {
+      var hb = lbl.querySelector('[data-gtw-auth-hidden="before"]');
+      if (hb) { hiddenGate(hb, ev, t); return; }
     }
+  }, true);
+
+  // Value controls (select/range/date/time/color): the click only
+  // opens the picker — the action is the CHANGE. The value equal to
+  // data-gtw-auth-off (or the control's default value) is OFF:
+  // returning to it is a deactivation (free); moving away from it is
+  // an activation. "before" reverts the value and opens the login;
+  // "after" keeps it and opens the login (the app's 401 is replayed).
+  document.addEventListener("change", function (ev) {
+    if (authed) return;
+    var el = ev.target;
+    if (!isValueControl(el)) return;
+    var g = gatedAuthFor(el);
+    if (!g) return;
+    var off = g.off;
+    if (off === null) off = defaultValueOf(el);
+    var prev = lastValue.has(el) ? lastValue.get(el) : defaultValueOf(el);
+    if (el.value === off) {
+      lastValue.set(el, el.value); // deactivation: native, no login
+      return;
+    }
+    if (g.auth === "before") {
+      ev.stopPropagation(); // the app's change handler must not run
+      el.value = prev;
+      lastValue.set(el, prev);
+    } else {
+      lastValue.set(el, el.value);
+    }
+    window.__cladoneAuth.login();
   }, true);
 
   // The banner closes without any authentication action: a click
@@ -1211,6 +1534,12 @@
   // the tab directly (explicit user intent) and resolves true once
   // the gateway session is active, false if abandoned (×). state()
   // resolves to the current session state (probe result).
+  // refresh(opts) re-probes in place and resolves to the new boolean;
+  // {quiet:true} suppresses the reconnection banner and
+  // {sessionDeath:false} marks a deliberate local logout (no
+  // session-death reload on a later re-login). logout() is the
+  // production OIDC end_session navigation; the preview overrides it
+  // to demonstrate an in-place logout.
   window.__cladoneAuth = {
     login: function () {
       return new Promise(function (resolve, reject) {
@@ -1223,6 +1552,13 @@
         if (probeDone) { resolve(authed); return; }
         stateWaiters.push(resolve);
       });
+    },
+    refresh: function (opts) {
+      return fetchSession(opts || {});
+    },
+    logout: function () {
+      location.href = LOGOUT_URL + "?returnTo=" +
+        encodeURIComponent(location.href);
     },
     // Detailed session (opt-in): {roles, scopes, claims} once the
     // probe has passed (or null when anonymous). For applications

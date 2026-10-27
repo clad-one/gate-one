@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Gate One — data-gtw-* controls preview</title>
+  <style>
+    body { font: 15px/1.45 system-ui, sans-serif; margin: 0; color: #20242e; }
+    form { padding: 1rem 1.25rem 3rem; }
+    h2 { margin: 2rem 0 .5rem; font-size: 1.1rem; border-bottom: 1px solid #d8dde3; padding-bottom: .25rem; }
+    .legend { margin: .75rem 0 1.25rem; padding: .6rem .8rem; background: #eef3f6; border-radius: 6px; }
+    .case { margin: 1.1rem 0 .35rem; padding: .45rem .7rem; background: #f4f6f8; border-left: 4px solid #4a7c59; border-radius: 4px; }
+    .case code, .legend code { background: #e3e8ed; padding: 1px 4px; border-radius: 3px; }
+    .case .attr { color: #2f6b45; font-weight: 600; }
+    .case .expect { color: #555; }
+    .row { margin: .2rem 0 .9rem; }
+    .row > * { margin-right: .75rem; }
+  </style>
+</head>
+<body>
+<!--
+  Fixture for controls.mjs. The guard is rendered from
+  internal/proxy/guard/guard.js.tmpl by the jsdom harness and injected
+  at runtime: this page is never served with a stale guard.
+
+  Each .case paragraph documents the element, the data-gtw-* attribute
+  and the value exercised by the test (and by npm run preview).
+
+  Each case exercises one control family:
+    click = action  : checkbox, radio, details, aria-*, reset,
+                      submit/button/file
+    change = action : select, range, date
+    click = focus   : text, textarea, number
+  data-gtw-auth-off marks the OFF value of value controls.
+-->
+<form id="form">
+
+  <p class="legend">
+    Each box names the element, the <code>data-gtw-*</code> attribute
+    and the value under test. The guard is injected by the
+    harness/preview.
+  </p>
+
+  <h2>Checkbox</h2>
+
+  <p class="case">
+    <code>#cb_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="expect">check → login; uncheck → free (no login).</span>
+  </p>
+  <div class="row">
+    <label id="cb_before_label">
+      <input type="checkbox" id="cb_before" data-gtw-auth="before">
+      Checkbox before
+    </label>
+  </div>
+
+  <p class="case">
+    <code>#cb_after</code> · <span class="attr">data-gtw-auth="after"</span>
+    · <span class="expect">check → login + checked; uncheck → free.</span>
+  </p>
+  <div class="row">
+    <label id="cb_after_label">
+      <input type="checkbox" id="cb_after" data-gtw-auth="after">
+      Checkbox after
+    </label>
+  </div>
+
+  <h2>Radio</h2>
+
+  <p class="case">
+    <code>#r_a</code> / <code>#r_b</code> ·
+    <span class="attr">data-gtw-auth="before"</span> on each radio
+    · <span class="expect">select B → login; click the already-selected A → free.</span>
+  </p>
+  <div class="row">
+    <label id="r_a_label">
+      <input type="radio" name="r" id="r_a" data-gtw-auth="before" checked>
+      Radio A
+    </label>
+    <label id="r_b_label">
+      <input type="radio" name="r" id="r_b" data-gtw-auth="before">
+      Radio B
+    </label>
+  </div>
+
+  <p class="case">
+    <code>#rl_a_label</code> / <code>#rl_b_label</code> ·
+    <span class="attr">data-gtw-auth="before"</span> on the <code>label</code>
+    · <span class="expect">same behaviour, attribute on the label.</span>
+  </p>
+  <div class="row">
+    <label id="rl_a_label" data-gtw-auth="before">
+      <input type="radio" name="rl" id="rl_a" checked>
+      Radio label A
+    </label>
+    <label id="rl_b_label" data-gtw-auth="before">
+      <input type="radio" name="rl" id="rl_b">
+      Radio label B
+    </label>
+  </div>
+
+  <h2>Select</h2>
+
+  <p class="case">
+    <code>#sel_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="attr">data-gtw-auth-off=""</span>
+    · <span class="expect">click = open for free; change to A/B → login + revert to “Off”.</span>
+  </p>
+  <div class="row">
+    <select id="sel_before" data-gtw-auth="before" data-gtw-auth-off="">
+      <option value="" selected>Off</option>
+      <option value="a">A</option>
+      <option value="b">B</option>
+    </select>
+  </div>
+
+  <p class="case">
+    <code>#sel_after</code> · <span class="attr">data-gtw-auth="after"</span>
+    · <span class="attr">data-gtw-auth-off=""</span>
+    · <span class="expect">change to A → login + value kept.</span>
+  </p>
+  <div class="row">
+    <select id="sel_after" data-gtw-auth="after" data-gtw-auth-off="">
+      <option value="" selected>Off</option>
+      <option value="a">A</option>
+    </select>
+  </div>
+
+  <p class="case">
+    <code>#sel_default</code> · <span class="attr">data-gtw-auth="before"</span>
+    · no <code>data-gtw-auth-off</code> → OFF = default value
+    <code>x</code> · <span class="expect">change to Y → login + revert to X.</span>
+  </p>
+  <div class="row">
+    <select id="sel_default" data-gtw-auth="before">
+      <option value="x">X</option>
+      <option value="y">Y</option>
+    </select>
+  </div>
+
+  <p class="case">
+    <code>#sel_override</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="attr">data-gtw-auth-off="y"</span> (default <code>x</code>)
+    · <span class="expect">Y = free; X = activation → login + revert to Y.</span>
+  </p>
+  <div class="row">
+    <select id="sel_override" data-gtw-auth="before" data-gtw-auth-off="y">
+      <option value="x" selected>X</option>
+      <option value="y">Y</option>
+    </select>
+  </div>
+
+  <p class="case">
+    <code>#sel_for_label</code> · <span class="attr">data-gtw-auth="before"</span>
+    on the <code>label[for]</code> · <code>#sel_for</code> ·
+    <span class="attr">data-gtw-auth-off=""</span>
+    · <span class="expect">label click free; change → login + revert to “Off”.</span>
+  </p>
+  <div class="row">
+    <label for="sel_for" id="sel_for_label" data-gtw-auth="before">Select for</label>
+    <select id="sel_for" data-gtw-auth-off="">
+      <option value="" selected>Off</option>
+      <option value="a">A</option>
+    </select>
+  </div>
+
+  <p class="case">
+    <code>#wrap_sel</code> · <span class="attr">data-gtw-auth="before"</span>
+    + <span class="attr">data-gtw-auth-off=""</span> on a wrapper
+    · <code>#wsel</code> · <span class="expect">click free; change → login + revert to “Off”.</span>
+  </p>
+  <div class="row">
+    <div id="wrap_sel" data-gtw-auth="before" data-gtw-auth-off="">
+      <select id="wsel">
+        <option value="" selected>Off</option>
+        <option value="a">A</option>
+      </select>
+    </div>
+  </div>
+
+  <h2>Range and date</h2>
+
+  <p class="case">
+    <code>#range_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="attr">data-gtw-auth-off="0"</span>
+    · <span class="expect">click free; change to 5 → login + revert to 0.</span>
+  </p>
+  <div class="row">
+    <input type="range" id="range_before" min="0" max="10" value="0"
+           data-gtw-auth="before" data-gtw-auth-off="0">
+  </div>
+
+  <p class="case">
+    <code>#range_default</code> · <span class="attr">data-gtw-auth="before"</span>
+    · no <code>data-gtw-auth-off</code> → OFF = default value
+    <code>5</code> · <span class="expect">change to 7 → login + revert to 5.</span>
+  </p>
+  <div class="row">
+    <input type="range" id="range_default" min="0" max="10" value="5"
+           data-gtw-auth="before">
+  </div>
+
+  <p class="case">
+    <code>#date_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="attr">data-gtw-auth-off=""</span>
+    · <span class="expect">click free; pick a date → login + revert to empty.</span>
+  </p>
+  <div class="row">
+    <input type="date" id="date_before" value=""
+           data-gtw-auth="before" data-gtw-auth-off="">
+  </div>
+
+  <h2>Details</h2>
+
+  <p class="case">
+    <code>#det_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="expect">closed → open = login; open → close = free.</span>
+  </p>
+  <details id="det_before" data-gtw-auth="before">
+    <summary id="det_sum">Details before</summary>
+    <p>Body</p>
+  </details>
+
+  <p class="case">
+    <code>#det_after</code> · <span class="attr">data-gtw-auth="after"</span>
+    · <span class="expect">closed → open = login + open; open → close = free.</span>
+  </p>
+  <details id="det_after" data-gtw-auth="after">
+    <summary id="det_sum_after">Details after</summary>
+    <p>Body</p>
+  </details>
+
+  <h2>Aria toggles</h2>
+
+  <p class="case">
+    <code>#aria_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <code>aria-pressed="false"</code>
+    · <span class="expect">false → true = login; true → false = free.</span>
+  </p>
+  <div class="row">
+    <button type="button" id="aria_before" data-gtw-auth="before"
+            aria-pressed="false">Aria pressed before</button>
+  </div>
+
+  <p class="case">
+    <code>#aria_after</code> · <span class="attr">data-gtw-auth="after"</span>
+    · <code>aria-pressed="false"</code>
+    · <span class="expect">false → true = login + toggle; true → false = free.</span>
+  </p>
+  <div class="row">
+    <button type="button" id="aria_after" data-gtw-auth="after"
+            aria-pressed="false">Aria pressed after</button>
+  </div>
+
+  <p class="case">
+    <code>#switch_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <code>aria-checked="false"</code> (<code>role="switch"</code>)
+    · <span class="expect">false → true = login; true → false = free.</span>
+  </p>
+  <div class="row">
+    <button type="button" id="switch_before" data-gtw-auth="before"
+            role="switch" aria-checked="false">Switch before</button>
+  </div>
+
+  <p class="case">
+    <code>#menu_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <code>aria-expanded="false"</code>
+    · <span class="expect">closed → open = login; open → closed = free.</span>
+  </p>
+  <div class="row">
+    <button type="button" id="menu_before" data-gtw-auth="before"
+            aria-expanded="false">Menu before</button>
+  </div>
+
+  <h2>Click = focus (never gated)</h2>
+
+  <p class="case">
+    <code>#text_before</code> / <code>#textarea_before</code> /
+    <code>#number_before</code> ·
+    <span class="attr">data-gtw-auth="before"</span>
+    · <span class="expect">click = focus, no login; gate the submit button instead.</span>
+  </p>
+  <div class="row">
+    <input type="text" id="text_before" data-gtw-auth="before">
+    <textarea id="textarea_before" data-gtw-auth="before"></textarea>
+    <input type="number" id="number_before" data-gtw-auth="before">
+  </div>
+
+  <h2>Activation click controls</h2>
+
+  <p class="case">
+    <code>#file_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="expect">click → login (the picker opens only after auth).</span>
+  </p>
+  <div class="row">
+    <input type="file" id="file_before" data-gtw-auth="before">
+  </div>
+
+  <p class="case">
+    <code>#btn_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="expect">click → login.</span>
+  </p>
+  <div class="row">
+    <button type="button" id="btn_before" data-gtw-auth="before">Button before</button>
+  </div>
+
+  <p class="case">
+    <code>#submit_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="expect">click → login; the form is not submitted.</span>
+  </p>
+  <div class="row">
+    <button type="submit" id="submit_before" data-gtw-auth="before">Send</button>
+  </div>
+
+  <p class="case">
+    <code>#reset_before</code> · <span class="attr">data-gtw-auth="before"</span>
+    · <span class="expect">reset = deactivation → no login; the reset runs.</span>
+  </p>
+  <div class="row">
+    <button type="reset" id="reset_before" data-gtw-auth="before">Reset</button>
+  </div>
+
+  <h2>Hidden and labels</h2>
+
+  <p class="case">
+    <code>#cb_hidden</code> · <span class="attr">data-gtw-auth-hidden="before"</span>
+    · checked initially · <span class="expect">uncheck via the label = free; re-check = banner (no tab).</span>
+  </p>
+  <div class="row">
+    <label id="cb_hidden_label">
+      Hidden
+      <input type="checkbox" id="cb_hidden" data-gtw-auth-hidden="before" checked>
+    </label>
+  </div>
+
+  <p class="case">
+    <code>#for_label</code> · <span class="attr">data-gtw-auth="before"</span>
+    on the <code>label[for]</code> · <code>#for_box</code> checked
+    · <span class="expect">uncheck via the label = free; re-check = login.</span>
+  </p>
+  <div class="row">
+    <label for="for_box" id="for_label" data-gtw-auth="before">For checkbox</label>
+    <input type="checkbox" id="for_box" checked>
+  </div>
+
+  <p class="case">
+    <code>#wrap_cb</code> · <span class="attr">data-gtw-auth="before"</span>
+    on the wrapper · <code>#wcb</code>
+    · <span class="expect">check → login; uncheck → free.</span>
+  </p>
+  <div class="row">
+    <div id="wrap_cb" data-gtw-auth="before">
+      <input type="checkbox" id="wcb">
+    </div>
+  </div>
+
+</form>
+</body>
+</html>
