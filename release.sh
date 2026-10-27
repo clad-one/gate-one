@@ -113,6 +113,14 @@ script never pushes, tags or uploads.
   \`backchannelForwardUrl\` forwards logout tokens to auth-bridge so its
   persistent sid list stays in sync. \`mcpAudience: "auto"\` enforces the
   endpoint's own protected-resource audience.
+- **Strict Content Security Policy.** The guard is class-only (no
+  inline `style` attributes); its runtime `<style>` carries the response
+  nonce, and the gateway hashes the exact guard stylesheet. In `merge`
+  mode the guard script hash **and** the guard style hash are appended to
+  the origin's `script-src` / `style-src`, so a proxified site with a
+  strict CSP no longer blocks the guard without `unsafe-inline`.
+  `csp.own: true` explicitly removes the origin policy (opt-in, logged).
+  User guide: `doc/strict-csp.adoc`.
 - **No silent login loops.** An unreachable provider now answers
   \`502 authentication_unavailable\` (readable HTML for a navigation,
   JSON for a fetch) instead of a 401/login redirect.
@@ -144,12 +152,17 @@ script never pushes, tags or uploads.
   sessions.
 - Back-channel logout is auto-enabled when the IdP discovery advertises
   it; set \`backchannelLogout: false\` to opt out.
+- CSP: in `nonce` mode the gateway now adds `style-src` nonce/hashes; a
+  declared `style-src` (e.g. `"'self'"`) is required for the guard's
+  stylesheet to pass under the gateway's own policy. For a proxified
+  site with its own CSP, use `merge` (script + style hashes) or the
+  explicit `own: true`; never remove the origin policy silently.
 
 ## Artifacts
 
 Per platform: \`gate-one_${version}_<os>_<arch>.tar.gz\` containing the
 static binary, both JSON schemas, the four onboarding examples, the
-auth-provider guide, README, LICENSE and VERSION.
+auth-provider and strict-CSP guides, README, LICENSE and VERSION.
 EOF
 
 echo
