@@ -2,7 +2,13 @@
   "authProvider": {
     "type": "http",
     "loginUrl": "https://login.example.com/login",
-    "issuer": "https://auth.example.com/realms/example"
+    "issuer": "https://auth.example.com/realms/example",
+    "links": {
+      "account": {
+        "label": "Account",
+        "url": "https://auth.example.com/realms/example/account/"
+      }
+    }
   },
   "routes": [
     {
@@ -13,7 +19,10 @@
       "auth": {},
       "userBadge": {
         "position": "right",
-        "claims": ["preferred_username", "email"],
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
         "logoutLabel": "Sign out"
       }
     }

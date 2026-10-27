@@ -286,6 +286,13 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		broker = c
 	}
 
+	// Connector-owned badge links are computed once: account from the
+	// auth provider, services from the token broker only when an
+	// exposed route delegates. The per-route merge (account > services
+	// > application links, dedup by URL) happens at compile time; the
+	// guard only renders the final list.
+	baseLinks := baseUserLinks(cfg, needsDelegated)
+
 	// OpenAPI documents are declared on the page route (openapi
 	// policy) and consumed by the MCP route of the same host: build
 	// the host → document index once.
@@ -309,6 +316,20 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			// Prepared service definition (all its members disabled):
 			// not compiled, not registered.
 			continue
+		}
+
+		// Merge the connector-owned links with the route's own links
+		// once, at load. The guard receives the final list only.
+		if route.UserBadge != nil {
+			merged, err := mergeUserLinks(
+				baseLinks, route.UserBadge.Links)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"route %s: %w", route.Host, err)
+			}
+			ub := *route.UserBadge
+			ub.Links = merged
+			route.UserBadge = &ub
 		}
 
 		u, err := url.Parse(route.Backend)

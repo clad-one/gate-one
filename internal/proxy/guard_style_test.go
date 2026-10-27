@@ -41,6 +41,11 @@ func TestGuardUsesClassesNotInlineStyles(t *testing.T) {
 		".cladone-banner",
 		".cladone-forbidden",
 		".cladone-badge-logout",
+		".cladone-badge-links",
+		".cladone-badge-link",
+		"white-space:normal",
+		"overflow-y:auto",
+		"max-width:min(90vw,30em)",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("guard stylesheet missing %q", want)

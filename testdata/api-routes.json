@@ -21,7 +21,13 @@
     "backchannelLogout": true,
     "backchannelForwardUrl": "http://auth-bridge:3000/backchannel-logout",
     "legacyTokenCookies": true,
-    "mcpAudience": "auto"
+    "mcpAudience": "auto",
+    "links": {
+      "account": {
+        "label": "Account",
+        "url": "https://auth.cladone.com/realms/cladone/account/"
+      }
+    }
   },
   "securityHeaders": {
     "hstsMaxAge": 15552000,
@@ -30,7 +36,13 @@
   },
   "tokenBroker": {
     "url": "http://token-broker:4000",
-    "secretEnv": "TOKEN_BROKER_SHARED_SECRET"
+    "secretEnv": "TOKEN_BROKER_SHARED_SECRET",
+    "links": {
+      "services": {
+        "label": "Services",
+        "url": "https://login.cladone.com/connections"
+      }
+    }
   },
   "mcpSets": {
     "grammar": {
@@ -141,7 +153,7 @@
           "email",
           "email_verified"
         ],
-        "logoutLabel": "Déconnexion"
+        "logoutLabel": "D\u00e9connexion"
       },
       "uiGate": [
         {
@@ -180,7 +192,7 @@
       },
       "pwa": {
         "enabled": true,
-        "name": "Solveur poétique",
+        "name": "Solveur po\u00e9tique",
         "themeColor": "#4285f4",
         "icons": [
           "/icon-192.png",
@@ -276,7 +288,9 @@
       "backend": "https://jacquelot.benoit-rolland.workers.dev",
       "auth": {
         "identity": {
-          "roles": ["jacquelot"]
+          "roles": [
+            "jacquelot"
+          ]
         }
       },
       "userBadge": {
@@ -286,7 +300,7 @@
           "email",
           "email_verified"
         ],
-        "logoutLabel": "Déconnexion"
+        "logoutLabel": "D\u00e9connexion"
       },
       "upstream": {
         "host": true,

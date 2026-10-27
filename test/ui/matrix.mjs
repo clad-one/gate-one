@@ -410,7 +410,30 @@ const SESSION = {
     : ok("affordance abandonment → silence (option C)");
 }
 
-// ── 8. strict CSP: the runtime <style> carries the script nonce ──
+// ── 8. userBadge.links: final list rendered as anchors ──
+{
+  const guardLinks = renderGuard({
+    userBadge:
+      '{"claims":["preferred_username"],"links":[' +
+      '{"label":"Account","url":"https://idp.test/account","target":"_blank"},' +
+      '{"label":"Status","url":"/status","target":"_self"}]}',
+  });
+  const x = await mkWindow(guardLinks, html, SESSION);
+  const links = [...x.doc.querySelectorAll(".cladone-badge-link")];
+  links.length === 2 &&
+  links[0].textContent === "Account" &&
+  links[0].target === "_blank" &&
+  links[0].rel.includes("noopener") &&
+  links[1].textContent === "Status" &&
+  links[1].target === "_self"
+    ? ok("badge links: final list rendered (target/rel)")
+    : fail(
+        "badge links: " +
+        links.map((a) => `${a.textContent}|${a.target}|${a.rel}`).join(",")
+      );
+}
+
+// ── 9. strict CSP: the runtime <style> carries the script nonce ──
 {
   const x = await mkWindow(guard, html, SESSION, "[]", { nonce: "n-test" });
   const styles = [...x.doc.querySelectorAll("style")];

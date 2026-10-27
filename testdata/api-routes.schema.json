@@ -169,6 +169,14 @@
           "minimum": 1,
           "description": "OIDC RP session lifetime. Default 3600 (1h): a short TTL bounds revocation when no shared store is used. The refresh/reauth flow renews it."
         },
+        "links": {
+          "type": "object",
+          "description": "Links owned by the authentication connector, displayed in the user badge. account is the IdP's own account console: NO OIDC standard, so the URL is explicit (Keycloak /realms/<realm>/account/, Entra myaccount.microsoft.com, Google myaccount.google.com, Okta /enduser/settings…).",
+          "additionalProperties": false,
+          "properties": {
+            "account": { "$ref": "#/definitions/userLink" }
+          }
+        },
         "sessionKeyEnv": {
           "type": "string",
           "description": "Environment variable holding the RP cookie signing key (base64/random string, hashed to 32 bytes). Empty = the key is generated and persisted in the bbolt store. Required for multi-instance (shared key)."
@@ -264,6 +272,14 @@
         "secretEnv": {
           "type": "string",
           "description": "Environment variable holding the X-Broker-Secret shared secret (default TOKEN_BROKER_SHARED_SECRET)."
+        },
+        "links": {
+          "type": "object",
+          "description": "Links owned by the token broker, displayed in the user badge. services is the connections page (auth-bridge proxies it today): it is rendered only when an exposed route declares upstream.delegated (computed by the gateway).",
+          "additionalProperties": false,
+          "properties": {
+            "services": { "$ref": "#/definitions/userLink" }
+          }
         }
       }
     },
@@ -289,6 +305,29 @@
     }
   },
   "definitions": {
+    "userLink": {
+      "type": "object",
+      "description": "A link rendered in the expanded user badge. URL: http(s) absolute or a local absolute path (/...); javascript:/data: are refused. target defaults to _blank; rel is forced to noopener noreferrer.",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Displayed text. Optional for the connector links (default Account/Services); required for userBadge.links."
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "http(s) absolute URL or local absolute path (/...)."
+        },
+        "target": {
+          "type": "string",
+          "enum": ["_blank", "_self"],
+          "description": "Link target. Default _blank."
+        }
+      }
+    },
     "match": {
       "type": "object",
       "description": "Rate-limit / quota triggering conditions (rateLimit.when, quota.when). Two families: technical (method/query/header/body — evaluated BEFORE authentication) and identity (roles/scopes/claims/user — evaluated AFTER authentication on the verified token). All conditions combine with AND. NB: the authentication policy (auth) does NOT use this type: auth.when takes technical conditions only, auth.identity takes identity conditions only.",
@@ -446,6 +485,11 @@
         "logoutLabel": {
           "type": "string",
           "description": "Label of the logout button (default Log out)."
+        },
+        "links": {
+          "type": "array",
+          "description": "Application-specific links, appended after the connector links (account, then services when the deployment delegates). Duplicate URLs are dropped (the connector link wins); at most 8 links after merge.",
+          "items": { "$ref": "#/definitions/userLink" }
         },
         "loginBadge": {
           "type": "boolean",

@@ -14,11 +14,16 @@ html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}
 .cladone-userbadge-near,.cladone-userbadge-reveal{opacity:1;pointer-events:auto}
 .cladone-userbadge:focus-within{opacity:1;pointer-events:auto}
 .cladone-userbadge:hover,.cladone-userbadge:focus-within,.cladone-userbadge-reveal{max-height:4.6em !important}
-.cladone-userbadge.cladone-userbadge-open{max-height:34em !important;opacity:1;pointer-events:auto}
+.cladone-userbadge.cladone-userbadge-open{max-height:34em !important;opacity:1;pointer-events:auto;max-width:min(90vw,30em);cursor:pointer}
+.cladone-userbadge.cladone-userbadge-open .cladone-badge-row{white-space:normal;overflow:visible;text-overflow:clip}
+.cladone-userbadge.cladone-userbadge-open .cladone-userbadge-body{max-height:calc(34em - 2.3em);overflow-y:auto}
 .cladone-userbadge-login{cursor:pointer}
 .cladone-userbadge-body{padding:.46em 0 .15em 0}
 .cladone-badge-row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cladone-badge-chips{margin-top:.38em}
+.cladone-badge-links{display:flex;flex-wrap:wrap;gap:.35em;margin-top:.46em}
+.cladone-badge-link{display:inline-block;padding:.08em .5em;border-radius:.8em;background:rgba(255,255,255,.12);color:#9fd0ff;text-decoration:none;font-size:.86em;white-space:nowrap}
+.cladone-badge-link:hover{text-decoration:underline}
 .cladone-badge-chip{display:inline-block;margin:0 .15em -.1em .38em;padding:.08em .5em;border-radius:.8em;background:rgba(255,255,255,.16);font-size:.86em}
 .cladone-badge-logout{margin-top:.46em;border:0;border-radius:.46em;padding:.38em .77em;cursor:pointer;font:inherit;color:#fff;background:#a04040}
 .cladone-badge-license{display:none;margin-top:.5em;padding-top:.42em;border-top:1px solid rgba(255,255,255,.18);font-size:.92em;line-height:1.45;white-space:normal}

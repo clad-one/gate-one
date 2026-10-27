@@ -102,6 +102,27 @@ If the client is public (no secret), omit `clientSecretEnv`: PKCE S256
 is used either way. A missing environment variable for a declared
 `clientSecretEnv` refuses startup, like the token-broker secret.
 
+The IdP **account console** has no standard OIDC URL: set it explicitly
+on the connector (the badge displays it when configured):
+
+[source,json]
+----
+"authProvider": {
+  "type": "oidc",
+  "...": "...",
+  "links": {
+    "account": {
+      "label": "Account",
+      "url": "https://auth.example.com/realms/example/account/"
+    }
+  }
+}
+----
+
+The token-broker connections page is a separate link, owned by the
+broker (`tokenBroker.links.services`), and only shown when an exposed
+route delegates. See `docs/api-routes.adoc` (userBadge links).
+
 == Claim mapping
 
 Defaults, suitable for Keycloak:

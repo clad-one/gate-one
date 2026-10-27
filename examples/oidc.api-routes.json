@@ -11,7 +11,13 @@
       "path": "./gate-one-state.db"
     },
     "sessionTtlSeconds": 3600,
-    "backchannelLogout": true
+    "backchannelLogout": true,
+    "links": {
+      "account": {
+        "label": "Account",
+        "url": "https://auth.example.com/realms/example/account/"
+      }
+    }
   },
   "routes": [
     {
@@ -22,7 +28,10 @@
       "auth": {},
       "userBadge": {
         "position": "right",
-        "claims": ["preferred_username", "email"],
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
         "logoutLabel": "Sign out"
       }
     }

@@ -121,6 +121,14 @@ script never pushes, tags or uploads.
   strict CSP no longer blocks the guard without `unsafe-inline`.
   `csp.own: true` explicitly removes the origin policy (opt-in, logged).
   User guide: `doc/strict-csp.adoc`.
+- **User badge links.** The expanded badge displays up to eight links:
+  `authProvider.links.account` (the IdP account console; explicit because
+  OIDC has no standard account URL), `tokenBroker.links.services` (the
+  connections page, only when an exposed route delegates) and
+  `userBadge.links` (application-specific). The gateway merges, validates
+  and deduplicates once at load (`account > services > app`); the guard
+  only renders the final `USERBADGE.links`. The badge body now wraps the
+  roles/scopes chips and scrolls when expanded.
 - **No silent login loops.** An unreachable provider now answers
   \`502 authentication_unavailable\` (readable HTML for a navigation,
   JSON for a fetch) instead of a 401/login redirect.
@@ -157,6 +165,11 @@ script never pushes, tags or uploads.
   stylesheet to pass under the gateway's own policy. For a proxified
   site with its own CSP, use `merge` (script + style hashes) or the
   explicit `own: true`; never remove the origin policy silently.
+- Badge links: `authProvider.links.account` (IdP account console,
+  explicit, not an OIDC standard), `tokenBroker.links.services` (the
+  connections page, hidden when no exposed route delegates) and
+  `userBadge.links` (app-specific). They are merged and deduplicated at
+  load; the guard only renders the final list.
 
 ## Artifacts
 

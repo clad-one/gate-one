@@ -753,6 +753,26 @@
       var sc = badgeItems(USERBADGE.scopes, sessionScopes);
       if (sc.length) body.appendChild(chipsRow("scopes", sc));
     }
+    // Links: the FINAL list merged by the gateway (account, services
+    // when the deployment delegates, then app-specific). The guard
+    // does not know the connectors and never merges/dedups.
+    var links = USERBADGE.links || [];
+    if (links.length) {
+      var linkRow = document.createElement("div");
+      linkRow.className = "cladone-badge-links";
+      for (var li = 0; li < links.length; li++) {
+        var link = links[li];
+        if (!link || !link.url) continue;
+        var a = document.createElement("a");
+        a.className = "cladone-badge-link";
+        a.href = String(link.url);
+        a.textContent = String(link.label || link.url);
+        a.target = link.target || "_blank";
+        a.rel = "noopener noreferrer";
+        linkRow.appendChild(a);
+      }
+      if (linkRow.childNodes.length) body.appendChild(linkRow);
+    }
     var btn = document.createElement("button");
     btn.type = "button";
     btn.className = "cladone-badge-logout";

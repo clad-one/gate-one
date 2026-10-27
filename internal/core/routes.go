@@ -133,6 +133,33 @@ type UIGateRule struct {
 // authenticated — collapsed at the top edge (position
 // left|right), expanded on hover/focus: the chosen claims + a
 // logout button (OIDC end_session). Absent = no badge.
+// UserLink: a link rendered in the user badge's expanded body.
+// Sources are merged by the gateway at load time:
+//   - authProvider.links.account (the IdP's own console; explicit,
+//     non-standard: OIDC does not define an account URL);
+//   - tokenBroker.links.services (the token-broker connections page,
+//     only when an exposed route delegates);
+//   - userBadge.links (application-specific links).
+type UserLink struct {
+	// Label: displayed text (default "Account"/"Services" for the
+	// connector links; required for userBadge.links).
+	Label string `json:"label,omitempty"`
+	// URL: http(s) absolute or a local absolute path ("/...").
+	URL string `json:"url"`
+	// Target: "_blank" (default) or "_self".
+	Target string `json:"target,omitempty"`
+}
+
+// AuthProviderLinks: links owned by the authentication connector.
+type AuthProviderLinks struct {
+	Account *UserLink `json:"account,omitempty"`
+}
+
+// TokenBrokerLinks: links owned by the token broker.
+type TokenBrokerLinks struct {
+	Services *UserLink `json:"services,omitempty"`
+}
+
 type UserBadgePolicy struct {
 	// Position: top edge left or right (default "right").
 	Position string `json:"position,omitempty"`
@@ -145,6 +172,10 @@ type UserBadgePolicy struct {
 	Scopes BadgeList `json:"scopes,omitempty"`
 	// LogoutLabel: button label (default "Log out").
 	LogoutLabel string `json:"logoutLabel,omitempty"`
+	// Links: application-specific links, merged after the connector
+	// links (account, then services when the deployment delegates).
+	// Duplicate URLs are dropped: the connector link wins.
+	Links []UserLink `json:"links,omitempty"`
 	// LoginBadge: the badge ALSO appears when anonymous, from the
 	// first visit, in invitation mode ("👤 Sign in") —
 	// clicked, it opens the login tab. To offer login without
@@ -1323,6 +1354,10 @@ type TokenBrokerConfig struct {
 	SecretEnv string `json:"secretEnv,omitempty"`
 	// SecretValue: resolved secret — never serialized.
 	SecretValue string `json:"-"`
+	// Links: links owned by the token broker, displayed in the user
+	// badge. services is only rendered when an exposed route delegates
+	// (computed by the gateway).
+	Links *TokenBrokerLinks `json:"links,omitempty"`
 }
 
 // OIDCConfig: the platform's IdP (top-level block). loginUrl =
@@ -1409,6 +1444,11 @@ type AuthProviderConfig struct {
 	// RevocationTTLSeconds: retention of revocation entries. Default
 	// 86400 (24h), never shorter than the session TTL.
 	RevocationTTLSeconds int `json:"revocationTtlSeconds,omitempty"`
+
+	// Links: connector-owned links displayed in the user badge.
+	// account is the IdP's own console URL (no OIDC standard: explicit
+	// per connector).
+	Links *AuthProviderLinks `json:"links,omitempty"`
 
 	// Dev configures the embedded provider.
 	Dev *DevAuthConfig `json:"dev,omitempty"`
@@ -1930,15 +1970,98 @@ func (c *Config) expandUpstreamEnv() error {
 
 // validate rejects configs that cannot work at runtime — fail fast at
 // load instead of silently caching what should have been excluded.
+// maxUserBadgeLinks bounds the total merged links per badge.
+const maxUserBadgeLinks = 8
+
+// validateUserLink checks a badge link. Connector links have a default
+// label ("Account"/"Services"); application links require one.
+func validateUserLink(l *UserLink, field string, requireLabel bool) error {
+	if l == nil {
+		return nil
+	}
+	label := strings.TrimSpace(l.Label)
+	if requireLabel && label == "" {
+		return fmt.Errorf("%s.label is required", field)
+	}
+	if len(label) > 64 {
+		return fmt.Errorf("%s.label: too long (max 64)", field)
+	}
+	raw := strings.TrimSpace(l.URL)
+	if raw == "" {
+		return fmt.Errorf("%s.url is required", field)
+	}
+	if len(raw) > 2048 {
+		return fmt.Errorf("%s.url: too long (max 2048)", field)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%s.url %q: %v", field, raw, err)
+	}
+	if u.IsAbs() {
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf(
+				"%s.url %q: must be an http(s) URL or a local path",
+				field, raw)
+		}
+	} else {
+		if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
+			return fmt.Errorf(
+				"%s.url %q: must be an http(s) URL or an absolute path",
+				field, raw)
+		}
+	}
+	switch l.Target {
+	case "", "_blank", "_self":
+	default:
+		return fmt.Errorf(
+			"%s.target %q: expected _blank or _self", field, l.Target)
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
 	if c.SecurityHeaders != nil {
 		if err := validateSecurityHeaders(c.SecurityHeaders); err != nil {
 			return err
 		}
 	}
+	if c.AuthProvider != nil && c.AuthProvider.Links != nil {
+		if err := validateUserLink(
+			c.AuthProvider.Links.Account,
+			"authProvider.links.account", false,
+		); err != nil {
+			return err
+		}
+	}
+	if c.TokenBroker != nil && c.TokenBroker.Links != nil {
+		if err := validateUserLink(
+			c.TokenBroker.Links.Services,
+			"tokenBroker.links.services", false,
+		); err != nil {
+			return err
+		}
+	}
 	for i := range c.Routes {
 		host := c.Routes[i].Host
 		route := &c.Routes[i]
+
+		if route.UserBadge != nil {
+			if len(route.UserBadge.Links) > maxUserBadgeLinks {
+				return fmt.Errorf(
+					"route %s: userBadge.links: at most %d links",
+					host, maxUserBadgeLinks)
+			}
+			for j := range route.UserBadge.Links {
+				if err := validateUserLink(
+					&route.UserBadge.Links[j],
+					fmt.Sprintf(
+						"route %s: userBadge.links[%d]", host, j),
+					true,
+				); err != nil {
+					return err
+				}
+			}
+		}
 
 		// A login URL is required only when a BROWSER route can
 		// actually log a user in: an authenticated frontend route, or
