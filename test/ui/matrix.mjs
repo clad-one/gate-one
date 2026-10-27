@@ -225,12 +225,12 @@ const SESSION = {
   tab.textContent.startsWith("👤") && tab.textContent.includes("alice")
     ? ok("badge: first line = 👤 + username")
     : fail("badge: the handle must show 👤 + the user's name");
-  if (!badge.classList.contains("cladone-userbadge-reveal"))
-    fail("badge: brief manifestation expected at login (reveal class)");
-  await tick(2200);
-  badge.classList.contains("cladone-userbadge-reveal")
-    ? fail("badge: not hidden away after 2 s")
-    : ok("badge: hidden away after the 2 s manifestation");
+  if (badge.classList.contains("cladone-userbadge-reveal") ||
+      badge.classList.contains("cladone-userbadge-compact") ||
+      badge.classList.contains("cladone-userbadge-open"))
+    fail("badge: must start in the one-line handle state");
+  else
+    ok("badge: one-line handle visible at rest (no transient preview)");
   const body = badge.querySelector(".cladone-userbadge-body").textContent;
   !body.includes("alice") && body.includes("email_verified: false")
     ? ok("badge: body = claims (no duplicate of the name)")
@@ -329,32 +329,51 @@ const SESSION = {
     : fail("licence registered: details missing claims");
 }
 
-// ── 6d. badge: top-edge proximity reveals the menu ──
+// ── 6d. badge: handle → compact → extended → compact, outside resets ──
 {
   const guardBadge = renderGuard({
     userBadge:
-      '{"position":"right","claims":["preferred_username"],"logoutLabel":"Log out"}',
+      '{"position":"right","claims":["preferred_username"],' +
+      '"roles":true,"scopes":true,"links":[' +
+      '{"label":"Account","url":"https://idp.test/account"}],' +
+      '"logoutLabel":"Log out"}',
   });
   const x = await mkWindow(guardBadge, html, SESSION);
   const badge = x.doc.querySelector(".cladone-userbadge");
-  await tick(2200); // the post-login manifestation is over
-  badge.classList.contains("cladone-userbadge-near")
-    ? fail("badge proximity: near class before approach")
-    : ok("badge proximity: folded after the manifestation");
-  x.w.dispatchEvent(new x.w.MouseEvent("mousemove", {
-    bubbles: true, clientX: 100, clientY: 20,
-  }));
-  await tick();
-  badge.classList.contains("cladone-userbadge-near")
-    ? ok("badge proximity: top-edge approach reveals the menu")
-    : fail("badge proximity: the menu was not revealed");
-  x.w.dispatchEvent(new x.w.MouseEvent("mousemove", {
-    bubbles: true, clientX: 100, clientY: 200,
-  }));
-  await tick();
-  badge.classList.contains("cladone-userbadge-near")
-    ? fail("badge proximity: near class kept after moving away")
-    : ok("badge proximity: folded again after moving away");
+  const tab = badge.querySelector(".cladone-userbadge-tab");
+  const cycle = () => x.click(tab);
+  const state = () =>
+    badge.classList.contains("cladone-userbadge-open") ? "extended" :
+    badge.classList.contains("cladone-userbadge-compact") ? "compact" :
+    "handle";
+
+  state() === "handle"
+    ? ok("badge cycle: starts in handle")
+    : fail(`badge cycle: starts in ${state()}`);
+  cycle();
+  state() === "compact"
+    ? ok("badge cycle: first click → compact")
+    : fail(`badge cycle: first click → ${state()}`);
+  cycle();
+  state() === "extended"
+    ? ok("badge cycle: second click → extended")
+    : fail(`badge cycle: second click → ${state()}`);
+  cycle();
+  state() === "compact"
+    ? ok("badge cycle: third click → compact")
+    : fail(`badge cycle: third click → ${state()}`);
+  // A link inside the badge must act, not cycle the state.
+  const link = x.doc.querySelector(".cladone-badge-link");
+  const before = state();
+  x.click(link);
+  state() === before
+    ? ok("badge cycle: link click does not toggle the badge")
+    : fail(`badge cycle: link click changed ${before} → ${state()}`);
+  // Outside click collapses to handle.
+  x.click(x.doc.body);
+  state() === "handle"
+    ? ok("badge cycle: outside click → handle")
+    : fail(`badge cycle: outside click → ${state()}`);
 }
 
 // ── 6e. refresh(): in-place session changes, no reload ──

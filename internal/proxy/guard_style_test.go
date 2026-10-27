@@ -43,6 +43,8 @@ func TestGuardUsesClassesNotInlineStyles(t *testing.T) {
 		".cladone-badge-logout",
 		".cladone-badge-links",
 		".cladone-badge-link",
+		".cladone-userbadge-compact",
+		".cladone-userbadge-with-chips",
 		"white-space:normal",
 		"overflow-y:auto",
 		"max-width:min(90vw,30em)",

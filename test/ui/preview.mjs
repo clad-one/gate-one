@@ -48,7 +48,7 @@ const TOOLBAR = `
   <span id="gtw-preview-status" style="padding:2px 9px;border-radius:999px;background:#6b2f2f;color:#fff">…</span>
   <button type="button" id="gtw-preview-auth" style="border:0;border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit;background:#2f6b45;color:#fff">Authenticate</button>
   <button type="button" id="gtw-preview-reset" style="border:0;border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit;background:#4a4f5c;color:#fff">Reset demo session</button>
-  <span style="opacity:.7">Gated control → login tab → “Sign in (demo)”. Badge top right: approach the top-right corner.</span>
+  <span style="opacity:.7">Gated control → login tab → “Sign in (demo)”. Badge top right: click the handle for compact, click again for extended.</span>
 </div>`;
 
 const APP = `<script>

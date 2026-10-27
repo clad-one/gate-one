@@ -129,6 +129,11 @@ script never pushes, tags or uploads.
   and deduplicates once at load (`account > services > app`); the guard
   only renders the final `USERBADGE.links`. The badge body now wraps the
   roles/scopes chips and scrolls when expanded.
+- **User badge states.** The badge starts as a visible one-line handle;
+  a click shows the compact body (roles/scopes on one line each, with
+  `…` when too long), a second click the extended body (claims, wrapped
+  chips, links, logout; the body scrolls). A third click returns to
+  compact; an outside click resets to the handle. No hover preview.
 - **No silent login loops.** An unreachable provider now answers
   \`502 authentication_unavailable\` (readable HTML for a navigation,
   JSON for a fetch) instead of a 401/login redirect.

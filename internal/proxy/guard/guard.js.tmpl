@@ -18,8 +18,8 @@
   // carrying a data-gtw-* attribute ignores these rules
   // (precedence: the markup wins).
   var UIGATE = %[3]s;
-  // User badge (route userBadge config): tab at the top edge,
-  // unfolded on hover, claims + logout.
+  // User badge (route userBadge config): visible handle at the top
+  // edge; click cycle handle → compact → extended.
   var USERBADGE = %[4]s;
   // Client-side rewrite (route upstream.rewriteBody): origin hosts +
   // public target + prefix exceptions, or null. Drives the
@@ -601,11 +601,11 @@
     document.documentElement.classList.add("cladone-evaluated");
   }
 
-  // User badge (userBadge config): tab folded at the top edge
-  // (position left|right), unfolded on hover/focus (CSS, transitioned
-  // max-height). Content: the chosen claims + the logout button
-  // (end_session navigation). Absent when anonymous and without
-  // policy. Built in pure DOM (never innerHTML).
+  // User badge (userBadge config): handle at the top edge (position
+  // left|right), click cycle handle → compact → extended (CSS
+  // max-height). Content: chosen claims, roles/scopes chips, links and
+  // the logout button (end_session navigation). Absent when anonymous
+  // and without policy. Built in pure DOM (never innerHTML).
   var badgeEl = null;
 
   function removeBadge() {
@@ -706,11 +706,6 @@
     if (!badgeEl) {
       makeBadgeEl();
       badgeEl.setAttribute("data-gtw-mode", "authed");
-      // discreet post-login manifestation: unfolded 2 s then hidden
-      badgeEl.classList.add("cladone-userbadge-reveal");
-      setTimeout(function () {
-        if (badgeEl) badgeEl.classList.remove("cladone-userbadge-reveal");
-      }, 2000);
     }
     // first line (visible even folded): the icon + the identity
     var tab = badgeEl.firstChild;
@@ -729,6 +724,7 @@
     tab.appendChild(licIcon);
     var body = badgeEl.lastChild;
     body.textContent = "";
+    var hasChips = false;
     // claims: true = every claim the probe returned; false = none;
     // a list = only those (missing omitted) — the historical form.
     var claimNames = badgeItems(
@@ -738,7 +734,7 @@
       var v = sessionClaims[claimNames[i]];
       if (v === undefined) continue; // absent claim: line omitted
       var row = document.createElement("div");
-      row.className = "cladone-badge-row";
+      row.className = "cladone-badge-row cladone-badge-claim";
       row.textContent = claimNames[i] + ": " + String(v);
       body.appendChild(row);
     }
@@ -747,12 +743,13 @@
     // read once from the /__gate-one/auth probe.
     if (sessionRoles.length) {
       var rl = badgeItems(USERBADGE.roles, sessionRoles);
-      if (rl.length) body.appendChild(chipsRow("roles", rl));
+      if (rl.length) { body.appendChild(chipsRow("roles", rl)); hasChips = true; }
     }
     if (sessionScopes.length) {
       var sc = badgeItems(USERBADGE.scopes, sessionScopes);
-      if (sc.length) body.appendChild(chipsRow("scopes", sc));
+      if (sc.length) { body.appendChild(chipsRow("scopes", sc)); hasChips = true; }
     }
+    badgeEl.classList.toggle("cladone-userbadge-with-chips", hasChips);
     // Links: the FINAL list merged by the gateway (account, services
     // when the deployment delegates, then app-specific). The guard
     // does not know the connectors and never merges/dedups.
@@ -822,15 +819,17 @@
       ev.stopPropagation();
       licBox.classList.toggle("cladone-license-visible");
       // unfold the badge so the details at the bottom become visible
-      if (badgeEl) badgeEl.classList.add("cladone-userbadge-open");
+      if (badgeEl) {
+        badgeEl.classList.remove("cladone-userbadge-compact");
+        badgeEl.classList.add("cladone-userbadge-open");
+      }
     };
   }
 
   // "Login invitation" badge mode: after a session death, the same
   // handle stays in place — clicking it reopens the login (the
   // affordance persists even after the banner is dismissed).
-  // Invisible until the mouse approaches the edge, as in
-  // authenticated mode.
+  // Visible as a one-line handle; click = sign in.
   function buildLoginBadge() {
     if (!USERBADGE || authed || !document.body) return;
     removeBadge();
@@ -844,36 +843,11 @@
       ev.stopPropagation();
       ensureLogin();
     };
-    // discreet manifestation: visible 2 s to get noticed, then as
-    // discreet as the authenticated badge
-    badgeEl.classList.add("cladone-userbadge-reveal");
-    setTimeout(function () {
-      if (badgeEl) badgeEl.classList.remove("cladone-userbadge-reveal");
-    }, 2000);
   }
 
-  // Detection of the TOP edge approach: the badge is invisible
-  // (opacity 0 + pointer-events none) until the mouse approaches
-  // (clientY <= 40); it stays visible while hovered, unfolded, or
-  // in its post-login manifestation.
-  if (USERBADGE) {
-    window.addEventListener("mousemove", function (ev) {
-      if (!badgeEl) return;
-      var near = badgeEl.matches(":hover") ||
-        badgeEl.classList.contains("cladone-userbadge-open") ||
-        badgeEl.classList.contains("cladone-userbadge-reveal");
-      if (!near && ev.clientY <= 40) {
-        // proximity to the badge's OWN ZONE (not the whole top
-        // edge): top vertical band + horizontal radius around the
-        // handle (the badge reacts only to approaching ITS corner)
-        var r = badgeEl.getBoundingClientRect();
-        var margin = 150;
-        near = ev.clientX >= r.left - margin &&
-               ev.clientX <= r.right + margin;
-      }
-      badgeEl.classList.toggle("cladone-userbadge-near", near);
-    });
-  }
+  // The badge is always visible in its handle state; the click cycle
+  // (handle → compact → extended → compact) is the only state driver.
+  // No hover/proximity preview: it made the compact state transient.
 
   // Gating by uiGate rules (config): same mechanisms as the markup
   // attributes, but elements are designated by CSS selector. An
@@ -1335,12 +1309,26 @@
     // it navigates (its own onclick).
     if (authed && badgeEl) {
       if (badgeEl.contains(t)) {
-        if (!t.closest("button")) {
-          badgeEl.classList.toggle("cladone-userbadge-open");
+        // Interactive children (links, buttons, fields) keep their
+        // native action; only a click on the badge chrome cycles the
+        // states.
+        if (t.closest("a,button,input,select,textarea,label")) {
+          return;
+        }
+        if (badgeEl.classList.contains("cladone-userbadge-open")) {
+          badgeEl.classList.remove("cladone-userbadge-open");
+          badgeEl.classList.add("cladone-userbadge-compact");
+        } else if (badgeEl.classList.contains("cladone-userbadge-compact")) {
+          badgeEl.classList.remove("cladone-userbadge-compact");
+          badgeEl.classList.add("cladone-userbadge-open");
+        } else {
+          badgeEl.classList.add("cladone-userbadge-compact");
         }
         return;
       }
+      // click outside: back to the one-line handle
       badgeEl.classList.remove("cladone-userbadge-open");
+      badgeEl.classList.remove("cladone-userbadge-compact");
     }
 
     // Logout (data-gtw-logout): the look is entirely up to the app,
