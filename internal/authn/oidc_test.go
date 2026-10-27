@@ -120,7 +120,7 @@ func newMockOIDC(t *testing.T) *mockOIDC {
 		now := time.Now()
 		idClaims := map[string]any{
 			"iss": m.srv.URL, "aud": "gate-one",
-			"sub": "user-123", "sid": "sid-123", "nonce": c.nonce,
+			"sub": "user-123", "nonce": c.nonce,
 			"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(),
 			"preferred_username": "alice",
 			"email":              "alice@example.com",

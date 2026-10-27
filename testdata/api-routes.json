@@ -153,7 +153,9 @@
           "email",
           "email_verified"
         ],
-        "logoutLabel": "D\u00e9connexion"
+        "roles": true,
+        "scopes": true,
+        "logoutLabel": "Logout"
       },
       "uiGate": [
         {
@@ -192,7 +194,7 @@
       },
       "pwa": {
         "enabled": true,
-        "name": "Solveur po\u00e9tique",
+        "name": "Solveur poétique",
         "themeColor": "#4285f4",
         "icons": [
           "/icon-192.png",
@@ -288,19 +290,19 @@
       "backend": "https://jacquelot.benoit-rolland.workers.dev",
       "auth": {
         "identity": {
-          "roles": [
-            "jacquelot"
-          ]
+          "roles": ["jacquelot"]
         }
       },
       "userBadge": {
-        "position": "right",
+        "position": "left",
         "claims": [
           "preferred_username",
           "email",
           "email_verified"
         ],
-        "logoutLabel": "D\u00e9connexion"
+        "roles": true,
+        "scopes": true,
+        "logoutLabel": "Logout"
       },
       "upstream": {
         "host": true,

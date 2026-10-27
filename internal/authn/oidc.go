@@ -401,10 +401,16 @@ func (o *OIDC) VerifyMCP(
 	defer cancel()
 	tok, err := o.mcpVerifier.Verify(vctx, raw)
 	if err != nil {
+		log.Printf(
+			"MCP AUTH oidc: token rejected host=%s path=%s: %v",
+			r.Host, r.URL.Path, err)
 		return nil, ErrUnauthenticated
 	}
 	var claims map[string]any
 	if err := tok.Claims(&claims); err != nil {
+		log.Printf(
+			"MCP AUTH oidc: claims rejected host=%s path=%s: %v",
+			r.Host, r.URL.Path, err)
 		return nil, ErrUnauthenticated
 	}
 	if o.mcpAudience != "" {
@@ -414,11 +420,19 @@ func (o *OIDC) VerifyMCP(
 			want = resource
 		}
 		if want == "" || !audienceContains(tok.Audience, want) {
+			log.Printf(
+				"MCP AUTH oidc: audience mismatch host=%s path=%s "+
+					"got=%v want=%q",
+				r.Host, r.URL.Path, tok.Audience, want)
 			return nil, ErrUnauthenticated
 		}
 	}
 	scopes := scopesFromClaims(claims, o.scopesClaim)
 	if scope != "" && !contains(scopes, scope) {
+		log.Printf(
+			"MCP AUTH oidc: scope mismatch host=%s path=%s "+
+				"got=%v want=%q",
+			r.Host, r.URL.Path, scopes, scope)
 		return nil, ErrInsufficientScope
 	}
 	id := o.identityFromClaims(claims, scopes)
@@ -427,6 +441,10 @@ func (o *OIDC) VerifyMCP(
 		return nil, err
 	}
 	if revoked {
+		log.Printf(
+			"MCP AUTH oidc: session revoked host=%s path=%s "+
+				"sid=%q sub=%q",
+			r.Host, r.URL.Path, id.SessionID, id.UserID)
 		return nil, ErrUnauthenticated
 	}
 	return &Result{Identity: id}, nil
@@ -556,6 +574,12 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 			id.Scopes = scopesFromClaims(
 				accessClaims, o.scopesClaim)
 		}
+		// Keycloak's ID token does not always carry `sid`; the access
+		// token does. The backchannel logout token revokes by that
+		// user-session id, so the native session MUST store it.
+		if id.SessionID == "" {
+			id.SessionID = stringClaim(accessClaims, "sid")
+		}
 	}
 	// The RP session lifetime is our own (SessionTTL, default 1h),
 	// independent of the ID token's short exp: otherwise a 5-minute
@@ -564,8 +588,8 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	o.setLegacyCookies(w, token)
 
 	log.Printf(
-		"OIDC login user=%q issuer=%s",
-		id.Username, o.issuer)
+		"OIDC login user=%q sid=%q roles=%v issuer=%s",
+		id.Username, id.SessionID, id.Roles, o.issuer)
 	http.Redirect(w, r, tx.ReturnTo, http.StatusFound)
 }
 
@@ -673,6 +697,9 @@ func (o *OIDC) handleBackchannelLogout(
 		http.NotFound(w, r)
 		return
 	}
+	log.Printf(
+		"BACKCHANNEL REQUEST method=%s remote=%s host=%s",
+		r.Method, r.RemoteAddr, r.Host)
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -776,7 +803,9 @@ func (o *OIDC) forwardBackchannelLogout(
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("BACKCHANNEL FORWARD %s: status %d",
 			o.backchannelForward, resp.StatusCode)
+		return
 	}
+	log.Printf("BACKCHANNEL FORWARD %s: ok", o.backchannelForward)
 }
 
 func (o *OIDC) renderPopupDone(w http.ResponseWriter, r *http.Request) {
