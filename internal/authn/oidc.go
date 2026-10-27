@@ -48,8 +48,16 @@ type OIDCConfig struct {
 	// ScopesClaim defaults to "scope"; "scp" is always also read.
 	ScopesClaim string
 	// MCPAudience, when set, must appear in the access token's aud.
+	// "auto" uses the endpoint's protected-resource identifier.
 	MCPAudience string
 	SessionTTL  time.Duration
+
+	// LegacyTokenCookies mirrors auth-bridge's access_token /
+	// refresh_token / id_token cookies on cookieDomain. Migration
+	// bridge: auth-bridge's token-broker routes (/connections,
+	// /connect, /oauth) can resolve the same session while both
+	// services share the login host. No effect on the native session.
+	LegacyTokenCookies bool
 
 	// Store persists back-channel logout revocations. Default: an
 	// in-memory store (tests/dev). Production passes bbolt.
@@ -95,6 +103,7 @@ type OIDC struct {
 	backchannel   bool
 	revocationTTL time.Duration
 	store         RevocationStore
+	legacyCookies bool
 
 	session *sessionCodec
 	tx      *txCodec
@@ -297,6 +306,7 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 		backchannel:   backchannel,
 		revocationTTL: revocationTTL,
 		store:         store,
+		legacyCookies: cfg.LegacyTokenCookies,
 		session: newSessionCodec(
 			oidcSessionCookie, domain, u.Scheme == "https",
 			sessionKey, ttl, now, storeID),
@@ -387,11 +397,13 @@ func (o *OIDC) VerifyMCP(
 	if err := tok.Claims(&claims); err != nil {
 		return nil, ErrUnauthenticated
 	}
-	if o.mcpAudience != "" && !audienceContains(tok.Audience, o.mcpAudience) {
-		// An explicit audience policy wins; resource is the
-		// endpoint's own identifier (often the expected aud).
-		if resource == "" ||
-			!audienceContains(tok.Audience, resource) {
+	if o.mcpAudience != "" {
+		// "auto" = the endpoint's own protected-resource identifier.
+		want := o.mcpAudience
+		if want == "auto" {
+			want = resource
+		}
+		if want == "" || !audienceContains(tok.Audience, want) {
 			return nil, ErrUnauthenticated
 		}
 	}
@@ -526,6 +538,7 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	// Silent refresh/backchannel revocation is a later lot; a shorter
 	// sessionTtlSeconds is the conservative option today.
 	o.session.set(w, id, rawID, time.Time{})
+	o.setLegacyCookies(w, token)
 
 	log.Printf(
 		"OIDC login user=%q issuer=%s",
@@ -536,6 +549,7 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 func (o *OIDC) handleLogout(w http.ResponseWriter, r *http.Request) {
 	id, idToken, ok := o.session.read(r)
 	o.session.clear(w)
+	o.clearLegacyCookies(w)
 	// A copied cookie must not survive an RP-initiated logout: revoke
 	// the session id locally (never all sessions of the user).
 	if ok && o.store != nil && id.SessionID != "" {
@@ -562,6 +576,67 @@ func (o *OIDC) handleLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.Redirect(w, r, returnTo, http.StatusFound)
+}
+
+// setLegacyCookies mirrors the auth-bridge token cookies on the shared
+// domain. Migration bridge only (LegacyTokenCookies): auth-bridge's
+// token-broker proxy routes (/connections, /connect, /oauth) keep
+// resolving the same session while both services share the login host.
+// The native session cookie remains the source of truth for Gate One.
+func (o *OIDC) setLegacyCookies(w http.ResponseWriter, token *oauth2.Token) {
+	if !o.legacyCookies {
+		return
+	}
+	maxAge := 3600
+	if !token.Expiry.IsZero() {
+		if d := token.Expiry.Sub(o.now()); d > 0 {
+			maxAge = int(d.Seconds())
+		}
+	}
+	o.legacyCookie(w, "access_token", token.AccessToken, maxAge)
+	if token.RefreshToken != "" {
+		o.legacyCookie(w, "refresh_token", token.RefreshToken, 30*24*3600)
+	}
+	if raw, ok := token.Extra("id_token").(string); ok && raw != "" {
+		o.legacyCookie(w, "id_token", raw, 3600)
+	}
+}
+
+func (o *OIDC) legacyCookie(
+	w http.ResponseWriter,
+	name, value string,
+	maxAge int,
+) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/",
+		Domain:   o.cookieDomain,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   o.secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (o *OIDC) clearLegacyCookies(w http.ResponseWriter) {
+	if !o.legacyCookies {
+		return
+	}
+	for _, name := range []string{
+		"access_token", "refresh_token", "id_token",
+	} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			Domain:   o.cookieDomain,
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   o.secure,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
 // handleBackchannelLogout receives the OIDC Back-Channel Logout 1.0

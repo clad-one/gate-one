@@ -1384,6 +1384,11 @@ type AuthProviderConfig struct {
 	MCPAudience       string   `json:"mcpAudience,omitempty"`
 	SessionTTLSeconds int      `json:"sessionTtlSeconds,omitempty"`
 
+	// LegacyTokenCookies mirrors auth-bridge's access_token /
+	// refresh_token / id_token cookies on cookieDomain (migration
+	// bridge for auth-bridge's token-broker routes).
+	LegacyTokenCookies bool `json:"legacyTokenCookies,omitempty"`
+
 	// SessionKeyEnv: env var holding the RP cookie signing key. Empty
 	// = the key is generated and persisted in the bbolt store.
 	SessionKeyEnv string `json:"sessionKeyEnv,omitempty"`
@@ -2338,10 +2343,11 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 
 	if ap.Type != "oidc" &&
 		(ap.SessionStore != nil || ap.SessionKeyEnv != "" ||
-			ap.BackchannelLogout != nil || ap.RevocationTTLSeconds != 0) {
+			ap.BackchannelLogout != nil || ap.RevocationTTLSeconds != 0 ||
+			ap.LegacyTokenCookies) {
 		return fmt.Errorf(
-			"authProvider.sessionStore/sessionKeyEnv/backchannelLogout " +
-				"are only valid for type oidc")
+			"authProvider.sessionStore/sessionKeyEnv/backchannelLogout/" +
+				"legacyTokenCookies are only valid for type oidc")
 	}
 
 	switch ap.Type {

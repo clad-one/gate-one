@@ -579,6 +579,10 @@ func TestLoadRealConfigStrict(t *testing.T) {
 		TokenBroker *struct {
 			SecretEnv string `json:"secretEnv"`
 		} `json:"tokenBroker"`
+		AuthProvider *struct {
+			ClientSecretEnv string `json:"clientSecretEnv"`
+			SessionKeyEnv   string `json:"sessionKeyEnv"`
+		} `json:"authProvider"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		t.Fatal(err)
@@ -589,6 +593,14 @@ func TestLoadRealConfigStrict(t *testing.T) {
 			name = "TOKEN_BROKER_SHARED_SECRET"
 		}
 		t.Setenv(name, "test-"+name)
+	}
+	if probe.AuthProvider != nil {
+		if name := probe.AuthProvider.ClientSecretEnv; name != "" {
+			t.Setenv(name, "test-"+name)
+		}
+		if name := probe.AuthProvider.SessionKeyEnv; name != "" {
+			t.Setenv(name, "test-"+name)
+		}
 	}
 
 	c, err := Load("../../testdata/api-routes.json")

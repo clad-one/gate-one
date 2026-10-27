@@ -162,7 +162,7 @@
         },
         "mcpAudience": {
           "type": "string",
-          "description": "When set, the MCP access token aud must contain this value (strict audience check). Default: scope-only."
+          "description": "MCP access-token audience policy. Empty = scope-only (compatible default). A literal value requires that value in aud. \"auto\" requires the endpoint's own protected-resource identifier (recommended, and used with Keycloak audience mappers)."
         },
         "sessionTtlSeconds": {
           "type": "integer",
@@ -192,6 +192,10 @@
         "backchannelLogout": {
           "type": "boolean",
           "description": "OIDC Back-Channel Logout. Absent = auto: enabled when the IdP discovery advertises backchannel_logout_supported. false disables it. Register <loginBaseUrl>/backchannel-logout at the IdP."
+        },
+        "legacyTokenCookies": {
+          "type": "boolean",
+          "description": "Migration bridge: also set auth-bridge's access_token/refresh_token/id_token cookies on cookieDomain, so auth-bridge's token-broker proxy routes (/connections, /connect, /oauth) resolve the same session when both share the login host. Default false. The native session cookie remains authoritative for Gate One."
         },
         "revocationTtlSeconds": {
           "type": "integer",

@@ -5,9 +5,22 @@
     "publicKey": "***REMOVED-LICENCE-KEY***",
     "url": "https://cladone.com/"
   },
-  "oidc": {
-    "loginUrl": "https://login.cladone.com/login",
-    "issuer": "https://auth.cladone.com/realms/cladone"
+  "authProvider": {
+    "type": "oidc",
+    "issuer": "https://auth.cladone.com/realms/cladone",
+    "clientId": "cladone-login",
+    "clientSecretEnv": "KEYCLOAK_CLIENT_SECRET",
+    "scopes": ["openid", "profile", "email", "offline_access"],
+    "loginBaseUrl": "https://login.cladone.com",
+    "cookieDomain": "cladone.com",
+    "sessionStore": {
+      "type": "bolt",
+      "path": "/data/gate-one-state.db"
+    },
+    "sessionTtlSeconds": 3600,
+    "backchannelLogout": true,
+    "legacyTokenCookies": true,
+    "mcpAudience": "auto"
   },
   "securityHeaders": {
     "hstsMaxAge": 15552000,
@@ -259,7 +272,11 @@
       "frontend": true,
       "autoHead": true,
       "backend": "https://jacquelot.benoit-rolland.workers.dev",
-      "auth": {},
+      "auth": {
+        "identity": {
+          "roles": ["jacquelot"]
+        }
+      },
       "userBadge": {
         "position": "right",
         "claims": [

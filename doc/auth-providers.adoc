@@ -127,11 +127,11 @@ contains the MCP scope (default `mcp-tools`) and whose audience matches
 what the MCP client requested.
 
 By default only the scope is enforced, because Keycloak does not add a
-resource audience without an audience mapper. Set `mcpAudience` (or
-configure the mapper and use the endpoint resource) for a strict `aud`
-check. Opaque access tokens are not accepted by the native provider;
-use `type: http` with auth-bridge when the IdP only issues opaque
-tokens.
+resource audience without an audience mapper. Set `mcpAudience: "auto"`
+to require the endpoint's own protected-resource identifier in `aud`
+(recommended when the mapper exists), or a literal `aud` value. Opaque
+access tokens are not accepted by the native provider; use `type: http`
+with auth-bridge when the IdP only issues opaque tokens.
 
 == Sessions, revocation and logout
 
@@ -166,6 +166,27 @@ cookie cannot be replayed), and redirects to the IdP
 `end_session_endpoint` with `id_token_hint` and
 `post_logout_redirect_uri` when the IdP advertises one. The ID token is
 kept only for that hint; refresh tokens are never stored.
+
+== Sharing the login host with auth-bridge (migration)
+
+Native OIDC can share `login.<domain>` with auth-bridge while the
+token-broker proxy routes are still served by auth-bridge:
+
+* Traefik routes `/connections`, `/connect/*`, `/oauth/*`,
+  `/frontchannel-logout`, `/auth` and `/auth/mcp` to auth-bridge;
+* every other path (`/login`, `/auth/callback`, `/logout`,
+  `/backchannel-logout`, `/auth/popup-done`, `/health`) goes to Gate One;
+* set `legacyTokenCookies: true`: Gate One also writes the
+  `access_token` / `refresh_token` / `id_token` cookies on the shared
+  cookie domain, so auth-bridge's `/connections` and `/connect` resolve
+  the same session without a second login;
+* back-channel logout goes to Gate One (`/backchannel-logout`) and
+  revokes the native session. auth-bridge's broker page then relies on
+  the access-token expiry/refresh, not on an immediate sid revocation.
+
+This is a migration setup. Once the token-broker proxy routes are
+served by Gate One (or no longer needed), set `legacyTokenCookies` to
+false and give the native provider a dedicated login host.
 
 == auth-bridge remains an option
 

@@ -152,10 +152,11 @@ func newMockOIDC(t *testing.T) *mockOIDC {
 		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token": accessToken,
-			"token_type":   "Bearer",
-			"expires_in":   300,
-			"id_token":     idToken,
+			"access_token":  accessToken,
+			"refresh_token": "refresh-123",
+			"token_type":    "Bearer",
+			"expires_in":    300,
+			"id_token":      idToken,
 		})
 	})
 	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +214,17 @@ func (m *mockOIDC) logoutToken(
 
 func newTestOIDC(t *testing.T, m *mockOIDC, now *time.Time) *OIDC {
 	t.Helper()
-	o, err := NewOIDC(context.Background(), OIDCConfig{
+	return newTestOIDCWith(t, m, now, nil)
+}
+
+func newTestOIDCWith(
+	t *testing.T,
+	m *mockOIDC,
+	now *time.Time,
+	mutate func(*OIDCConfig),
+) *OIDC {
+	t.Helper()
+	cfg := OIDCConfig{
 		Issuer:       m.srv.URL,
 		ClientID:     "gate-one",
 		ClientSecret: "secret",
@@ -225,7 +236,11 @@ func newTestOIDC(t *testing.T, m *mockOIDC, now *time.Time) *OIDC {
 		SessionTTL:   time.Hour,
 		Store:        NewMemoryStore(),
 		Now:          func() time.Time { return *now },
-	})
+	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	o, err := NewOIDC(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,6 +259,20 @@ func findCookie(rec *httptest.ResponseRecorder, name string) *http.Cookie {
 // performLogin runs the full code + PKCE flow against the mock IdP and
 // returns the RP session cookie.
 func performLogin(t *testing.T, m *mockOIDC, o *OIDC) *http.Cookie {
+	t.Helper()
+	rec := performLoginRec(t, m, o)
+	session := findCookie(rec, oidcSessionCookie)
+	if session == nil {
+		t.Fatal("session cookie missing")
+	}
+	return session
+}
+
+func performLoginRec(
+	t *testing.T,
+	m *mockOIDC,
+	o *OIDC,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(
@@ -281,11 +310,7 @@ func performLogin(t *testing.T, m *mockOIDC, o *OIDC) *http.Cookie {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("callback = %d: %s", rec.Code, rec.Body.String())
 	}
-	session := findCookie(rec, oidcSessionCookie)
-	if session == nil {
-		t.Fatal("session cookie missing")
-	}
-	return session
+	return rec
 }
 
 func backchannelRequest(
@@ -541,6 +566,71 @@ func TestOIDCBackchannelOptOut(t *testing.T) {
 	rec := backchannelRequest(t, o, "irrelevant")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("disabled backchannel = %d, want 404", rec.Code)
+	}
+}
+
+func TestOIDCLegacyTokenCookies(t *testing.T) {
+	m := newMockOIDC(t)
+	now := time.Now()
+	o := newTestOIDCWith(t, m, &now, func(c *OIDCConfig) {
+		c.LegacyTokenCookies = true
+	})
+	rec := performLoginRec(t, m, o)
+
+	for _, name := range []string{
+		"access_token", "refresh_token", "id_token",
+	} {
+		c := findCookie(rec, name)
+		if c == nil || c.Value == "" {
+			t.Errorf("legacy cookie %s missing", name)
+		}
+	}
+
+	session := findCookie(rec, oidcSessionCookie)
+	if session == nil {
+		t.Fatal("session cookie missing")
+	}
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"http://login.test:3000/logout?returnTo=http://app.test/",
+		nil,
+	)
+	req.AddCookie(session)
+	o.ServeLogin(rec, req)
+	for _, name := range []string{
+		"access_token", "refresh_token", "id_token",
+	} {
+		c := findCookie(rec, name)
+		if c == nil || c.MaxAge >= 0 {
+			t.Errorf("legacy cookie %s not cleared on logout", name)
+		}
+	}
+}
+
+func TestOIDCMCPAudienceAuto(t *testing.T) {
+	m := newMockOIDC(t)
+	now := time.Now()
+	o := newTestOIDCWith(t, m, &now, func(c *OIDCConfig) {
+		c.MCPAudience = "auto"
+	})
+	_ = performLogin(t, m, o)
+
+	m.mu.Lock()
+	access := m.accessToken
+	m.mu.Unlock()
+	req := httptest.NewRequest(http.MethodPost, "http://mcp.test/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+
+	if _, err := o.VerifyMCP(
+		context.Background(), req, "mcp-tools", "mcp-resource",
+	); err != nil {
+		t.Fatalf("matching auto audience = %v", err)
+	}
+	if _, err := o.VerifyMCP(
+		context.Background(), req, "mcp-tools", "other-resource",
+	); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("wrong auto audience = %v, want ErrUnauthenticated", err)
 	}
 }
 
