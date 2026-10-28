@@ -47,6 +47,7 @@
   // NB: computed AFTER LOGIN_ORIGIN is initialized (the
   // "undefined/logout" bug came from a reversed declaration order).
   var LOGOUT_URL = LOGIN_ORIGIN + "/logout";
+  var LOGOUT_EVENT_KEY = "cladone:logout";
 
   // auth-bridge end page: notifies this page via postMessage then
   // closes the tab.
@@ -1024,6 +1025,14 @@
     if (!document.hidden) probeSession();
   });
 
+  // Cross-tab logout: the tab that logs out writes a localStorage
+  // marker; every other tab re-probes immediately instead of waiting
+  // for the 60 s timer. The server-side revocation (shared sid in
+  // Redis) is still the source of truth.
+  window.addEventListener("storage", function (ev) {
+    if (ev.key === LOGOUT_EVENT_KEY) probeSession();
+  });
+
   // A subresource that fails to load (the lazy images of a long book, a
   // script, a stylesheet) is the FIRST sign that the session died
   // mid-read: the gateway answers 302->login, the element fires
@@ -1507,6 +1516,9 @@
       return fetchSession(opts || {});
     },
     logout: function () {
+      try {
+        localStorage.setItem(LOGOUT_EVENT_KEY, String(Date.now()));
+      } catch (e) { /* storage disabled: other tabs catch up on probe */ }
       location.href = LOGOUT_URL + "?returnTo=" +
         encodeURIComponent(location.href);
     },

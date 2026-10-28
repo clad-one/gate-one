@@ -33,11 +33,14 @@ const (
 // auth-bridge is NOT required: Gate One talks to the IdP directly
 // (Keycloak, Entra, Google, Authentik, Okta, Auth0, Zitadel…).
 type OIDCConfig struct {
+	ProviderID   string
 	Issuer       string
 	ClientID     string
 	ClientSecret string // empty = public client (PKCE only)
 	LoginBaseURL string // public origin of the login host
 	CookieDomain string
+	CookieName   string // default gate_one_session
+	TxCookieName string // default gate_one_oidc_tx
 	AllowedHosts []string
 	Scopes       []string
 	RedirectURL  string // default LoginBaseURL + /auth/callback
@@ -78,8 +81,9 @@ type OIDCConfig struct {
 	// BackchannelLogout: nil = auto (enable when the IdP advertises
 	// backchannel_logout_supported), true/false = explicit override.
 	BackchannelLogout *bool
-	// RevocationTTL: how long a revocation entry is kept. Default
-	// 24h, never shorter than the session TTL.
+	// RevocationTTL: how long a revocation entry is kept. Default:
+	// the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds),
+	// else 30 days; never shorter than the session TTL.
 	RevocationTTL time.Duration
 
 	// test seams
@@ -97,6 +101,8 @@ type OIDC struct {
 	mcpVerifier    *oidc.IDTokenVerifier
 	oauth2         *oauth2.Config
 	issuer         string
+	jwksURI        string
+	httpClient     *http.Client
 
 	loginBase    *url.URL
 	cookieDomain string
@@ -201,9 +207,12 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 	}
 
 	var discovery struct {
-		EndSessionEndpoint                string `json:"end_session_endpoint"`
-		BackchannelLogoutSupported        bool   `json:"backchannel_logout_supported"`
-		BackchannelLogoutSessionSupported bool   `json:"backchannel_logout_session_supported"`
+		JWKSURI                           string   `json:"jwks_uri"`
+		SigningAlgs                       []string `json:"id_token_signing_alg_values_supported"`
+		RefreshTokenTTLSeconds            int      `json:"cladone_refresh_token_ttl_seconds"`
+		EndSessionEndpoint                string   `json:"end_session_endpoint"`
+		BackchannelLogoutSupported        bool     `json:"backchannel_logout_supported"`
+		BackchannelLogoutSessionSupported bool     `json:"backchannel_logout_session_supported"`
 	}
 	_ = provider.Claims(&discovery)
 
@@ -264,10 +273,30 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 	}
 	revocationTTL := cfg.RevocationTTL
 	if revocationTTL <= 0 {
-		revocationTTL = 24 * time.Hour
+		// A broker can advertise its refresh-token lifetime in discovery:
+		// the default revocation then covers refresh tokens too, instead
+		// of a fixed 24h guess. Other IdPs fall back to 30 days.
+		if discovery.RefreshTokenTTLSeconds > 0 {
+			revocationTTL = time.Duration(
+				discovery.RefreshTokenTTLSeconds) * time.Second
+		} else {
+			revocationTTL = 30 * 24 * time.Hour
+		}
 	}
 	if revocationTTL < ttl {
 		revocationTTL = ttl
+	}
+	if cfg.RevocationTTL <= 0 && discovery.RefreshTokenTTLSeconds <= 0 {
+		log.Printf("WARNING: %s", RefreshTTLWarning(
+			cfg.Issuer, cfg.ProviderID))
+	}
+	if discovery.RefreshTokenTTLSeconds > 0 &&
+		revocationTTL < time.Duration(discovery.RefreshTokenTTLSeconds)*time.Second {
+		log.Printf(
+			"OIDC: revocationTtlSeconds=%s is shorter than the issuer's "+
+				"refresh token TTL (%ds); a logout may not block refresh "+
+				"tokens after the revocation expires",
+			revocationTTL, discovery.RefreshTokenTTLSeconds)
 	}
 
 	txSecret := make([]byte, 32)
@@ -288,18 +317,40 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 		scopesClaim = "scope"
 	}
 
+	sessionCookie := strings.TrimSpace(cfg.CookieName)
+	if sessionCookie == "" {
+		sessionCookie = oidcSessionCookie
+	}
+	txCookie := strings.TrimSpace(cfg.TxCookieName)
+	if txCookie == "" {
+		txCookie = oidcTxCookie
+	}
+	hc := cfg.HTTPClient
+	if hc == nil {
+		hc = &http.Client{Timeout: 5 * time.Second}
+	}
+	mcpAlgs := discovery.SigningAlgs
+	if len(mcpAlgs) == 0 {
+		mcpAlgs = []string{"RS256"}
+	}
+	mcpKeySet := newRemoteKeySet(
+		discovery.JWKSURI, hc, mcpAlgs, 5*time.Minute, now)
+
 	o := &OIDC{
-		provider: provider,
-		issuer:   issuer,
+		provider:   provider,
+		issuer:     issuer,
+		jwksURI:    discovery.JWKSURI,
+		httpClient: hc,
 		verifier: provider.Verifier(&oidc.Config{
 			ClientID: clientID,
 		}),
 		// MCP access tokens are not ID tokens: verify signature,
 		// issuer and expiry, but not the client-ID audience (the
 		// scope is the gate; MCPAudience can add a strict check).
-		mcpVerifier: provider.Verifier(&oidc.Config{
-			ClientID:          clientID,
-			SkipClientIDCheck: true,
+		mcpVerifier: oidc.NewVerifier(issuer, mcpKeySet, &oidc.Config{
+			SkipClientIDCheck:    true,
+			SupportedSigningAlgs: mcpAlgs,
+			Now:                  now,
 		}),
 		oauth2:       oauth2Cfg,
 		loginBase:    u,
@@ -318,9 +369,10 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 		backchannelForward: strings.TrimSpace(
 			cfg.BackchannelForwardURL),
 		session: newSessionCodec(
-			oidcSessionCookie, domain, u.Scheme == "https",
+			sessionCookie, domain, u.Scheme == "https",
 			sessionKey, ttl, now, storeID),
 		tx: &txCodec{
+			name:   txCookie,
 			secret: txSecret,
 			secure: u.Scheme == "https",
 			now:    now,
@@ -334,6 +386,15 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 func (o *OIDC) Name() string      { return "oidc" }
 func (o *OIDC) Issuer() string    { return o.issuer }
 func (o *OIDC) LoginHost() string { return o.loginBase.Hostname() }
+
+// Close releases a Redis client. The shared bbolt store is
+// process-lifetime by design and must not be closed on reload.
+func (o *OIDC) Close() error {
+	if s, ok := o.store.(*RedisStore); ok {
+		return s.Close()
+	}
+	return nil
+}
 func (o *OIDC) LoginURL() string {
 	return strings.TrimRight(o.loginBase.String(), "/") + "/login"
 }
@@ -341,6 +402,11 @@ func (o *OIDC) LoginURL() string {
 // Health re-runs discovery: a down IdP is an outage, not an auth
 // failure.
 func (o *OIDC) Health(ctx context.Context) error {
+	if s, ok := o.store.(*RedisStore); ok {
+		if err := s.Health(ctx); err != nil {
+			return fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+		}
+	}
 	_, err := oidc.NewProvider(ctx, o.issuer)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
@@ -378,9 +444,19 @@ func (o *OIDC) CheckRevoked(
 		return false, nil
 	}
 	revoked, err := o.store.IsRevoked(
-		ctx, o.issuer, id.SessionID, id.UserID)
+		ctx, o.issuer, id.SessionID, "")
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	if revoked {
+		return true, nil
+	}
+	if id.UserID != "" {
+		revoked, err = o.store.IsSubjectRevoked(
+			ctx, o.issuer, id.UserID, id.IssuedAt)
+		if err != nil {
+			return false, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+		}
 	}
 	return revoked, nil
 }
@@ -399,11 +475,15 @@ func (o *OIDC) VerifyMCP(
 	// Bound the JWKS fetch: a wedged IdP must not freeze MCP auth.
 	vctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	vctx, status := withKeyStatus(vctx)
 	tok, err := o.mcpVerifier.Verify(vctx, raw)
 	if err != nil {
 		log.Printf(
 			"MCP AUTH oidc: token rejected host=%s path=%s: %v",
 			r.Host, r.URL.Path, err)
+		if status.unavailable {
+			return nil, fmt.Errorf("%w: jwks unavailable", ErrProviderUnavailable)
+		}
 		return nil, ErrUnauthenticated
 	}
 	var claims map[string]any
@@ -448,6 +528,50 @@ func (o *OIDC) VerifyMCP(
 		return nil, ErrUnauthenticated
 	}
 	return &Result{Identity: id}, nil
+}
+
+// unavailable verifies the JWKS endpoint is reachable and well-formed.
+// It is called ONLY after a token verification failure: a network or
+// JWKS error is a provider outage (502), not an invalid token (401).
+// A valid token in the cache never pays this extra request.
+func (o *OIDC) unavailable(ctx context.Context) error {
+	if o.jwksURI == "" {
+		return nil // no discovery URI: cannot classify, keep 401
+	}
+	cctx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := o.checkJWKS(cctx); err != nil {
+		return fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	return nil
+}
+
+func (o *OIDC) checkJWKS(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, o.jwksURI, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("jwks: HTTP %d", resp.StatusCode)
+	}
+	var body struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.NewDecoder(io.LimitReader(
+		resp.Body, 1<<20)).Decode(&body); err != nil {
+		return fmt.Errorf("jwks: %w", err)
+	}
+	if len(body.Keys) == 0 {
+		return fmt.Errorf("jwks: empty key set")
+	}
+	return nil
 }
 
 // ServeLogin implements LoginHandler: /login, /auth/callback,
@@ -599,10 +723,12 @@ func (o *OIDC) handleLogout(w http.ResponseWriter, r *http.Request) {
 	o.clearLegacyCookies(w)
 	// A copied cookie must not survive an RP-initiated logout: revoke
 	// the session id locally (never all sessions of the user).
-	if ok && o.store != nil && id.SessionID != "" {
-		_ = o.store.Revoke(
-			r.Context(), o.issuer, id.SessionID, "",
-			o.now().Add(o.revocationTTL))
+	if ok && o.store != nil {
+		if err := o.store.Revoke(
+			r.Context(), o.issuer, id.SessionID, id.UserID,
+			o.now().Add(o.revocationTTL)); err != nil {
+			log.Printf("OIDC logout revocation failed: %v", err)
+		}
 	}
 
 	returnTo := o.origins.safeReturnTo(
@@ -873,6 +999,7 @@ func (o *OIDC) identityFromClaims(
 	return Identity{
 		UserID:    userID,
 		SessionID: stringClaim(claims, "sid"),
+		IssuedAt:  timeClaim(claims, "iat"),
 		Username:  username,
 		Email:     stringClaim(claims, "email"),
 		Roles:     rolesFromClaims(claims, o.roleClaims),
@@ -892,16 +1019,24 @@ type oidcTx struct {
 }
 
 type txCodec struct {
+	name   string
 	secret []byte
 	secure bool
 	now    func() time.Time
+}
+
+func (c *txCodec) cookieName() string {
+	if c.name == "" {
+		return oidcTxCookie
+	}
+	return c.name
 }
 
 func (c *txCodec) set(w http.ResponseWriter, tx oidcTx) {
 	raw, _ := json.Marshal(tx)
 	body := base64.RawURLEncoding.EncodeToString(raw)
 	http.SetCookie(w, &http.Cookie{
-		Name:     oidcTxCookie,
+		Name:     c.cookieName(),
 		Value:    body + "." + c.sign(body),
 		Path:     "/auth/callback",
 		MaxAge:   int(oidcTxTTL.Seconds()),
@@ -912,7 +1047,7 @@ func (c *txCodec) set(w http.ResponseWriter, tx oidcTx) {
 }
 
 func (c *txCodec) read(r *http.Request) (oidcTx, bool) {
-	cookie, err := r.Cookie(oidcTxCookie)
+	cookie, err := r.Cookie(c.cookieName())
 	if err != nil {
 		return oidcTx{}, false
 	}
@@ -939,7 +1074,7 @@ func (c *txCodec) read(r *http.Request) (oidcTx, bool) {
 
 func (c *txCodec) clear(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     oidcTxCookie,
+		Name:     c.cookieName(),
 		Value:    "",
 		Path:     "/auth/callback",
 		MaxAge:   -1,
@@ -1067,4 +1202,27 @@ func lookupPath(m map[string]any, path string) any {
 		cur = mm[part]
 	}
 	return cur
+}
+
+// timeClaim reads a numeric iat-like claim.
+func timeClaim(claims map[string]any, key string) time.Time {
+	switch v := claims[key].(type) {
+	case float64:
+		if v <= 0 {
+			return time.Time{}
+		}
+		return time.Unix(int64(v), 0)
+	case int64:
+		if v <= 0 {
+			return time.Time{}
+		}
+		return time.Unix(v, 0)
+	case int:
+		if v <= 0 {
+			return time.Time{}
+		}
+		return time.Unix(int64(v), 0)
+	default:
+		return time.Time{}
+	}
 }

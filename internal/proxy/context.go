@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 type RequestContext struct {
@@ -20,6 +21,7 @@ type RequestContext struct {
 
 	UserID    string
 	SessionID string
+	IssuedAt  time.Time
 	Username  string
 	Email     string
 	Roles     []string

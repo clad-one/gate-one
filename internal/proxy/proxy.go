@@ -20,6 +20,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -30,6 +31,8 @@ type accessUnit struct {
 	// resource: explicit audience (empty = derive from host+path).
 	resource string
 	scope    string
+	// issuer: OIDC issuer of the provider bound to this unit.
+	issuer string
 	// path: public endpoint of the unit.
 	path string
 }
@@ -38,6 +41,10 @@ type compiledRoute struct {
 	route  *core.Route
 	proxy  *httputil.ReverseProxy
 	prefix string
+
+	// provider: auth provider bound to this route at load (nil =
+	// default provider). The choice is static and never request-derived.
+	provider *providerEntry
 
 	// stripPrefix: exact public path prefix removed before the
 	// backend join (normalized/validated at load). Empty = disabled.
@@ -72,19 +79,43 @@ type compiledRoute struct {
 	mcpOps []mcpserver.Operation
 }
 
+// providerEntry is one auth provider generation. degraded means the
+// provider could not be constructed at load: its routes answer 502
+// until a reload succeeds. A provider that is constructed but whose
+// upstream is currently down stays usable for local session checks.
+type providerEntry struct {
+	id           string
+	provider     authn.Provider
+	loginHandler authn.LoginHandler
+	loginHost    string
+	issuer       string
+	degraded     bool
+	err          error
+}
+
+func (p *providerEntry) usable() bool {
+	return p != nil && p.provider != nil
+}
+
 type Gateway struct {
 	routes []*compiledRoute
 	config *core.Config //for policy inspection
 	client *http.Client
 
-	// auth is the selected authentication provider (dev, http or,
-	// later, native OIDC). Nil only before New finishes.
+	// auth is the default provider (legacy accessor used by
+	// tests/doctor).
 	auth authn.Provider
 
-	// loginHost/loginHandler: a native provider hosts its login page
-	// on a dedicated virtual host, intercepted before any route.
-	loginHost    string
-	loginHandler authn.LoginHandler
+	// providers: id -> generation. defaultProvider is the provider
+	// used by routes without auth.provider.
+	providers       map[string]*providerEntry
+	defaultProvider *providerEntry
+
+	// loginHost/loginHandler: default provider's login surface
+	// (legacy). loginHandlers: all interactive providers by host.
+	loginHost     string
+	loginHandler  authn.LoginHandler
+	loginHandlers map[string]authn.LoginHandler
 
 	// auth-bridge base URL, overridable in tests to stub the
 	// service (default: authBridgeBaseURL). Kept for backward
@@ -100,6 +131,10 @@ type Gateway struct {
 	// tokenBroker is non-nil only when at least one route uses
 	// upstream.delegated.
 	tokenBroker *tokenbroker.Client
+
+	// inflight tracks requests for graceful Close on reload/shutdown.
+	inflight  sync.WaitGroup
+	closeOnce sync.Once
 }
 
 func routeKey(host, path string) string {
@@ -196,7 +231,56 @@ type Reloadable struct {
 }
 
 func (h *Reloadable) Store(gw *Gateway) {
-	h.current.Store(gw)
+	old := h.current.Swap(gw)
+	if old != nil {
+		go func() { _ = old.Close() }()
+	}
+}
+
+// Close drains the current generation and releases its providers.
+func (h *Reloadable) Close() error {
+	if gw := h.current.Load(); gw != nil {
+		return gw.Close()
+	}
+	return nil
+}
+
+// Close waits for in-flight requests (bounded), then closes every
+// provider that owns resources (future out-of-process plugins). The
+// shared bbolt store is process-lifetime by design (OpenBoltShared)
+// and is not closed here.
+func (g *Gateway) Close() error {
+	var first error
+	g.closeOnce.Do(func() {
+		done := make(chan struct{})
+		go func() {
+			g.inflight.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			log.Printf("GATEWAY close: in-flight drain timeout")
+		}
+		closed := map[authn.Provider]bool{}
+		for _, p := range g.providers {
+			if p == nil || p.provider == nil || closed[p.provider] {
+				continue
+			}
+			closed[p.provider] = true
+			if c, ok := p.provider.(interface{ Close() error }); ok {
+				if err := c.Close(); err != nil && first == nil {
+					first = err
+				}
+			}
+		}
+		if len(g.providers) == 0 && g.auth != nil {
+			if c, ok := g.auth.(interface{ Close() error }); ok {
+				first = c.Close()
+			}
+		}
+	})
+	return first
 }
 
 func (h *Reloadable) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -211,6 +295,38 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 	gw := &Gateway{}
 	for _, opt := range opts {
 		opt(gw)
+	}
+
+	// The HTTP client is needed by the auth providers (OIDC discovery,
+	// JWKS, auth-bridge health) and by the proxy. Build it before the
+	// providers so a provider failure cannot leave it nil.
+	gw.client = &http.Client{
+		// Timeout: auth-bridge calls must never freeze request
+		// handling (see authBridgeClientTimeout).
+		Timeout:   authBridgeClientTimeout,
+		Transport: backendTransport,
+		CheckRedirect: func(
+			req *http.Request,
+			via []*http.Request,
+		) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Auth providers are constructed per tenant. A provider that is
+	// unreachable is marked degraded; it must not prevent the other
+	// tenants from starting (fail-fast per tenant only).
+	providers, defaultProvider, loginHandlers, err := buildAuthProviders(cfg, gw)
+	if err != nil {
+		return nil, err
+	}
+	gw.providers = providers
+	gw.defaultProvider = defaultProvider
+	gw.loginHandlers = loginHandlers
+	if defaultProvider != nil {
+		gw.auth = defaultProvider.provider
+		gw.loginHandler = defaultProvider.loginHandler
+		gw.loginHost = defaultProvider.loginHost
 	}
 
 	var routes []*compiledRoute
@@ -414,6 +530,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			stripPrefix: stripPrefix,
 			pageRoute:   route.Frontend,
 			delegated:   route.DelegatedCredentials(),
+			provider:    gw.providerEntryForRoute(cfg, route),
 		}
 
 		if route.MCPActive() {
@@ -493,6 +610,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 				cr.unit = &accessUnit{
 					resource: route.MCP.Resource,
 					scope:    mcpScopeOrDefault(route.MCP.Scope, cfg),
+					issuer:   cfg.AuthIssuerFor(route),
 					path:     route.MCP.AccessPath(route.Path),
 				}
 			}
@@ -588,9 +706,11 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 				prefix:      normalizePath(full),
 				stripPrefix: svc.stripPrefix,
 				delegated:   svc.delegated,
+				provider:    svc.provider,
 				unit: &accessUnit{
 					resource: set.Resource,
 					scope:    setScope,
+					issuer:   cfg.AuthIssuerFor(&rr),
 					path:     setPath,
 				},
 			}
@@ -623,45 +743,19 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 	gw.routes = routes
 	gw.config = cfg
 	gw.tokenBroker = broker
-	gw.client = &http.Client{
-		// Timeout: auth-bridge calls must never freeze request
-		// handling (see authBridgeClientTimeout).
-		Timeout:   authBridgeClientTimeout,
-		Transport: backendTransport,
-		CheckRedirect: func(
-			req *http.Request,
-			via []*http.Request,
-		) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	provider, loginHandler, err := buildAuthProvider(cfg, gw)
-	if err != nil {
-		return nil, err
-	}
-	gw.auth = provider
-	gw.loginHandler = loginHandler
-	if loginHandler != nil {
-		gw.loginHost = normalizeHost(loginHandler.LoginHost())
-	}
 
 	return gw, nil
 }
 
-// buildAuthProvider constructs the configured provider. The legacy
-// path (no authProvider block) keeps using auth-bridge, exactly as
-// before, so existing deployments are unchanged.
+// buildAuthProvider constructs one configured provider.
 func buildAuthProvider(
 	cfg *core.Config,
 	gw *Gateway,
+	ap *core.AuthProviderConfig,
+	allowed []string,
 ) (authn.Provider, authn.LoginHandler, error) {
-	ap := cfg.AuthProvider
 	if ap == nil {
-		// Legacy config with no oidc block: auth-bridge default,
-		// overridable by -authBridge. Public-only configs never call
-		// the provider.
-		ap = &core.AuthProviderConfig{Type: "http"}
+		return nil, nil, nil
 	}
 
 	switch ap.Type {
@@ -692,10 +786,6 @@ func buildAuthProvider(
 		if ap.Dev != nil && ap.Dev.SessionTTLSeconds > 0 {
 			ttl = time.Duration(ap.Dev.SessionTTLSeconds) * time.Second
 		}
-		allowed := make([]string, 0, len(cfg.Routes))
-		for i := range cfg.Routes {
-			allowed = append(allowed, cfg.Routes[i].Host)
-		}
 		dev, err := authn.NewDev(authn.DevConfig{
 			LoginBaseURL: ap.LoginBaseURL,
 			CookieDomain: ap.CookieDomain,
@@ -713,22 +803,12 @@ func buildAuthProvider(
 		return dev, dev, nil
 
 	case "oidc":
-		allowed := make([]string, 0, len(cfg.Routes))
-		for i := range cfg.Routes {
-			allowed = append(allowed, cfg.Routes[i].Host)
-		}
-		if ap.SessionStore == nil {
-			ap.SessionStore = &core.SessionStoreConfig{
-				Type: "bolt", Path: "./gate-one-state.db"}
+		store, storeID, err := openRevocationStore(ap)
+		if err != nil {
+			return nil, nil, err
 		}
 		revocationTTL := time.Duration(
 			ap.RevocationTTLSeconds) * time.Second
-		store, err := authn.OpenBoltShared(
-			ap.SessionStore.Path, revocationTTL)
-		if err != nil {
-			return nil, nil, fmt.Errorf(
-				"authProvider.sessionStore: %w", err)
-		}
 		var sessionKey []byte
 		if ap.SessionKeyEnv != "" {
 			sum := sha256.Sum256([]byte(os.Getenv(ap.SessionKeyEnv)))
@@ -738,11 +818,14 @@ func buildAuthProvider(
 			context.Background(), 10*time.Second)
 		defer cancel()
 		p, err := authn.NewOIDC(ctx, authn.OIDCConfig{
+			ProviderID:            ap.ID,
 			Issuer:                ap.Issuer,
 			ClientID:              ap.ClientID,
 			ClientSecret:          ap.ClientSecret,
 			LoginBaseURL:          ap.LoginBaseURL,
 			CookieDomain:          ap.CookieDomain,
+			CookieName:            ap.CookieName,
+			TxCookieName:          txCookieName(ap),
 			AllowedHosts:          allowed,
 			Scopes:                ap.Scopes,
 			RedirectURL:           ap.RedirectURL,
@@ -751,6 +834,7 @@ func buildAuthProvider(
 			MCPAudience:           ap.MCPAudience,
 			SessionTTL:            time.Duration(ap.SessionTTLSeconds) * time.Second,
 			Store:                 store,
+			StoreID:               storeID,
 			SessionKey:            sessionKey,
 			LegacyTokenCookies:    ap.LegacyTokenCookies,
 			BackchannelLogout:     ap.BackchannelLogout,
@@ -758,13 +842,46 @@ func buildAuthProvider(
 			RevocationTTL:         revocationTTL,
 		})
 		if err != nil {
+			closeIfRedis(store)
 			return nil, nil, err
 		}
 		log.Printf(
-			"OIDC enabled issuer=%s login=%s redirect=%s store=bolt(%s)",
+			"OIDC enabled issuer=%s login=%s redirect=%s store=%s",
 			ap.Issuer, p.LoginURL(), ap.RedirectURL,
-			ap.SessionStore.Path)
+			storeLabel(ap.SessionStore))
 		return p, p, nil
+
+	case "jwt":
+		var store authn.RevocationStore
+		if ap.SessionStore != nil {
+			var err error
+			store, _, err = openRevocationStore(ap)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		p, err := authn.NewJWT(context.Background(), authn.JWTConfig{
+			Issuer:      ap.Issuer,
+			Audience:    ap.Audience,
+			JWKSURL:     ap.JWKSURL,
+			Algorithms:  ap.Algorithms,
+			RoleClaims:  ap.RoleClaims,
+			ScopesClaim: ap.ScopesClaim,
+			Header:      ap.TokenHeader,
+			CookieName:  ap.CookieName,
+			HTTPClient:  gw.client,
+			CacheTTL:    time.Duration(ap.CacheTTLSeconds) * time.Second,
+			Store:       store,
+		})
+		if err != nil {
+			closeIfRedis(store)
+			return nil, nil, err
+		}
+		log.Printf(
+			"JWT enabled issuer=%s jwks=%s audience=%q store=%s",
+			ap.Issuer, ap.JWKSURL, ap.Audience,
+			storeLabel(ap.SessionStore))
+		return p, nil, nil
 
 	case "http", "":
 		base := gw.authBridgeBaseURL
@@ -827,6 +944,254 @@ func buildAuthProvider(
 
 // isLoopbackAddr reports whether a listen address is loopback-only.
 // ":3000" / "0.0.0.0:3000" are NOT loopback (all interfaces).
+// openRevocationStore builds the configured shared/local revocation
+// store. bbolt is process-lifetime (OpenBoltShared) for dev and
+// single-instance deployments; redis is the multi-instance backend.
+func openRevocationStore(
+	ap *core.AuthProviderConfig,
+) (authn.RevocationStore, string, error) {
+	if ap == nil || ap.SessionStore == nil {
+		return nil, "", nil
+	}
+	st := ap.SessionStore
+	switch st.Type {
+	case "bolt":
+		ttl := time.Duration(ap.RevocationTTLSeconds) * time.Second
+		store, err := authn.OpenBoltShared(st.Path, ttl)
+		if err != nil {
+			return nil, "", fmt.Errorf("authProvider.sessionStore: %w", err)
+		}
+		return store, store.StoreID(), nil
+	case "redis":
+		ctx, cancel := context.WithTimeout(
+			context.Background(), 5*time.Second)
+		defer cancel()
+		store, err := authn.OpenRedisStore(ctx, authn.RedisConfig{
+			URL:           st.URL,
+			SentinelAddrs: st.SentinelAddrs,
+			MasterName:    st.MasterName,
+			Username:      st.Username,
+			Password:      st.Password,
+			DB:            st.DB,
+			Prefix:        st.Prefix,
+			DialTimeout:   durationMS(st.DialTimeoutMS, 500),
+			ReadTimeout:   durationMS(st.ReadTimeoutMS, 300),
+			WriteTimeout:  durationMS(st.WriteTimeoutMS, 300),
+			PoolSize:      intOrDefault(st.PoolSize, 64),
+		})
+		if err != nil {
+			return nil, "", fmt.Errorf("authProvider.sessionStore: %w", err)
+		}
+		return store, store.StoreID(), nil
+	default:
+		return nil, "", fmt.Errorf(
+			"authProvider.sessionStore.type %q: unknown (expected bolt or redis)",
+			st.Type)
+	}
+}
+
+func closeIfRedis(s authn.RevocationStore) {
+	if r, ok := s.(*authn.RedisStore); ok {
+		_ = r.Close()
+	}
+}
+
+func durationMS(ms, fallback int) time.Duration {
+	if ms <= 0 {
+		ms = fallback
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func intOrDefault(v, fallback int) int {
+	if v <= 0 {
+		return fallback
+	}
+	return v
+}
+
+func storeLabel(st *core.SessionStoreConfig) string {
+	if st == nil {
+		return "none"
+	}
+	switch st.Type {
+	case "redis":
+		if st.MasterName != "" {
+			return "redis-sentinel(" + st.MasterName + ")"
+		}
+		return "redis"
+	case "bolt":
+		return "bolt(" + st.Path + ")"
+	default:
+		return st.Type
+	}
+}
+
+// buildAuthProviders constructs every configured provider. A provider
+// that is unreachable is kept as a degraded entry (fail-fast per
+// tenant); a dev provider misconfiguration remains a global startup
+// error because it is a local precondition, not an upstream outage.
+func buildAuthProviders(
+	cfg *core.Config,
+	gw *Gateway,
+) (map[string]*providerEntry, *providerEntry, map[string]authn.LoginHandler, error) {
+	list := cfg.AuthProviders
+	if len(list) == 0 && cfg.AuthProvider != nil {
+		list = []*core.AuthProviderConfig{cfg.AuthProvider}
+	}
+	providers := make(map[string]*providerEntry, len(list))
+	handlers := make(map[string]authn.LoginHandler)
+	if len(list) == 0 {
+		return providers, nil, handlers, nil
+	}
+	var defaultEntry *providerEntry
+	for _, ap := range list {
+		if ap == nil {
+			continue
+		}
+		id := ap.ID
+		if id == "" {
+			id = "default"
+		}
+		allowed := allowedHostsForProvider(cfg, ap)
+		p, lh, err := buildAuthProvider(cfg, gw, ap, allowed)
+		entry := &providerEntry{id: id, issuer: ap.Issuer}
+		if err != nil {
+			if ap.Type == "dev" {
+				return nil, nil, nil, err
+			}
+			entry.degraded = true
+			entry.err = err
+			log.Printf(
+				"AUTH PROVIDER degraded id=%s type=%s: %v",
+				id, ap.Type, err)
+		} else {
+			entry.provider = p
+			entry.loginHandler = lh
+			if lh != nil {
+				host := normalizeHost(lh.LoginHost())
+				entry.loginHost = host
+				if other, ok := handlers[host]; ok {
+					_ = other
+					return nil, nil, nil, fmt.Errorf(
+						"auth provider %q: login host %q is already used "+
+							"by another provider", id, host)
+				}
+				handlers[host] = lh
+			}
+		}
+		providers[id] = entry
+		if id == cfg.DefaultAuthProvider {
+			defaultEntry = entry
+		}
+	}
+	if defaultEntry == nil && cfg.DefaultAuthProvider != "" {
+		defaultEntry = providers[cfg.DefaultAuthProvider]
+	}
+	if defaultEntry == nil {
+		for _, entry := range providers {
+			defaultEntry = entry
+			break
+		}
+	}
+	return providers, defaultEntry, handlers, nil
+}
+
+func allowedHostsForProvider(
+	cfg *core.Config, ap *core.AuthProviderConfig,
+) []string {
+	if cfg == nil || ap == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(cfg.Routes))
+	for i := range cfg.Routes {
+		r := &cfg.Routes[i]
+		got := cfg.AuthProviderFor(r)
+		if got == nil || got.ID != ap.ID {
+			continue
+		}
+		if r.Host == "" || seen[r.Host] {
+			continue
+		}
+		seen[r.Host] = true
+		out = append(out, r.Host)
+	}
+	return out
+}
+
+func txCookieName(ap *core.AuthProviderConfig) string {
+	if ap == nil || ap.ID == "" || ap.ID == "default" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range ap.ID {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "gate_one_oidc_tx_" + b.String()
+}
+
+func (g *Gateway) providerEntryForRoute(
+	cfg *core.Config, route *core.Route,
+) *providerEntry {
+	if g == nil || cfg == nil || route == nil {
+		return nil
+	}
+	ap := cfg.AuthProviderFor(route)
+	if ap == nil {
+		return nil
+	}
+	return g.providers[ap.ID]
+}
+
+// providerFor resolves the provider of a compiled route. A nil
+// cr.provider means "default provider"; the g.auth fallback keeps the
+// historical test seam (tests replace g.auth after construction).
+func (g *Gateway) providerFor(cr *compiledRoute) *providerEntry {
+	if cr != nil && cr.provider != nil {
+		// Historical test seam: tests replace g.auth after New to
+		// point at a stub auth-bridge. The default route must follow
+		// that replacement, while an explicit per-route provider
+		// always wins.
+		if g.defaultProvider != nil &&
+			cr.provider == g.defaultProvider &&
+			g.auth != nil &&
+			g.auth != g.defaultProvider.provider {
+			return &providerEntry{id: cr.provider.id, provider: g.auth}
+		}
+		return cr.provider
+	}
+	if g.defaultProvider != nil &&
+		(g.auth == nil || g.defaultProvider.provider == g.auth) {
+		return g.defaultProvider
+	}
+	if g.auth != nil {
+		return &providerEntry{id: "legacy", provider: g.auth}
+	}
+	return g.defaultProvider
+}
+
+func (g *Gateway) loginHandlerFor(host string) authn.LoginHandler {
+	h := normalizeHost(host)
+	if g.loginHandlers != nil {
+		if lh, ok := g.loginHandlers[h]; ok {
+			return lh
+		}
+	}
+	if g.loginHandler != nil && g.loginHost == h {
+		return g.loginHandler
+	}
+	return nil
+}
+
 func isLoopbackAddr(addr string) bool {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
@@ -881,10 +1246,17 @@ func (g *Gateway) serveMCPProtectedResourceMetadata(
 ) {
 	w.Header().Set("Content-Type", "application/json")
 
+	issuer := ""
+	if unit != nil {
+		issuer = unit.issuer
+	}
+	if issuer == "" {
+		issuer = g.config.AuthIssuer()
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"resource": resourceForUnit(unit, r.Host, clientScheme(r)),
 		"authorization_servers": []string{
-			g.config.AuthIssuer(),
+			issuer,
 		},
 		"scopes_supported":         []string{scopeForUnit(unit)},
 		"bearer_methods_supported": []string{"header"},
@@ -1368,10 +1740,11 @@ func (g *Gateway) serveAuthState(
 	w http.ResponseWriter,
 	r *http.Request,
 	ctx *RequestContext,
+	cr *compiledRoute,
 ) {
 	// a session probe must never be cacheable
 	w.Header().Set("Cache-Control", "no-store")
-	sctx, err := g.checkAuth(w, r, ctx)
+	sctx, err := g.checkAuthWithProvider(w, r, ctx, g.providerFor(cr))
 	if err != nil {
 		if errors.Is(err, authn.ErrProviderUnavailable) {
 			w.Header().Set("Content-Type", "application/json")
@@ -1556,6 +1929,8 @@ func (g *Gateway) unitForMetadataPath(
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	g.inflight.Add(1)
+	defer g.inflight.Done()
 
 	// Platform hardening on EVERY response (proxied or generated).
 	w = newSecurityWriter(w, g.config.SecurityHeaders)
@@ -1569,10 +1944,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Native provider login host (dev, later OIDC): a dedicated
 	// virtual host served BEFORE route matching, exactly like the
-	// production login.<domain>.
-	if g.loginHandler != nil &&
-		normalizeHost(ctx.Host) == g.loginHost {
-		g.loginHandler.ServeLogin(w, r)
+	// production login.<domain>. Per-route providers can each host
+	// their own login surface.
+	if lh := g.loginHandlerFor(ctx.Host); lh != nil {
+		lh.ServeLogin(w, r)
 		return
 	}
 
@@ -1617,8 +1992,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// injected guard for the declarative [data-cladone-auth] gating.
 	//
 	if ctx.Path == AuthStatePath {
-		if _, ok := g.guardRouteForHost(ctx.Host); ok {
-			g.serveAuthState(w, r, ctx)
+		if cr, ok := g.guardRouteForHost(ctx.Host); ok {
+			g.serveAuthState(w, r, ctx, cr)
 			return
 		}
 	}
@@ -1642,13 +2017,14 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			mcpResource := resourceForUnit(
 				unit, ctx.Host, clientScheme(r))
 
-			ctx, err = g.checkMCPAuth(
+			ctx, err = g.checkMCPAuthWithProvider(
 				w,
 				r,
 				ctx,
 				mcpResource,
 				resourceMetadataURL,
 				scopeForUnit(unit),
+				g.providerFor(cr),
 			)
 
 			if err != nil {
@@ -1799,7 +2175,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//
 	if g.needsAuthentication(route, ctx) {
 
-		ctx, err = g.checkAuth(w, r, ctx)
+		ctx, err = g.checkAuthWithProvider(w, r, ctx, g.providerFor(cr))
 
 		if err != nil {
 

@@ -168,6 +168,15 @@ func (g *Gateway) checkAuth(
 	r *http.Request,
 	ctx *RequestContext,
 ) (*RequestContext, error) {
+	return g.checkAuthWithProvider(w, r, ctx, g.providerFor(nil))
+}
+
+func (g *Gateway) checkAuthWithProvider(
+	w http.ResponseWriter,
+	r *http.Request,
+	ctx *RequestContext,
+	entry *providerEntry,
+) (*RequestContext, error) {
 	log.Printf(
 		"AUTH CHECK method=%s host=%s uri=%s authorization=%t",
 		r.Method,
@@ -176,10 +185,10 @@ func (g *Gateway) checkAuth(
 		r.Header.Get("Authorization") != "",
 	)
 
-	provider := g.auth
-	if provider == nil {
+	if !entry.usable() {
 		return nil, authn.ErrProviderUnavailable
 	}
+	provider := entry.provider
 
 	// Identity cache: one provider round-trip per session and per
 	// TTL instead of one per request. A silent refresh's Set-Cookie
@@ -187,13 +196,16 @@ func (g *Gateway) checkAuth(
 	// one) — after rotation, cookies change → new key. The provider
 	// name is part of the key so a config reload with another
 	// provider cannot reuse a stale identity.
-	key := provider.Name() + "|" + authCacheKey(r)
+	// The provider ID (not the implementation name: two OIDC/JWT
+	// providers both return "oidc"/"jwt") is part of the cache key.
+	key := entry.id + "|" + provider.Name() + "|" + authCacheKey(r)
 	if cached, ok := cachedAuth(key); ok {
 		atomic.AddInt64(&statAuthCacheHi, 1)
 		log.Printf("AUTH CACHE hit user=%q", cached.Username)
 		id := authn.Identity{
 			UserID:    cached.UserID,
 			SessionID: cached.SessionID,
+			IssuedAt:  cached.IssuedAt,
 			Username:  cached.Username,
 			Email:     cached.Email,
 			Roles:     cached.Roles,
@@ -248,6 +260,7 @@ func (g *Gateway) checkAuth(
 func applyIdentity(ctx *RequestContext, id authn.Identity) {
 	ctx.UserID = id.UserID
 	ctx.SessionID = id.SessionID
+	ctx.IssuedAt = id.IssuedAt
 	ctx.Username = id.Username
 	ctx.Email = id.Email
 	ctx.Roles = id.Roles
@@ -263,11 +276,24 @@ func (g *Gateway) checkMCPAuth(
 	resourceMetadataURL string,
 	scope string,
 ) (*RequestContext, error) {
+	return g.checkMCPAuthWithProvider(
+		w, r, ctx, resource, resourceMetadataURL, scope, g.providerFor(nil))
+}
 
-	provider := g.auth
-	if provider == nil {
+func (g *Gateway) checkMCPAuthWithProvider(
+	w http.ResponseWriter,
+	r *http.Request,
+	ctx *RequestContext,
+	resource string,
+	resourceMetadataURL string,
+	scope string,
+	entry *providerEntry,
+) (*RequestContext, error) {
+
+	if !entry.usable() {
 		return nil, authn.ErrProviderUnavailable
 	}
+	provider := entry.provider
 
 	res, err := provider.VerifyMCP(r.Context(), r, scope, resource)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,11 +25,23 @@ import (
 // sessions of a user), with an expiry: a revocation only has to live
 // as long as the session/token it kills.
 type RevocationStore interface {
-	// Revoke records a revoked session (sid) and/or user (sub) until
-	// expires. Empty sid and sub is an error.
+	// Revoke records a revoked session (sid) and/or a global user
+	// revocation (sub) until expires. A sub revocation applies only to
+	// sessions/tokens issued before revokedAt (now).
 	Revoke(ctx context.Context, issuer, sid, sub string, expires time.Time) error
-	// IsRevoked reports whether the session or user is revoked.
+	// RevokeSubject records a global logout timestamp for sub.
+	RevokeSubject(
+		ctx context.Context, issuer, sub string,
+		revokedAt, expires time.Time,
+	) error
+	// IsRevoked reports whether the sid is revoked (sub is kept for
+	// compatibility and treated as an all-sessions revocation).
 	IsRevoked(ctx context.Context, issuer, sid, sub string) (bool, error)
+	// IsSubjectRevoked reports whether sub was globally revoked after
+	// issuedAt. issuedAt zero is fail-closed.
+	IsSubjectRevoked(
+		ctx context.Context, issuer, sub string, issuedAt time.Time,
+	) (bool, error)
 	// UseJTI atomically marks a logout-token jti as used. It returns
 	// false when the jti was already seen (replay).
 	UseJTI(ctx context.Context, issuer, jti string, expires time.Time) (bool, error)
@@ -44,13 +57,14 @@ type SessionKeyStore interface {
 }
 
 const (
-	revocationTTLDefault = 24 * time.Hour
-	revocationGCInterval = 5 * time.Minute
-	storeBucketMeta      = "meta"
-	storeBucketRevoked   = "revoked"
-	storeBucketJTI       = "jti"
-	storeKeySession      = "session_key"
-	storeKeyID           = "store_id"
+	revocationTTLDefault  = 24 * time.Hour
+	revocationGCInterval  = 5 * time.Minute
+	storeBucketMeta       = "meta"
+	storeBucketRevoked    = "revoked"
+	storeBucketSubRevoked = "subrevoked"
+	storeBucketJTI        = "jti"
+	storeKeySession       = "session_key"
+	storeKeyID            = "store_id"
 )
 
 func revKey(kind, issuer, value string) string {
@@ -72,6 +86,48 @@ func decodeExpiry(b []byte) int64 {
 	return int64(binary.BigEndian.Uint64(b))
 }
 
+func encodeSub(revokedAt, expires time.Time) []byte {
+	b := make([]byte, 16)
+	binary.BigEndian.PutUint64(b[:8], uint64(revokedAt.Unix()))
+	binary.BigEndian.PutUint64(b[8:], uint64(expires.Unix()))
+	return b
+}
+
+func decodeSub(b []byte) (revokedAt, expires int64, ok bool) {
+	if len(b) != 16 {
+		return 0, 0, false
+	}
+	return int64(binary.BigEndian.Uint64(b[:8])),
+		int64(binary.BigEndian.Uint64(b[8:])), true
+}
+
+// revokeLegacySubKeys migrates old bbolt entries where a subject
+// revocation was stored in the sid bucket without a revokedAt.
+func revokeLegacySubKeys(
+	revoked, sub *bolt.Bucket, now int64,
+) error {
+	var legacy [][]byte
+	if err := revoked.ForEach(func(k, v []byte) error {
+		if strings.HasPrefix(string(k), "sub\x00") {
+			legacy = append(legacy, append([]byte(nil), k...))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, k := range legacy {
+		exp := decodeExpiry(revoked.Get(k))
+		if err := sub.Put(k, encodeSub(
+			time.Unix(now, 0), time.Unix(exp, 0))); err != nil {
+			return err
+		}
+		if err := revoked.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // BoltStore is the default, single-instance revocation store: bbolt on
 // disk for durability, an in-memory map for the hot read path. bbolt
 // locks the file: a second Gate One process cannot open the same file
@@ -81,8 +137,9 @@ type BoltStore struct {
 	path string
 	ttl  time.Duration
 
-	mu      sync.RWMutex
-	revoked map[string]int64 // key -> unix expiry
+	mu         sync.RWMutex
+	revoked    map[string]int64 // sid key -> unix expiry
+	subRevoked map[string]subRevocation
 
 	key     []byte
 	storeID string
@@ -118,12 +175,13 @@ func OpenBoltStore(path string, ttl time.Duration) (*BoltStore, error) {
 	_ = os.Chmod(path, 0o600)
 
 	s := &BoltStore{
-		db:      db,
-		path:    path,
-		ttl:     ttl,
-		revoked: map[string]int64{},
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		db:         db,
+		path:       path,
+		ttl:        ttl,
+		revoked:    map[string]int64{},
+		subRevoked: map[string]subRevocation{},
+		stop:       make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 
 	now := time.Now().Unix()
@@ -133,6 +191,10 @@ func OpenBoltStore(path string, ttl time.Duration) (*BoltStore, error) {
 			return err
 		}
 		revoked, err := tx.CreateBucketIfNotExists([]byte(storeBucketRevoked))
+		if err != nil {
+			return err
+		}
+		subRevoked, err := tx.CreateBucketIfNotExists([]byte(storeBucketSubRevoked))
 		if err != nil {
 			return err
 		}
@@ -162,12 +224,27 @@ func OpenBoltStore(path string, ttl time.Duration) (*BoltStore, error) {
 			}
 		}
 
-		return revoked.ForEach(func(k, v []byte) error {
+		if err := revokeLegacySubKeys(revoked, subRevoked, now); err != nil {
+			return err
+		}
+		if err := revoked.ForEach(func(k, v []byte) error {
 			exp := decodeExpiry(v)
 			if exp > now {
 				s.revoked[string(k)] = exp
 			} else if err := revoked.Delete(k); err != nil {
 				return err
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		return subRevoked.ForEach(func(k, v []byte) error {
+			revokedAt, exp, ok := decodeSub(v)
+			if !ok || exp <= now {
+				return subRevoked.Delete(k)
+			}
+			s.subRevoked[string(k)] = subRevocation{
+				revokedAt: revokedAt, expires: exp,
 			}
 			return nil
 		})
@@ -208,32 +285,60 @@ func (s *BoltStore) Revoke(
 	if expires.IsZero() {
 		expires = time.Now().Add(s.ttl)
 	}
-	keys := make([]string, 0, 2)
 	if sid != "" {
-		keys = append(keys, revKey("sid", issuer, sid))
+		if err := s.revokeSID(issuer, sid, expires); err != nil {
+			return err
+		}
 	}
 	if sub != "" {
-		keys = append(keys, revKey("sub", issuer, sub))
+		if err := s.RevokeSubject(
+			context.Background(), issuer, sub, time.Now(), expires,
+		); err != nil {
+			return err
+		}
 	}
-	value := encodeExpiry(expires)
+	return nil
+}
 
-	// Enforce in memory even if the durable write fails: a revoked
-	// session must stop being served immediately. The handler still
-	// returns 503 so the IdP knows durability is not guaranteed.
+func (s *BoltStore) revokeSID(issuer, sid string, expires time.Time) error {
+	key := revKey("sid", issuer, sid)
 	s.mu.Lock()
-	for _, k := range keys {
-		s.revoked[k] = expires.Unix()
-	}
+	s.revoked[key] = expires.Unix()
 	s.mu.Unlock()
-
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(storeBucketRevoked))
-		for _, k := range keys {
-			if err := b.Put([]byte(k), value); err != nil {
-				return err
-			}
+		if b == nil {
+			return errors.New("sessionStore: revoked bucket missing")
 		}
-		return nil
+		return b.Put([]byte(key), encodeExpiry(expires))
+	})
+}
+
+func (s *BoltStore) RevokeSubject(
+	_ context.Context, issuer, sub string,
+	revokedAt, expires time.Time,
+) error {
+	if sub == "" {
+		return errors.New("sessionStore: empty sub")
+	}
+	if revokedAt.IsZero() {
+		revokedAt = time.Now()
+	}
+	if expires.IsZero() {
+		expires = revokedAt.Add(s.ttl)
+	}
+	key := revKey("sub", issuer, sub)
+	s.mu.Lock()
+	s.subRevoked[key] = subRevocation{
+		revokedAt: revokedAt.Unix(), expires: expires.Unix(),
+	}
+	s.mu.Unlock()
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(storeBucketSubRevoked))
+		if b == nil {
+			return errors.New("sessionStore: subrevoked bucket missing")
+		}
+		return b.Put([]byte(key), encodeSub(revokedAt, expires))
 	})
 }
 
@@ -250,11 +355,31 @@ func (s *BoltStore) IsRevoked(
 		}
 	}
 	if sub != "" {
-		if exp, ok := s.revoked[revKey("sub", issuer, sub)]; ok && exp > now {
-			return true, nil
-		}
+		return s.isSubjectRevokedLocked(issuer, sub, time.Time{})
 	}
 	return false, nil
+}
+
+func (s *BoltStore) IsSubjectRevoked(
+	_ context.Context, issuer, sub string, issuedAt time.Time,
+) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.isSubjectRevokedLocked(issuer, sub, issuedAt)
+}
+
+func (s *BoltStore) isSubjectRevokedLocked(
+	issuer, sub string, issuedAt time.Time,
+) (bool, error) {
+	now := time.Now().Unix()
+	e, ok := s.subRevoked[revKey("sub", issuer, sub)]
+	if !ok || e.expires <= now {
+		return false, nil
+	}
+	if issuedAt.IsZero() {
+		return true, nil
+	}
+	return issuedAt.Unix() <= e.revokedAt, nil
 }
 
 func (s *BoltStore) UseJTI(
@@ -315,11 +440,23 @@ func (s *BoltStore) gc() {
 			expired = append(expired, k)
 		}
 	}
+	expiredSub := make([]string, 0)
+	for k, e := range s.subRevoked {
+		if e.expires <= now {
+			delete(s.subRevoked, k)
+			expiredSub = append(expiredSub, k)
+		}
+	}
 	s.mu.Unlock()
 
 	_ = s.db.Update(func(tx *bolt.Tx) error {
 		if b := tx.Bucket([]byte(storeBucketRevoked)); b != nil {
 			for _, k := range expired {
+				_ = b.Delete([]byte(k))
+			}
+		}
+		if b := tx.Bucket([]byte(storeBucketSubRevoked)); b != nil {
+			for _, k := range expiredSub {
 				_ = b.Delete([]byte(k))
 			}
 		}
@@ -342,12 +479,18 @@ func (s *BoltStore) gc() {
 // MemoryStore is the in-process implementation used by tests and by
 // the dev provider. It is not exposed in the configuration: production
 // single-instance uses bbolt, HA uses redis.
+type subRevocation struct {
+	revokedAt int64
+	expires   int64
+}
+
 type MemoryStore struct {
-	mu      sync.RWMutex
-	revoked map[string]int64
-	jti     map[string]int64
-	key     []byte
-	storeID string
+	mu         sync.RWMutex
+	revoked    map[string]int64
+	subRevoked map[string]subRevocation
+	jti        map[string]int64
+	key        []byte
+	storeID    string
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -356,10 +499,11 @@ func NewMemoryStore() *MemoryStore {
 	_, _ = rand.Read(key)
 	_, _ = rand.Read(id)
 	return &MemoryStore{
-		revoked: map[string]int64{},
-		jti:     map[string]int64{},
-		key:     key,
-		storeID: hex.EncodeToString(id),
+		revoked:    map[string]int64{},
+		subRevoked: map[string]subRevocation{},
+		jti:        map[string]int64{},
+		key:        key,
+		storeID:    hex.EncodeToString(id),
 	}
 }
 
@@ -387,7 +531,30 @@ func (s *MemoryStore) Revoke(
 		s.revoked[revKey("sid", issuer, sid)] = exp
 	}
 	if sub != "" {
-		s.revoked[revKey("sub", issuer, sub)] = exp
+		s.subRevoked[revKey("sub", issuer, sub)] = subRevocation{
+			revokedAt: time.Now().Unix(), expires: exp,
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) RevokeSubject(
+	_ context.Context, issuer, sub string,
+	revokedAt, expires time.Time,
+) error {
+	if sub == "" {
+		return errors.New("sessionStore: empty sub")
+	}
+	if revokedAt.IsZero() {
+		revokedAt = time.Now()
+	}
+	if expires.IsZero() {
+		expires = revokedAt.Add(revocationTTLDefault)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subRevoked[revKey("sub", issuer, sub)] = subRevocation{
+		revokedAt: revokedAt.Unix(), expires: expires.Unix(),
 	}
 	return nil
 }
@@ -405,11 +572,32 @@ func (s *MemoryStore) IsRevoked(
 		}
 	}
 	if sub != "" {
-		if exp, ok := s.revoked[revKey("sub", issuer, sub)]; ok && exp > now {
-			return true, nil
+		rev, err := s.IsSubjectRevoked(
+			context.Background(), issuer, sub, time.Time{})
+		if err != nil || rev {
+			return rev, err
 		}
 	}
 	return false, nil
+}
+
+func (s *MemoryStore) IsSubjectRevoked(
+	_ context.Context, issuer, sub string, issuedAt time.Time,
+) (bool, error) {
+	if sub == "" {
+		return false, nil
+	}
+	now := time.Now().Unix()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.subRevoked[revKey("sub", issuer, sub)]
+	if !ok || e.expires <= now {
+		return false, nil
+	}
+	if issuedAt.IsZero() {
+		return true, nil // fail-closed for legacy/unknown issue time
+	}
+	return issuedAt.Unix() <= e.revokedAt, nil
 }
 
 func (s *MemoryStore) UseJTI(

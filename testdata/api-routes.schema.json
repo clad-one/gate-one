@@ -86,8 +86,16 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["dev", "http", "oidc"],
-          "description": "Provider implementation. Default: dev when a dev block is present, oidc when clientId is present, http otherwise."
+          "enum": ["dev", "http", "oidc", "jwt"],
+          "description": "Provider implementation. Default: dev when a dev block is present, oidc when clientId is present, jwt when jwksUrl is present, http otherwise."
+        },
+        "id": {
+          "type": "string",
+          "description": "Unique provider id when declared in authProviders. The legacy authProvider block is normalized to id \"default\"."
+        },
+        "cookieName": {
+          "type": "string",
+          "description": "Session cookie name for type oidc. Empty = gate_one_session for the default provider, a provider-scoped name for additional providers."
         },
         "baseUrl": {
           "type": "string",
@@ -164,6 +172,28 @@
           "type": "string",
           "description": "MCP access-token audience policy. Empty = scope-only (compatible default). A literal value requires that value in aud. \"auto\" requires the endpoint's own protected-resource identifier (recommended, and used with Keycloak audience mappers)."
         },
+        "jwksUrl": {
+          "type": "string",
+          "description": "JWKS endpoint for type jwt. Required for jwt; the provider never hosts a login page."
+        },
+        "audience": {
+          "type": "string",
+          "description": "Expected audience for type jwt (empty = no audience check, or the MCP resource when VerifyMCP is used)."
+        },
+        "algorithms": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allowed JWT algorithms for type jwt. Default [EdDSA]."
+        },
+        "header": {
+          "type": "string",
+          "description": "Bearer header name for type jwt. Default Authorization."
+        },
+        "cacheTtlSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "JWKS cache TTL for type jwt. Default 300."
+        },
         "sessionTtlSeconds": {
           "type": "integer",
           "minimum": 1,
@@ -183,17 +213,67 @@
         },
         "sessionStore": {
           "type": "object",
-          "description": "RP-side revocation store (back-channel logout, RP logout). Default: bbolt at ./gate-one-state.db, relative to the config file. bbolt is single-writer: a second Gate One instance on the same file is refused. Redis is reserved for the HA backend (not implemented in this release).",
+          "description": "RP-side revocation store (back-channel logout, RP logout). Default: bbolt at ./gate-one-state.db, relative to the config file. bbolt is single-writer: a second Gate One instance on the same file is refused. Redis is the shared, multi-instance backend and makes revocation visible on the next request on every instance.",
           "additionalProperties": false,
           "properties": {
             "type": {
               "type": "string",
               "enum": ["bolt", "redis"],
-              "description": "bolt (default, single instance) or redis (future HA backend; refused by this release)."
+              "description": "bolt (default, single instance) or redis (shared, multi-instance, immediate revocation)."
             },
             "path": {
               "type": "string",
               "description": "bbolt file path. Default ./gate-one-state.db (relative to the config file)."
+            },
+            "url": {
+              "type": "string",
+              "description": "Redis URL for type redis (redis:// or rediss://). Mutually exclusive with sentinel mode."
+            },
+            "sentinelAddrs": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Redis Sentinel addresses (type redis + masterName)."
+            },
+            "masterName": {
+              "type": "string",
+              "description": "Redis Sentinel master name. Requires sentinelAddrs."
+            },
+            "username": {
+              "type": "string",
+              "description": "Redis ACL username."
+            },
+            "passwordEnv": {
+              "type": "string",
+              "description": "Environment variable holding the Redis password. Never put the password in this file."
+            },
+            "db": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis logical database. Default 0."
+            },
+            "prefix": {
+              "type": "string",
+              "description": "Shared revocation key prefix. Default cladone:auth:v1:. Must match the broker's redis.authPrefix."
+            },
+            "dialTimeoutMs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis dial timeout in milliseconds. Default 500."
+            },
+            "readTimeoutMs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis read timeout in milliseconds. Default 300."
+            },
+            "writeTimeoutMs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis write timeout in milliseconds. Default 300."
+            },
+            "poolSize": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis connection pool size. Default 64."
             }
           }
         },
@@ -212,7 +292,7 @@
         "revocationTtlSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "Retention of revocation entries. Default 86400 (24h), never shorter than the session TTL."
+          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the broker), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout."
         },
         "dev": {
           "type": "object",
@@ -244,6 +324,15 @@
           }
         }
       }
+    },
+    "authProviders": {
+      "type": "array",
+      "description": "Named authentication providers for per-route binding. Mutually exclusive with the legacy singular authProvider. Each item uses the same fields as authProvider plus id/cookieName; a route selects one with auth.provider.",
+      "items": { "$ref": "#/properties/authProvider" }
+    },
+    "defaultAuthProvider": {
+      "type": "string",
+      "description": "Provider id used by routes that do not set auth.provider. Required when more than one authProviders entry is declared."
     },
     "oidc": {
       "type": "object",
@@ -430,6 +519,10 @@
       "description": "Authentication policy. Empty ({}) = authentication ALWAYS required. auth.when holds TECHNICAL conditions (method/query/header/body) deciding when authentication is required: one object (AND of its conditions) or an array (OR of ANDs — required if ANY element matches); absent/empty = always required. auth.identity holds IDENTITY conditions (roles/scopes/claims/user), checked after successful authentication (403 otherwise) and only on requests that were actually authenticated.",
       "additionalProperties": false,
       "properties": {
+        "provider": {
+          "type": "string",
+          "description": "ID of the authProviders entry used to verify this route. Empty = defaultAuthProvider. The binding is static and compiled at load; a request cannot choose another provider."
+        },
         "when": {
           "oneOf": [
             { "$ref": "#/definitions/technicalMatch" },

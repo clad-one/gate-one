@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"cladone/gate-one/internal/authn"
 	"cladone/gate-one/internal/core"
 	"cladone/gate-one/internal/proxy"
 )
@@ -171,7 +173,8 @@ func main() {
 	printRoutes(cfg)
 
 	if *check {
-		fmt.Println("Cladone Gate One: configuration is valid")
+		checkOIDCRefreshTTL(os.Stdout, cfg)
+		fmt.Println("Cladone G.O. Gate One: configuration is valid")
 		return
 	}
 
@@ -264,7 +267,7 @@ func main() {
 		}
 	}()
 
-	log.Printf("Cladone Gate One listening on %s", *addr)
+	log.Printf("Cladone G.O. Gate One listening on %s", *addr)
 	printReady(cfg, *addr)
 
 	if err := srv.ListenAndServe(); err != nil &&
@@ -272,14 +275,60 @@ func main() {
 		log.Fatal(err)
 	}
 	<-stopped
+	if err := handler.Close(); err != nil {
+		log.Printf("gateway close: %v", err)
+	}
 	log.Printf("Gateway shut down cleanly")
+}
+
+// checkOIDCRefreshTTL probes OIDC issuers when revocationTtlSeconds is
+// absent. It is best-effort and never changes the -check exit status:
+// an unreachable issuer is reported, not treated as a config error.
+func checkOIDCRefreshTTL(w io.Writer, cfg *core.Config) {
+	for _, ap := range cfg.AuthProviders {
+		if ap == nil || ap.Type != "oidc" ||
+			ap.RevocationTTLSeconds > 0 {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(
+			context.Background(), 3*time.Second)
+		ttl, err := authn.ProbeRefreshTTL(ctx, ap.Issuer, nil)
+		cancel()
+		if err != nil {
+			fmt.Fprintf(w,
+				"WARNING: cannot discover OIDC issuer %s (%s): %v; "+
+					"cannot verify its refresh-token TTL. Set "+
+					"authProvider.revocationTtlSeconds (or "+
+					"authProviders[].revocationTtlSeconds) explicitly if the "+
+					"IdP does not advertise it.\n",
+				ap.Issuer, ap.ID, err)
+			continue
+		}
+		if ttl <= 0 {
+			fmt.Fprintf(w, "WARNING: %s\n",
+				authn.RefreshTTLWarning(ap.Issuer, ap.ID))
+		}
+	}
 }
 
 // printRoutes: the resolved config, one line per route — reviewing
 // a config is done by reading startup output (or -check).
 func printRoutes(cfg *core.Config) {
 	out := &strings.Builder{}
-	if ap := cfg.AuthProvider; ap != nil {
+	if len(cfg.AuthProviders) > 0 {
+		for _, ap := range cfg.AuthProviders {
+			if ap == nil {
+				continue
+			}
+			label := ap.ID
+			if label == "" {
+				label = "default"
+			}
+			fmt.Fprintf(out,
+				"AUTH PROVIDER %-12s %-6s login=%s issuer=%s\n",
+				label, ap.Type, ap.LoginURL, ap.Issuer)
+		}
+	} else if ap := cfg.AuthProvider; ap != nil {
 		fmt.Fprintf(out, "AUTH PROVIDER %s  login=%s  issuer=%s\n",
 			ap.Type, ap.LoginURL, ap.Issuer)
 	}

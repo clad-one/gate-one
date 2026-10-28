@@ -64,6 +64,7 @@ func newMockOIDC(t *testing.T) *mockOIDC {
 				"response_types_supported":              []string{"code"},
 				"subject_types_supported":               []string{"public"},
 				"id_token_signing_alg_values_supported": []string{"RS256"},
+				"cladone_refresh_token_ttl_seconds":     7200,
 				"scopes_supported": []string{
 					"openid", "profile", "email", "offline_access",
 				},
@@ -692,5 +693,20 @@ func TestOIDCDiscoveryFailure(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot discover") {
 		t.Fatalf("err = %v, want discovery refusal", err)
+	}
+}
+
+// TestAC_AUTH_05_BackchannelLogoutRevokesSession is the acceptance
+// traceability alias for the historical back-channel logout test.
+func TestAC_AUTH_05_BackchannelLogoutRevokesSession(t *testing.T) {
+	TestOIDCBackchannelLogout(t)
+}
+
+func TestAC_AUTH_25_RevocationTTLFromDiscovery(t *testing.T) {
+	m := newMockOIDC(t)
+	now := time.Now()
+	o := newTestOIDC(t, m, &now)
+	if o.revocationTTL != 2*time.Hour {
+		t.Fatalf("revocationTTL = %s, want 2h from discovery", o.revocationTTL)
 	}
 }

@@ -128,6 +128,7 @@ func (c *sessionCodec) decode(
 	return Identity{
 		UserID:    userID,
 		SessionID: p.SessionID,
+		IssuedAt:  time.Unix(p.IssuedAt, 0),
 		Username:  p.User,
 		Email:     p.Email,
 		Roles:     p.Roles,

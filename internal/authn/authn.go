@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 )
 
 // Identity is the authenticated user, normalized across providers.
@@ -27,11 +28,15 @@ import (
 type Identity struct {
 	UserID    string
 	SessionID string
-	Username  string
-	Email     string
-	Roles     []string
-	Scopes    []string
-	Claims    map[string]any
+	// IssuedAt is the token/session issue time (iat), used by subject
+	// revocation: a global logout revokes sessions issued before it,
+	// without blocking a new login.
+	IssuedAt time.Time
+	Username string
+	Email    string
+	Roles    []string
+	Scopes   []string
+	Claims   map[string]any
 }
 
 // Result is the outcome of a successful verification. SetCookies

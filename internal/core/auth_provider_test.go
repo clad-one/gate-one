@@ -167,7 +167,7 @@ func TestAuthProviderOIDCConfig(t *testing.T) {
 	}
 }
 
-func TestOIDCSessionStoreRedisNotImplemented(t *testing.T) {
+func TestOIDCSessionStoreRedisRequiresURL(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "oidc",
@@ -180,8 +180,8 @@ func TestOIDCSessionStoreRedisNotImplemented(t *testing.T) {
 		"routes": [{"host": "app.example.com", "path": "/*",
 			"backend": "http://127.0.0.1:1"}]
 	}`)
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("err = %v, want redis refusal", err)
+	if err == nil || !strings.Contains(err.Error(), "url or masterName") {
+		t.Fatalf("err = %v, want redis URL refusal", err)
 	}
 }
 

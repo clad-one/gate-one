@@ -232,6 +232,12 @@ func (b BadgeList) MarshalJSON() ([]byte, error) {
 }
 
 type AuthPolicy struct {
+	// Provider: id of the authProviders entry used to verify this
+	// route. Empty = defaultAuthProvider. The choice is static
+	// (compiled at load) and can never be selected by a request
+	// header/query/cookie.
+	Provider string `json:"provider,omitempty"`
+
 	// When: technical conditions (method/query/header/body) deciding
 	// WHEN authentication is required. One object = AND of its
 	// conditions; an array = OR of ANDs. Absent/empty = always
@@ -1253,9 +1259,22 @@ type Config struct {
 	// AuthProvider selects how requests are authenticated:
 	//   dev  — embedded development IdP (loopback only);
 	//   http — external service implementing the auth contract
-	//          (auth-bridge/Keycloak, or a custom adapter).
+	//          (auth-bridge/Keycloak, or a custom adapter);
+	//   oidc — native OIDC Relying Party;
+	//   jwt  — stateless JWKS bearer verifier (API/MCP only).
 	// Absent = legacy auth-bridge via oidc/-authBridge.
 	AuthProvider *AuthProviderConfig `json:"authProvider,omitempty"`
+
+	// AuthProviders: named providers for per-route authentication.
+	// Mutually exclusive with the legacy singular authProvider.
+	// Each route selects one with auth.provider; empty = the
+	// defaultAuthProvider.
+	AuthProviders []*AuthProviderConfig `json:"authProviders,omitempty"`
+
+	// DefaultAuthProvider: id used by routes that do not set
+	// auth.provider. Required when more than one provider is
+	// declared.
+	DefaultAuthProvider string `json:"defaultAuthProvider,omitempty"`
 
 	// TokenBroker: internal per-user credential broker, used only
 	// by routes declaring upstream.delegated. The shared secret is
@@ -1373,9 +1392,18 @@ type OIDCConfig struct {
 // provider. Three implementations are possible behind the same
 // contract; only the ones implemented by this build are accepted.
 type AuthProviderConfig struct {
-	// Type: dev | http. Empty = http (or dev when the dev block is
-	// present).
+	// ID: unique provider name when declared in authProviders. The
+	// legacy authProvider block is normalized to id "default".
+	ID string `json:"id,omitempty"`
+
+	// Type: dev | http | oidc | jwt. Empty = inferred from the
+	// declared fields (dev block, clientId => oidc, else http).
 	Type string `json:"type,omitempty"`
+
+	// CookieName: session cookie name for oidc. Empty = the legacy
+	// gate_one_session for the default provider, or a provider-scoped
+	// name for additional providers.
+	CookieName string `json:"cookieName,omitempty"`
 
 	// BaseURL: service root for type http (default
 	// http://auth-bridge:3000, or AUTH_BRIDGE_URL).
@@ -1419,6 +1447,13 @@ type AuthProviderConfig struct {
 	MCPAudience       string   `json:"mcpAudience,omitempty"`
 	SessionTTLSeconds int      `json:"sessionTtlSeconds,omitempty"`
 
+	// JWT stateless bearer verifier (type jwt).
+	JWKSURL         string   `json:"jwksUrl,omitempty"`
+	Audience        string   `json:"audience,omitempty"`
+	Algorithms      []string `json:"algorithms,omitempty"`
+	TokenHeader     string   `json:"header,omitempty"`
+	CacheTTLSeconds int      `json:"cacheTtlSeconds,omitempty"`
+
 	// LegacyTokenCookies mirrors auth-bridge's access_token /
 	// refresh_token / id_token cookies on cookieDomain (migration
 	// bridge for auth-bridge's token-broker routes).
@@ -1441,8 +1476,10 @@ type AuthProviderConfig struct {
 	// /backchannel-logout endpoint (best effort).
 	BackchannelForwardURL string `json:"backchannelForwardUrl,omitempty"`
 
-	// RevocationTTLSeconds: retention of revocation entries. Default
-	// 86400 (24h), never shorter than the session TTL.
+	// RevocationTTLSeconds: retention of revocation entries. Default:
+	// the broker's advertised refresh-token TTL, else 30 days; never
+	// shorter than the session TTL. A global logout must outlive the
+	// refresh tokens it invalidates.
 	RevocationTTLSeconds int `json:"revocationTtlSeconds,omitempty"`
 
 	// Links: connector-owned links displayed in the user badge.
@@ -1456,12 +1493,26 @@ type AuthProviderConfig struct {
 
 // SessionStoreConfig selects the RP-side revocation store.
 type SessionStoreConfig struct {
-	// Type: bolt (default, single instance). redis is reserved for
-	// the HA backend (not implemented in this release).
+	// Type: bolt (default, single instance) or redis (shared,
+	// multi-instance, immediate revocation).
 	Type string `json:"type,omitempty"`
 	// Path: bbolt file (default ./gate-one-state.db). Single-writer:
 	// a second Gate One process on the same file is refused.
 	Path string `json:"path,omitempty"`
+
+	// Redis: single URL (redis:// or rediss://) or Sentinel mode.
+	URL            string   `json:"url,omitempty"`
+	SentinelAddrs  []string `json:"sentinelAddrs,omitempty"`
+	MasterName     string   `json:"masterName,omitempty"`
+	Username       string   `json:"username,omitempty"`
+	PasswordEnv    string   `json:"passwordEnv,omitempty"`
+	Password       string   `json:"-"`
+	DB             int      `json:"db,omitempty"`
+	Prefix         string   `json:"prefix,omitempty"`
+	DialTimeoutMS  int      `json:"dialTimeoutMs,omitempty"`
+	ReadTimeoutMS  int      `json:"readTimeoutMs,omitempty"`
+	WriteTimeoutMS int      `json:"writeTimeoutMs,omitempty"`
+	PoolSize       int      `json:"poolSize,omitempty"`
 }
 
 // AuthHeadersConfig maps the Gate One identity contract to the
@@ -1535,12 +1586,71 @@ func (r *Route) DelegatedCredentials() *DelegatedCredentialPolicy {
 	return r.Upstream.Delegated
 }
 
+// AuthProviderFor returns the provider bound to a route: its explicit
+// auth.provider, else the default provider. It is resolved statically
+// at load; request data can never select a provider.
+func (c *Config) AuthProviderFor(route *Route) *AuthProviderConfig {
+	if c == nil {
+		return nil
+	}
+	id := ""
+	if route != nil && route.Auth != nil {
+		id = route.Auth.Provider
+	}
+	if id == "" {
+		id = c.DefaultAuthProvider
+	}
+	for _, ap := range c.AuthProviders {
+		if ap != nil && ap.ID == id {
+			return ap
+		}
+	}
+	if id == "" || id == "default" {
+		return c.AuthProvider
+	}
+	return nil
+}
+
+// AuthProviderByID returns a named provider (nil when unknown).
+func (c *Config) AuthProviderByID(id string) *AuthProviderConfig {
+	for _, ap := range c.AuthProviders {
+		if ap != nil && ap.ID == id {
+			return ap
+		}
+	}
+	return nil
+}
+
+// IsInteractive reports whether the provider can drive a browser login.
+// A stateless jwt provider cannot.
+func (p *AuthProviderConfig) IsInteractive() bool {
+	if p == nil {
+		return false
+	}
+	switch p.Type {
+	case "dev", "http", "oidc":
+		return true
+	default:
+		return false
+	}
+}
+
 // LoginURLFor: a route's login URL — authGuard.loginUrl
-// (route) wins over the platform provider. Guaranteed non-empty by
+// (route) wins over the route's provider. Guaranteed non-empty by
 // load-time validation for any route that can actually log in.
 func (c *Config) LoginURLFor(route *Route) string {
-	if route.AuthGuard != nil && route.AuthGuard.LoginURL != "" {
+	if route != nil && route.AuthGuard != nil && route.AuthGuard.LoginURL != "" {
 		return route.AuthGuard.LoginURL
+	}
+	if ap := c.AuthProviderFor(route); ap != nil {
+		if ap.LoginURL != "" {
+			return ap.LoginURL
+		}
+		// An explicit per-route provider with no login URL must not
+		// silently fall back to the default provider's login page.
+		if route != nil && route.Auth != nil && route.Auth.Provider != "" {
+			return ""
+		}
 	}
 	if c.AuthProvider != nil && c.AuthProvider.LoginURL != "" {
 		return c.AuthProvider.LoginURL
@@ -1551,8 +1661,21 @@ func (c *Config) LoginURLFor(route *Route) string {
 	return ""
 }
 
-// AuthIssuer is the OIDC issuer advertised in MCP metadata
-// (authProvider first, legacy oidc fallback).
+// AuthIssuerFor is the OIDC issuer advertised in MCP metadata for a
+// route's provider.
+func (c *Config) AuthIssuerFor(route *Route) string {
+	if ap := c.AuthProviderFor(route); ap != nil {
+		if ap.Issuer != "" {
+			return ap.Issuer
+		}
+		if route != nil && route.Auth != nil && route.Auth.Provider != "" {
+			return ""
+		}
+	}
+	return c.AuthIssuer()
+}
+
+// AuthIssuer is the default OIDC issuer (legacy callers).
 func (c *Config) AuthIssuer() string {
 	if c.AuthProvider != nil && c.AuthProvider.Issuer != "" {
 		return c.AuthProvider.Issuer
@@ -1651,10 +1774,24 @@ func LoadWithOptions(path string, opts LoadOptions) (*Config, error) {
 	}
 	// The bbolt state file is relative to the config file, not to the
 	// process working directory (predictable in Docker and systemd).
-	if ap := cfg.AuthProvider; ap != nil && ap.Type == "oidc" &&
-		ap.SessionStore != nil && !filepath.IsAbs(ap.SessionStore.Path) {
-		ap.SessionStore.Path = filepath.Join(
-			filepath.Dir(path), ap.SessionStore.Path)
+	for _, ap := range cfg.AuthProviders {
+		if ap != nil && (ap.Type == "oidc" || ap.Type == "jwt") &&
+			ap.SessionStore != nil &&
+			ap.SessionStore.Type == "bolt" &&
+			ap.SessionStore.Path != "" &&
+			!filepath.IsAbs(ap.SessionStore.Path) {
+			ap.SessionStore.Path = filepath.Join(
+				filepath.Dir(path), ap.SessionStore.Path)
+		}
+	}
+	if len(cfg.AuthProviders) == 0 && cfg.AuthProvider != nil &&
+		(cfg.AuthProvider.Type == "oidc" || cfg.AuthProvider.Type == "jwt") &&
+		cfg.AuthProvider.SessionStore != nil &&
+		cfg.AuthProvider.SessionStore.Type == "bolt" &&
+		cfg.AuthProvider.SessionStore.Path != "" &&
+		!filepath.IsAbs(cfg.AuthProvider.SessionStore.Path) {
+		cfg.AuthProvider.SessionStore.Path = filepath.Join(
+			filepath.Dir(path), cfg.AuthProvider.SessionStore.Path)
 	}
 
 	// Injection bundles resolved (files read at load: a faulty
@@ -2019,7 +2156,80 @@ func validateUserLink(l *UserLink, field string, requireLabel bool) error {
 	return nil
 }
 
+// validateAuthProviders checks cross-provider invariants: unique ids,
+// login hosts, session cookie names and revocation stores. A mistake
+// here could let one tenant's session be accepted by another.
+func (c *Config) validateAuthProviders() error {
+	if c.DefaultAuthProvider != "" && c.AuthProviderByID(c.DefaultAuthProvider) == nil {
+		return fmt.Errorf(
+			"defaultAuthProvider %q: unknown provider",
+			c.DefaultAuthProvider)
+	}
+	loginHosts := map[string]string{}
+	cookies := map[string]string{}
+	stores := map[string]string{}
+	for _, ap := range c.AuthProviders {
+		if ap == nil {
+			continue
+		}
+		id := ap.ID
+		if id == "" {
+			id = "default"
+		}
+		if ap.IsInteractive() {
+			host := ""
+			if ap.LoginBaseURL != "" {
+				if u, err := url.Parse(ap.LoginBaseURL); err == nil {
+					host = strings.ToLower(u.Hostname())
+				}
+			} else if ap.LoginURL != "" {
+				if u, err := url.Parse(ap.LoginURL); err == nil {
+					host = strings.ToLower(u.Hostname())
+				}
+			}
+			if host != "" {
+				if other, ok := loginHosts[host]; ok && other != id {
+					return fmt.Errorf(
+						"authProviders[%s]: login host %q already used by %q",
+						id, host, other)
+				}
+				loginHosts[host] = id
+			}
+		}
+		if ap.Type == "oidc" {
+			domain := strings.ToLower(strings.Trim(ap.CookieDomain, "."))
+			cookie := ap.CookieName
+			if cookie == "" {
+				cookie = "gate_one_session"
+			}
+			key := domain + "|" + cookie
+			if other, ok := cookies[key]; ok && other != id {
+				return fmt.Errorf(
+					"authProviders[%s]: cookie %q on domain %q already used by %q",
+					id, cookie, domain, other)
+			}
+			cookies[key] = id
+		}
+		if ap.SessionStore != nil && ap.SessionStore.Type == "bolt" {
+			path := ap.SessionStore.Path
+			if path != "" {
+				if other, ok := stores[path]; ok && other != id {
+					return fmt.Errorf(
+						"authProviders[%s]: session store %q already used by %q "+
+							"(bbolt is single-writer)",
+						id, path, other)
+				}
+				stores[path] = id
+			}
+		}
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
+	if err := c.validateAuthProviders(); err != nil {
+		return err
+	}
 	if c.SecurityHeaders != nil {
 		if err := validateSecurityHeaders(c.SecurityHeaders); err != nil {
 			return err
@@ -2063,6 +2273,36 @@ func (c *Config) validate() error {
 			}
 		}
 
+		// Per-route provider binding: the choice is static and
+		// validated here, never at request time.
+		if route.Auth != nil && route.Auth.Provider != "" &&
+			c.AuthProviderByID(route.Auth.Provider) == nil {
+			return fmt.Errorf(
+				"route %s: auth.provider %q: unknown provider",
+				host, route.Auth.Provider)
+		}
+		if route.Auth != nil {
+			ap := c.AuthProviderFor(route)
+			if ap == nil {
+				// Grammar-only config (no provider declared at all):
+				// the existing login-URL check below still refuses a
+				// frontend route that would need a login. A runtime
+				// construction with an auth route and no provider
+				// answers 502 until the operator declares one.
+				if len(c.AuthProviders) > 0 {
+					return fmt.Errorf(
+						"route %s: authentication configured but no auth provider "+
+							"is available (declare authProvider or authProviders)",
+						host)
+				}
+			} else if !ap.IsInteractive() &&
+				(route.Frontend || route.GuardActive()) {
+				return fmt.Errorf(
+					"route %s: provider %q is not interactive and cannot "+
+						"serve a frontend/guard route",
+					host, ap.ID)
+			}
+		}
 		// A login URL is required only when a BROWSER route can
 		// actually log a user in: an authenticated frontend route, or
 		// a frontend user badge whose logout button needs the login
@@ -2079,7 +2319,7 @@ func (c *Config) validate() error {
 				host)
 		}
 
-		if route.MCPActive() && c.AuthIssuer() == "" {
+		if route.MCPActive() && c.AuthIssuerFor(route) == "" {
 			return fmt.Errorf(
 				"route %s: MCP active without an OIDC issuer\n"+
 					"hint: set authProvider.issuer (or the legacy oidc.issuer)",
@@ -2442,11 +2682,70 @@ func joinMCPEndpoint(base, rel string) string {
 func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 	authBridgeURL = strings.TrimRight(strings.TrimSpace(authBridgeURL), "/")
 
+	if len(c.AuthProviders) > 0 {
+		if c.AuthProvider != nil {
+			return fmt.Errorf(
+				"authProvider and authProviders are mutually exclusive")
+		}
+		seen := make(map[string]bool, len(c.AuthProviders))
+		for i, ap := range c.AuthProviders {
+			if ap == nil {
+				return fmt.Errorf("authProviders[%d]: null provider", i)
+			}
+			id := strings.TrimSpace(ap.ID)
+			if id == "" {
+				return fmt.Errorf("authProviders[%d]: id is required", i)
+			}
+			if seen[id] {
+				return fmt.Errorf("authProviders: duplicate id %q", id)
+			}
+			seen[id] = true
+			ap.ID = id
+			override := ""
+			if len(c.AuthProviders) == 1 {
+				override = authBridgeURL
+			}
+			if err := c.resolveOneAuthProvider(ap, override); err != nil {
+				return fmt.Errorf("authProviders[%s]: %w", id, err)
+			}
+			if ap.Type != "oidc" && ap.Type != "jwt" {
+				return fmt.Errorf(
+					"authProviders[%s]: type %q is not allowed in the "+
+						"multi-tenant form (use oidc or jwt; http/dev are "+
+						"legacy authProvider only)",
+					id, ap.Type)
+			}
+		}
+		if c.DefaultAuthProvider == "" {
+			if len(c.AuthProviders) == 1 {
+				c.DefaultAuthProvider = c.AuthProviders[0].ID
+			} else {
+				return fmt.Errorf(
+					"defaultAuthProvider is required when more than one " +
+						"authProviders entry is declared")
+			}
+		}
+		if !seen[c.DefaultAuthProvider] {
+			return fmt.Errorf(
+				"defaultAuthProvider %q: unknown provider",
+				c.DefaultAuthProvider)
+		}
+		for _, ap := range c.AuthProviders {
+			if ap.ID == c.DefaultAuthProvider {
+				// Keep the historical field populated for callers that
+				// still inspect AuthProvider; it is the default only.
+				c.AuthProvider = ap
+				break
+			}
+		}
+		return nil
+	}
+
 	if c.AuthProvider == nil {
 		if c.OIDC == nil && authBridgeURL == "" {
 			return nil
 		}
-		ap := &AuthProviderConfig{Type: "http"}
+		ap := &AuthProviderConfig{Type: "http", ID: "default"}
 		if c.OIDC != nil {
 			ap.LoginURL = c.OIDC.LoginURL
 			ap.Issuer = c.OIDC.Issuer
@@ -2456,25 +2755,46 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 		}
 		c.AuthProvider = ap
 	}
+	if c.AuthProvider.ID == "" {
+		c.AuthProvider.ID = "default"
+	}
+	if err := c.resolveOneAuthProvider(c.AuthProvider, authBridgeURL); err != nil {
+		return err
+	}
+	c.AuthProviders = []*AuthProviderConfig{c.AuthProvider}
+	c.DefaultAuthProvider = c.AuthProvider.ID
+	return nil
+}
 
-	ap := c.AuthProvider
+// resolveOneAuthProvider completes one provider configuration with
+// defaults and validates its type-specific fields.
+func (c *Config) resolveOneAuthProvider(ap *AuthProviderConfig, authBridgeURL string) error {
+	if ap == nil {
+		return fmt.Errorf("null provider")
+	}
 	if ap.Type == "" {
 		switch {
 		case ap.Dev != nil:
 			ap.Type = "dev"
 		case ap.ClientID != "" || ap.ClientSecretEnv != "":
 			ap.Type = "oidc"
+		case ap.JWKSURL != "":
+			ap.Type = "jwt"
 		default:
 			ap.Type = "http"
 		}
 	}
 
+	if ap.Type != "oidc" && ap.Type != "jwt" && ap.SessionStore != nil {
+		return fmt.Errorf(
+			"authProvider.sessionStore is only valid for type oidc or jwt")
+	}
 	if ap.Type != "oidc" &&
-		(ap.SessionStore != nil || ap.SessionKeyEnv != "" ||
+		(ap.SessionKeyEnv != "" ||
 			ap.BackchannelLogout != nil || ap.RevocationTTLSeconds != 0 ||
 			ap.LegacyTokenCookies || ap.BackchannelForwardURL != "") {
 		return fmt.Errorf(
-			"authProvider.sessionStore/sessionKeyEnv/backchannelLogout/" +
+			"authProvider.sessionKeyEnv/backchannelLogout/" +
 				"legacyTokenCookies/backchannelForwardUrl are only valid " +
 				"for type oidc")
 	}
@@ -2650,28 +2970,8 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 			return fmt.Errorf(
 				"authProvider.sessionTtlSeconds: must be positive")
 		}
-		if ap.SessionStore == nil {
-			ap.SessionStore = &SessionStoreConfig{}
-		}
-		if ap.SessionStore.Type == "" {
-			ap.SessionStore.Type = "bolt"
-		}
-		switch ap.SessionStore.Type {
-		case "bolt":
-			ap.SessionStore.Path = strings.TrimSpace(
-				ap.SessionStore.Path)
-			if ap.SessionStore.Path == "" {
-				ap.SessionStore.Path = "./gate-one-state.db"
-			}
-		case "redis":
-			return fmt.Errorf(
-				"authProvider.sessionStore.type \"redis\": not " +
-					"implemented in this release (HA backend); use " +
-					"\"bolt\" for a single instance")
-		default:
-			return fmt.Errorf(
-				"authProvider.sessionStore.type %q: unknown "+
-					"(expected bolt)", ap.SessionStore.Type)
+		if err := c.resolveSessionStore(ap, true); err != nil {
+			return err
 		}
 		ap.SessionKeyEnv = strings.TrimSpace(ap.SessionKeyEnv)
 		if ap.SessionKeyEnv != "" {
@@ -2700,6 +3000,76 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 					"authProvider.backchannelForwardUrl %q: invalid http(s) URL",
 					ap.BackchannelForwardURL)
 			}
+		}
+		if ap.CookieName == "" {
+			if ap.ID != "" && ap.ID != "default" {
+				ap.CookieName = "gate_one_session_" + providerCookieSuffix(ap.ID)
+			}
+		} else if err := (&http.Cookie{Name: ap.CookieName}).Valid(); err != nil {
+			return fmt.Errorf(
+				"authProvider.cookieName %q: %v", ap.CookieName, err)
+		}
+
+	case "jwt":
+		if ap.SessionStore != nil {
+			if err := c.resolveSessionStore(ap, false); err != nil {
+				return err
+			}
+		}
+		ap.Issuer = strings.TrimSpace(ap.Issuer)
+		if ap.Issuer == "" {
+			return fmt.Errorf("authProvider.type jwt: issuer is required")
+		}
+		iu, err := url.Parse(ap.Issuer)
+		if err != nil || iu.Host == "" ||
+			(iu.Scheme != "http" && iu.Scheme != "https") {
+			return fmt.Errorf(
+				"authProvider.issuer %q: invalid http(s) URL", ap.Issuer)
+		}
+		ap.JWKSURL = strings.TrimSpace(ap.JWKSURL)
+		if ap.JWKSURL == "" {
+			return fmt.Errorf(
+				"authProvider.type jwt: jwksUrl is required")
+		}
+		ju, err := url.Parse(ap.JWKSURL)
+		if err != nil || ju.Host == "" ||
+			(ju.Scheme != "http" && ju.Scheme != "https") {
+			return fmt.Errorf(
+				"authProvider.jwksUrl %q: invalid http(s) URL",
+				ap.JWKSURL)
+		}
+		if ap.LoginURL != "" || ap.LoginBaseURL != "" {
+			return fmt.Errorf(
+				"authProvider.type jwt: loginUrl/loginBaseUrl are not " +
+					"supported (stateless bearer provider)")
+		}
+		ap.TokenHeader = strings.TrimSpace(ap.TokenHeader)
+		if ap.TokenHeader == "" {
+			ap.TokenHeader = "Authorization"
+		}
+		if ap.CacheTTLSeconds < 0 {
+			return fmt.Errorf(
+				"authProvider.cacheTtlSeconds: must be positive")
+		}
+		if len(ap.Algorithms) == 0 {
+			ap.Algorithms = []string{"EdDSA"}
+		}
+		for _, alg := range ap.Algorithms {
+			switch alg {
+			case "EdDSA", "RS256", "RS384", "RS512",
+				"ES256", "ES384", "ES512",
+				"PS256", "PS384", "PS512":
+			default:
+				return fmt.Errorf(
+					"authProvider.algorithms: unsupported JWT algorithm %q",
+					alg)
+			}
+		}
+		if ap.CookieName != "" &&
+			(&http.Cookie{Name: ap.CookieName}).Valid() != nil {
+			return fmt.Errorf(
+				"authProvider.cookieName %q: invalid cookie name",
+				ap.CookieName)
 		}
 
 	case "http":
@@ -2775,6 +3145,117 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 	}
 
 	return nil
+}
+
+// resolveSessionStore validates and defaults a revocation store. The
+// Redis mode is the shared, multi-instance backend: OIDC requires an
+// explicit sessionKeyEnv so every instance signs the same cookie.
+func (c *Config) resolveSessionStore(
+	ap *AuthProviderConfig, required bool,
+) error {
+	if ap.SessionStore == nil {
+		if !required {
+			return nil
+		}
+		ap.SessionStore = &SessionStoreConfig{}
+	}
+	st := ap.SessionStore
+	if st.Type == "" {
+		st.Type = "bolt"
+	}
+	switch st.Type {
+	case "bolt":
+		if st.URL != "" || len(st.SentinelAddrs) > 0 ||
+			st.MasterName != "" || st.PasswordEnv != "" ||
+			st.Username != "" || st.DB != 0 || st.Prefix != "" {
+			return fmt.Errorf(
+				"authProvider.sessionStore: redis fields set with type bolt")
+		}
+		st.Path = strings.TrimSpace(st.Path)
+		if st.Path == "" {
+			st.Path = "./gate-one-state.db"
+		}
+	case "redis":
+		if st.Path != "" {
+			return fmt.Errorf(
+				"authProvider.sessionStore: path is not valid for type redis")
+		}
+		st.URL = strings.TrimSpace(st.URL)
+		st.MasterName = strings.TrimSpace(st.MasterName)
+		st.Username = strings.TrimSpace(st.Username)
+		st.Prefix = strings.TrimSpace(st.Prefix)
+		if st.MasterName != "" && len(st.SentinelAddrs) == 0 {
+			return fmt.Errorf(
+				"authProvider.sessionStore: sentinelAddrs required with masterName")
+		}
+		if st.MasterName == "" && st.URL == "" && len(st.SentinelAddrs) == 0 {
+			return fmt.Errorf(
+				"authProvider.sessionStore: url or masterName/sentinelAddrs required")
+		}
+		if st.MasterName == "" && len(st.SentinelAddrs) > 0 {
+			return fmt.Errorf(
+				"authProvider.sessionStore: masterName required with sentinelAddrs")
+		}
+		for _, addr := range st.SentinelAddrs {
+			if strings.TrimSpace(addr) == "" {
+				return fmt.Errorf(
+					"authProvider.sessionStore.sentinelAddrs: empty address")
+			}
+		}
+		if st.DB < 0 {
+			return fmt.Errorf(
+				"authProvider.sessionStore.db: must be >= 0")
+		}
+		if st.DialTimeoutMS < 0 || st.ReadTimeoutMS < 0 ||
+			st.WriteTimeoutMS < 0 || st.PoolSize < 0 {
+			return fmt.Errorf(
+				"authProvider.sessionStore: timeouts and poolSize must be >= 0")
+		}
+		if st.PasswordEnv != "" {
+			if !envVarName.MatchString(st.PasswordEnv) {
+				return fmt.Errorf(
+					"authProvider.sessionStore.passwordEnv %q: invalid environment variable name",
+					st.PasswordEnv)
+			}
+			secret, ok := os.LookupEnv(st.PasswordEnv)
+			if !ok || secret == "" {
+				return fmt.Errorf(
+					"authProvider.sessionStore: environment variable %s is empty",
+					st.PasswordEnv)
+			}
+			st.Password = secret
+		}
+		if st.Prefix == "" {
+			st.Prefix = "cladone:auth:v1:"
+		}
+		if ap.Type == "oidc" && strings.TrimSpace(ap.SessionKeyEnv) == "" {
+			return fmt.Errorf(
+				"authProvider.sessionStore.type redis: sessionKeyEnv is " +
+					"required so every instance signs the same session cookie")
+		}
+	default:
+		return fmt.Errorf(
+			"authProvider.sessionStore.type %q: unknown (expected bolt or redis)",
+			st.Type)
+	}
+	return nil
+}
+
+// providerCookieSuffix turns a provider id into a cookie-safe suffix.
+func providerCookieSuffix(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "provider"
+	}
+	return b.String()
 }
 
 // resolveTokenBroker loads the shared secret for routes that use
