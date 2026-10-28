@@ -1,0 +1,276 @@
+= Cladone G.O. Gate One — Broker d'authentification OIDC
+:toc:
+:toclevels: 2
+
+== 1. Rôle
+
+Le broker est un **émetteur OIDC/JWT multi-tenant** :
+
+* il fédère le login vers Google (V1) ;
+* il applique la politique locale (tenant, rôles, audiences) ;
+* il ré-émet ses propres JWT signés Ed25519 ;
+* Gate One ne fait confiance qu'au broker, jamais à Google.
+
+Gate One ne charge **aucun plugin de provider**. Il connaît seulement
+`type: "oidc"` (navigateur/MCP) et `type: "jwt"` (Bearer API).
+
+== 2. Flux
+
+== 2.1 Navigateur
+
+----
+Navigateur
+  -> Gate One (route acme, pas de session)
+  -> broker /t/acme/authorize
+  -> Google
+  -> broker /t/acme/callback
+  -> Gate One /auth/callback
+  -> session Gate One
+----
+
+== 2.2 Session partagée et logout global
+
+Le broker pose un cookie de session **host-only** sur son propre host,
+avec `Path=/t/{tenant}`. Toutes les applications d'un même navigateur
+qui passent par ce tenant réutilisent le même `sid` OIDC.
+
+Conséquence :
+
+* un logout depuis n'importe quelle app Gate One révoque le `sid` **et
+  le `sub`** de l'utilisateur ; toutes ses sessions existantes, tous
+  navigateurs/appareils confondus, sont refusées à la requête suivante ;
+* `/t/{tenant}/logout` révoque aussi `sid`/`sub` (cookie ou
+  `id_token_hint`), supprime la session broker et efface le cookie ;
+* la révocation `sub` porte un timestamp : les sessions/tokens émis
+  **avant** le logout sont refusés, mais un nouveau login après le logout
+  est autorisé (pas de verrouillage utilisateur) ;
+* les refresh tokens et codes d'autorisation émis avant le logout sont
+  refusés à l'échange ;
+* Gate One déduit son `revocationTtlSeconds` par défaut du champ de
+  discovery `cladone_refresh_token_ttl_seconds` publié par le broker :
+  la révocation couvre donc les refresh tokens sans réglage manuel.
+
+Le cookie est inutile aux applications : il n'est envoyé qu'au broker.
+Le `sid` partagé sert au logout par navigateur ; le `sub` garantit le
+logout global utilisateur.
+
+== 2.3 Machine / MCP
+
+----
+Client M2M
+  -> broker /t/acme/token (client_credentials)
+  -> access token JWT (aud = ressource MCP)
+  -> Gate One Authorization: Bearer
+  -> validation JWKS locale
+----
+
+== 3. Configuration du broker
+
+[source,json]
+----
+{
+  "publicUrl": "https://auth.example.com",
+  "listen": ":8081",
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "passwordEnv": "REDIS_PASSWORD",
+    "prefix": "cladone:broker:v1:",
+    "authPrefix": "cladone:auth:v1:"
+  },
+  "tenants": [
+    {
+      "id": "acme",
+      "clientId": "cladone-go",
+      "clientSecretEnv": "ACME_BROKER_CLIENT_SECRET",
+      "redirectUris": [
+        "https://login.acme.example.com/auth/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "https://app.acme.example.com/"
+      ],
+      "audiences": [
+        "https://mcp.acme.example.com"
+      ],
+      "keyFiles": [
+        "keys/acme-2025.key",
+        "keys/acme-2026.key"
+      ],
+      "google": {
+        "issuer": "https://accounts.google.com",
+        "clientId": "REPLACE_ME.apps.googleusercontent.com",
+        "clientSecretEnv": "GOOGLE_CLIENT_SECRET",
+        "hostedDomain": "acme.example.com",
+        "scopes": ["openid", "profile", "email"]
+      },
+      "defaultRoles": ["user"],
+      "allowedDomains": ["acme.example.com"],
+      "adminEmails": ["admin@acme.example.com"],
+      "groupRoles": {
+        "admins": ["admin"]
+      },
+      "accessTokenTtlSeconds": 600,
+      "idTokenTtlSeconds": 600,
+      "refreshTokenTtlSeconds": 2592000,
+      "sessionTtlSeconds": 43200
+    }
+  ]
+}
+----
+
+Le broker expose :
+
+----
+GET  /health
+GET  /t/{tenant}/.well-known/openid-configuration
+GET  /t/{tenant}/jwks.json
+GET  /t/{tenant}/authorize
+GET  /t/{tenant}/callback
+POST /t/{tenant}/token
+GET  /t/{tenant}/logout
+----
+
+== 4. Configuration Gate One
+
+[source,json]
+----
+{
+  "authProviders": [
+    {
+      "id": "acme",
+      "type": "oidc",
+      "issuer": "https://auth.example.com/t/acme",
+      "clientId": "cladone-go",
+      "clientSecretEnv": "ACME_OIDC_SECRET",
+      "loginBaseUrl": "https://login.acme.example.com",
+      "cookieDomain": "acme.example.com",
+      "cookieName": "cladone_acme_session",
+      "roleClaims": ["roles"],
+      "mcpAudience": "https://mcp.acme.example.com",
+      "sessionStore": {
+        "type": "redis",
+        "url": "redis://redis:6379/0",
+        "passwordEnv": "REDIS_PASSWORD",
+        "prefix": "cladone:auth:v1:"
+      },
+      "sessionKeyEnv": "ACME_SESSION_KEY"
+    }
+  ],
+  "defaultAuthProvider": "acme",
+  "routes": [
+    {
+      "host": "app.acme.example.com",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://app:8080",
+      "auth": { "provider": "acme" }
+    }
+  ]
+}
+----
+
+Pour une API machine non-MCP :
+
+[source,json]
+----
+{
+  "authProviders": [
+    {
+      "id": "acme-api",
+      "type": "jwt",
+      "issuer": "https://auth.example.com/t/acme",
+      "jwksUrl": "https://auth.example.com/t/acme/jwks.json",
+      "audience": "https://api.acme.example.com",
+      "algorithms": ["EdDSA"]
+    }
+  ],
+  "routes": [
+    {
+      "host": "api.acme.example.com",
+      "path": "/*",
+      "backend": "http://api:8080",
+      "auth": { "provider": "acme-api" }
+    }
+  ]
+}
+----
+
+== 5. Politique
+
+* `tenant` : identifiant du tenant, dans l'ID token et l'access token.
+* `roles` : `defaultRoles` + `adminEmails` + `groupRoles`.
+* `aud` : audience de la ressource pour les access tokens ; `clientId`
+  pour l'ID token.
+* `sid` : identifiant de session, utilisé par la révocation.
+* `allowedDomains` : restreint `hd` / domaine email Google.
+* `email_verified` : refusé s'il est explicitement `false`.
+
+Le broker ne décide pas de l'accès aux routes Gate One. Il authentifie et
+asserte une identité ; Gate One applique `auth.when` / `auth.identity`.
+
+== 6. Mode dégradé
+
+Gate One construit chaque provider indépendamment :
+
+* un provider dont la découverte échoue est `degraded` ;
+* ses routes répondent `502 authentication_unavailable` ;
+* les autres tenants continuent ;
+* les sessions locales déjà émises restent valides ;
+* un token invalide reste `401`, une panne JWKS devient `502`.
+
+Le broker doit être supervisé par tenant : `/health` et les logs.
+
+== 7. Redis, révocation et limites V1
+
+Le broker utilise Redis si le bloc `redis` est présent. En production
+multi-instance, Redis est requis : flows, codes et refresh tokens doivent
+survivre au redémarrage et être partagés. Sans bloc `redis`, le broker
+utilise un store mémoire (tests/dev).
+
+Le broker écrit les révocations `sid`/`sub` dans l'espace
+`authPrefix` ; Gate One les lit avec le même préfixe. La révocation est
+donc visible à la requête suivante sur toutes les instances. Si Redis
+est indisponible, Gate One fail-closed en `502` sur les routes
+authentifiées.
+
+Autres limites V1 :
+
+* Google uniquement comme IdP amont ; Entra/Authentik/Keycloak sont des
+  clients OIDC génériques à ajouter.
+* Chiffrement des refresh tokens au repos non implémenté (les clés Redis
+  doivent être protégées par ACL/TLS).
+* Pas de SAML/LDAP (V1.1/V2) ; ils passeront par `IdentityAdapter`.
+* Pas de gRPC pour les plugins d'adaptateur ; le binding HTTP/JSON est
+  implémenté (`pkg/identityadapter/httpbinding`).
+* Pas de mTLS/API key côté Gate One : le broker authentifie le client et
+  émet un JWT (V1.1).
+
+== 8. Lancement et rotation
+
+[source,bash]
+----
+make build-auth
+./bin/cladone-auth -config testdata/auth/broker.example.json -addr :8081
+
+# Nouvelle clé : l'ajouter en FIN de keyFiles, recharger, puis retirer
+# l'ancienne après expiration des tokens signés avec elle.
+./bin/cladone-auth keygen -out keys/acme-2026.key
+
+# Révocation immédiate d'une session ou d'un utilisateur (Redis requis).
+./bin/cladone-auth revoke -config cladone-auth.json \
+  -tenant acme -sid <sid> -ttl 24h
+----
+
+`keyFiles` est ordonné de l'ancienne à la plus récente : la dernière clé
+signe, toutes les clés publiées restent dans JWKS pendant le
+chevauchement. `keyFile` reste accepté pour une clé unique ; les deux
+sont mutuellement exclusifs.
+
+== 9. Tests
+
+Voir `doc/auth-test-plan.adoc`. Les tests d'acceptation :
+
+[source,bash]
+----
+make test-auth
+make test-auth-race
+----

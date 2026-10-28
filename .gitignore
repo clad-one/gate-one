@@ -3,3 +3,8 @@ test/ui/node_modules/
 node_modules/
 *.test
 dist/
+
+# Build artifacts and local state
+/gate-one
+/gate-one-state.db
+/gate-one-state.db.lock

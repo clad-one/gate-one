@@ -1,4 +1,4 @@
-# Cladone Gate One — sources
+# Cladone G.O. Gate One — sources
 
 Config-driven reverse proxy written in Go: SSO delegation to
 auth-bridge, role guards, PWA wrapping, upstream proxying and
@@ -66,6 +66,92 @@ that keeps auth-bridge **optional**, including for OIDC:
 | `dev` | Embedded development IdP (dedicated `login.<domain>` host, real form, signed session cookie) | none (loopback only) |
 | `http` | Any service implementing the Gate One auth contract (`/auth`, `/auth/mcp`, `/login`, `/logout`, `/auth/popup-done`). auth-bridge is the reference implementation; a non-conforming service needs an adapter. | that service |
 | `oidc` | Native OIDC Relying Party: discovery, code + PKCE, JWKS, session, logout, MCP resource server | an OIDC IdP (Keycloak, Entra, Google, Authentik, Okta, Auth0…) |
+| `jwt` | Stateless JWKS bearer verifier for API/MCP routes; no login page, no cookie session | a JWT issuer with JWKS |
+
+`authProviders` declares named providers, and each route selects one
+with `auth.provider` (empty = `defaultAuthProvider`). This is how a
+second tenant gets its own issuer, key, audience, cookie and store:
+
+```json
+{
+  "authProviders": [
+    {
+      "id": "acme",
+      "type": "oidc",
+      "issuer": "https://auth.example.com/t/acme",
+      "clientId": "cladone-go",
+      "clientSecretEnv": "ACME_OIDC_SECRET",
+      "loginBaseUrl": "https://login.acme.example.com",
+      "cookieDomain": "acme.example.com",
+      "cookieName": "cladone_acme_session",
+      "roleClaims": ["roles"],
+      "mcpAudience": "https://mcp.acme.example.com",
+      "sessionStore": {"type": "bolt", "path": "./state/acme.db"}
+    },
+    {
+      "id": "acme-api",
+      "type": "jwt",
+      "issuer": "https://auth.example.com/t/acme",
+      "jwksUrl": "https://auth.example.com/t/acme/jwks.json",
+      "audience": "https://api.acme.example.com",
+      "algorithms": ["EdDSA"]
+    }
+  ],
+  "defaultAuthProvider": "acme",
+  "routes": [
+    {"host": "app.acme.example.com", "path": "/*", "frontend": true,
+     "backend": "http://app:8080", "auth": {"provider": "acme"}},
+    {"host": "api.acme.example.com", "path": "/*",
+     "backend": "http://api:8080", "auth": {"provider": "acme-api"}}
+  ]
+}
+```
+
+The singular `authProvider` remains accepted as a legacy alias
+(normalized to `id: "default"`). It is mutually exclusive with
+`authProviders`. In the multi-tenant `authProviders` form, only `oidc`
+and `jwt` are accepted: `http` (auth-bridge) and `dev` are legacy
+single-provider modes.
+
+For multi-instance or immediate revocation, use the shared Redis store:
+
+```json
+"authProviders": [{
+  "id": "acme", "type": "oidc", "...": "...",
+  "sessionKeyEnv": "ACME_SESSION_KEY",
+  "sessionStore": {
+    "type": "redis",
+    "url": "redis://redis:6379/0",
+    "passwordEnv": "REDIS_PASSWORD",
+    "prefix": "cladone:auth:v1:"
+  }
+}]
+```
+
+`sessionKeyEnv` is required for OIDC+Redis so every instance signs the
+same cookie. The revocation check runs on every authenticated request:
+a revoked `sid`/`sub` is rejected on the next request, on every instance.
+If Redis is unavailable, authenticated routes fail closed with `502`
+(public routes continue).
+
+The broker shares one browser `sid` across all apps of the same tenant
+(host-only broker cookie, `Path=/t/{tenant}`). A logout from any app
+revokes the session `sid` **and the user `sub`** in Redis: every existing
+session/device is rejected on its next request, and broker refresh
+tokens/codes issued before the logout are refused. The `sub` revocation
+carries a timestamp, so a new login after the logout is allowed (no user
+lockout).
+
+A provider that cannot be built (discovery down at startup) is
+**degraded per tenant**: its routes answer `502
+authentication_unavailable`, the other tenants continue, and existing
+local sessions remain valid. An invalid token stays `401`; a JWKS or
+broker outage becomes `502`.
+
+For a second tenant, the recommended companion is the small OIDC broker:
+`doc/auth-broker.adoc` and `cmd/cladone-auth`. It federates Google,
+applies roles/tenant/audience policy, and re-emits Ed25519 JWTs. Gate One
+trusts only that issuer.
 
 Absent `authProvider` = the legacy `oidc` + auth-bridge translation, so
 existing configs keep working. A purely public route needs no auth block
@@ -118,8 +204,8 @@ revocation, `https://login.example.com/backchannel-logout`):
 
 The bbolt file persists back-channel logout revocations across
 restarts; the revocation is checked before the gateway identity cache.
-bbolt is single-writer (one Gate One instance); HA will use a shared
-Redis store later.
+bbolt is single-writer (one Gate One instance); for HA and immediate
+revocation use `sessionStore.type: "redis"` (see above).
 
 `gate-one init --oidc --issuer ... --client-id ...` writes this block and
 prints the URIs to register. auth-bridge stays fully supported
@@ -146,6 +232,8 @@ Strict CSP (nonce styles, custom injections, proxified sites):
 ```bash
 go vet ./...
 go test ./...
+make test-auth             # AC-AUTH-* acceptance tests (authn, broker, proxy, conformance)
+make test-auth-race        # same, under -race
 ./smoke.sh                 # end-to-end: fake backend + auth-bridge + gateway
 ```
 
@@ -359,16 +447,22 @@ Go toolchain on the server.
 
 ```
 cmd/gate-one/       entrypoint (flags, init/doctor, SIGHUP reload, shutdown)
+cmd/cladone-auth/   small multi-tenant OIDC broker (Google federation, JWKS, policy)
 cmd/gate-one-license/ vendor-side licence keygen/sign
-internal/authn/     provider SPI: dev IdP, http adapter, native OIDC, bbolt revocation store
+internal/authn/     provider SPI: dev IdP, http adapter, native OIDC, JWT/JWKS, bbolt store
+internal/broker/    OIDC issuer: tenants, Google adapter, policy, Ed25519 tokens
 internal/core/      config grammar + route loading/validation
 internal/proxy/     reverse proxy, auth, guards, rewriting, limits
 internal/pwa/       PWA wrap (manifest, service worker, Workbox)
 internal/mcp/       MCP endpoint
+pkg/authstate/     shared Redis key schema (revocation, issuer/tenant)
+pkg/pluginmanifest/ signed plugin manifest/artifact/dependency verification
+pkg/identityadapter/ broker-side IdentityAdapter contract + conformance suite
+pkg/identityadapter/httpbinding/ portable HTTP/JSON binding
 test/ui/            guard-script harness (jsdom)
 sw-sim/             service-worker simulator
-testdata/           reference production config
-examples/           minimal static/dev/http/OIDC configs
+testdata/           reference production config; testdata/auth/ broker example
+doc/                auth broker, auth providers, test plan
 release.sh          local release artifacts (never pushes)
 ```
 

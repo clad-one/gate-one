@@ -1,0 +1,1205 @@
+= Cladone G.O. Gate One — Plan de test authentification
+:toc:
+:toclevels: 3
+:icons: font
+
+== 1. Objet et périmètre
+
+Ce plan couvre l'authentification de Gate One et du broker OIDC :
+
+* Gate One ne connaît que **OIDC/JWT** ; il ne charge aucun plugin de provider.
+* Le broker est un **émetteur OIDC/JWT** : il fédère Google, applique la politique
+  (rôles, tenant, audiences), puis ré-émet ses propres JWT signés.
+* Le contrat interne du broker est `IdentityAdapter` : un seul contrat, plusieurs
+  implémentations par protocole (OIDC, puis LDAP/mTLS/API key), un seul mécanisme
+  de chargement pour les plugins.
+* Le mode dégradé est **fail-fast par tenant uniquement** : la panne d'un provider
+  ne doit jamais bloquer les autres tenants.
+* Les erreurs **token invalide** et **provider/réseau indisponible** sont
+  distinctes, avec des statuts HTTP différents.
+
+Hors périmètre V1 :
+
+* SAML et LDAP (V1.1/V2) ;
+* PASETO ;
+* appels réels à Google en CI (faux Google + staging) ;
+* mTLS/API key côté Gate One (V1.1, via le broker).
+
+== 2. Décisions de comportement
+
+=== 2.1 Fail-fast par tenant
+
+Le chargement de configuration reste **globalement strict** : une erreur de
+grammaire, un provider inconnu, un ID dupliqué ou une route incohérente refusent
+le chargement ou le reload. En revanche, la **disponibilité** d'un provider est
+isolée par tenant.
+
+[cols="1,3,3,2"]
+|===
+| Situation | Gate One | Routes du tenant concerné | Autres tenants
+
+| Config invalide
+| `core.Load` échoue ; au reload, l'ancienne génération reste active
+| Aucun changement
+| Aucun changement
+
+| Provider down au démarrage
+| Le process démarre ; le provider est marqué `degraded`
+| Les opérations qui nécessitent le provider répondent `502 authentication_unavailable`
+| Démarrent normalement
+
+| Provider down à l'exécution
+| Le provider passe `degraded` ; health et logs exposent l'état
+| Sessions locales encore valides : `200` ; nouveau login : `502` ; MCP avec clé JWKS en cache : `200` ; `kid` inconnu : `502`
+| Inchangés
+
+| Reload avec provider down
+| La nouvelle génération est construite ; le provider fautif est `degraded`
+| Routes mises à jour, provider fautif en `502`
+| Mises à jour normalement
+
+| Reload avec config invalide
+| Reload refusé ; l'ancienne génération reste active
+| Aucun changement
+| Aucun changement
+
+| Tous les providers down
+| Le process reste vivant ; `/readyz` peut passer `503` si aucune route publique ne peut servir
+| `502` sur les routes authentifiées
+| Routes publiques éventuelles inchangées
+|===
+
+Règles :
+
+* Un provider en `degraded` ne signifie **pas** que toutes ses routes répondent
+  `502`. Les sessions déjà émises restent valides localement jusqu'à leur
+  expiration ; seules les opérations qui nécessitent un appel au provider
+  échouent en `502`.
+* Le démarrage ne doit pas être bloqué par un provider indisponible, sauf si la
+  configuration elle-même est invalide.
+* Au reload, un provider dont la configuration a changé et dont la construction
+  échoue est `degraded` ; l'ancien provider n'est pas réutilisé pour une
+  configuration différente.
+* Les instances de l'ancienne génération sont fermées après drainage.
+
+Health :
+
+* `/healthz` : liveness, `200` tant que le process répond.
+* `/readyz` : `200` si Gate One peut servir au moins une route ; `503` si aucun
+  provider n'est prêt et qu'aucune route publique n'existe.
+* `/__gate-one/health/providers` (admin) : état JSON par provider.
+* `gate-one doctor` : un statut par provider, sans démarrer le serveur.
+
+=== 2.2 Classification des erreurs
+
+[cols="2,2,1,3"]
+|===
+| Condition | Erreur interne | HTTP | Réponse
+
+| Token absent, malformé, signature invalide, expiré, `nbf` futur, mauvais `iss`/`aud`
+| `ErrUnauthenticated`
+| `401`
+| JSON ou challenge MCP ; redirection login pour navigation frontend
+
+| Scope MCP insuffisant
+| `ErrInsufficientScope`
+| `403`
+| `WWW-Authenticate: Bearer error="insufficient_scope"`
+
+| Conditions d'identité (`roles`, `scopes`, `claims`, `user`) non satisfaites
+| `ErrPolicyDenied`
+| `403`
+| Page/JSON `forbidden` ; pas de redirection login
+
+| JWKS inaccessible, timeout, TLS, réponse malformée
+| `ErrProviderUnavailable`
+| `502`
+| `authentication_unavailable`, jamais de redirection login
+
+| Découverte OIDC inaccessible au login
+| `ErrProviderUnavailable`
+| `502`
+| `authentication_unavailable`, jamais de redirection login
+
+| Store de révocation en erreur
+| `ErrProviderUnavailable`
+| `502`
+| Fail-closed ; jamais `401`
+
+| Provider inconnu, config invalide, ID dupliqué
+| erreur de chargement
+| — | Démarrage/reload refusé
+
+| Route publique + `auth.provider` | erreur de chargement | — | Démarrage/reload refusé
+
+| Rate limit / quota
+| `ErrRateLimited`
+| `429`
+| Réponse existante du proxy
+|===
+
+Règles :
+
+* `401` = le client peut corriger sa requête (token absent/invalide/expiré).
+* `403` = le client est authentifié mais n'a pas le droit.
+* `502` = Gate One ne peut pas vérifier ; le client ne peut pas corriger.
+* Un `502` ne doit **jamais** proposer un login : boucle garantie.
+* Un `401` MCP porte `WWW-Authenticate` ; un `502` MCP n'en porte pas.
+
+=== 2.3 Matrice de statuts
+
+[cols="3,2,2,2,2"]
+|===
+| Scénario | Session | Broker | Attendu | Corps
+
+| Navigation, session valide
+| valide
+| down
+| `200`
+| page
+
+| Navigation, pas de session
+| absente
+| down
+| `502`
+| `authentication_unavailable`
+
+| Callback OIDC
+| code
+| down
+| `502`
+| `authentication_unavailable`
+
+| MCP, token valide, JWKS en cache
+| —
+| down
+| `200`
+| réponse MCP
+
+| MCP, signature invalide, JWKS en cache
+| —
+| down
+| `401`
+| challenge Bearer
+
+| MCP, `kid` inconnu
+| —
+| down
+| `502`
+| `authentication_unavailable`
+
+| MCP, token expiré
+| —
+| up
+| `401`
+| challenge Bearer
+
+| MCP, mauvais `aud`
+| —
+| up
+| `401`
+| challenge Bearer
+
+| MCP, scope insuffisant
+| —
+| up
+| `403`
+| `insufficient_scope`
+
+| API Bearer JWT, token valide
+| —
+| up
+| `200`
+| réponse API
+
+| API Bearer JWT, token invalide
+| —
+| up
+| `401`
+| JSON
+
+| API Bearer JWT, JWKS down
+| —
+| down
+| `502`
+| `authentication_unavailable`
+
+| Session révoquée
+| révoquée
+| up
+| `401`
+| login/JSON
+
+| Store de révocation down
+| valide
+| up
+| `502`
+| `authentication_unavailable`
+|===
+
+=== 2.4 Impacts d'implémentation requis par ces tests
+
+* `providerRegistry` avec états `starting`, `ready`, `degraded`, `closed`.
+  `proxy.New` construit chaque provider indépendamment ; un échec de découverte
+  ne retourne pas d'erreur globale, il marque le provider `degraded`.
+* `Gateway.ProviderStatus()` et `ProviderHealth()` pour `/healthz`,
+  `/readyz`, `/__gate-one/health/providers` et `doctor`.
+* `classifyingKeySet` autour de `go-oidc` : distinguer
+  `ErrUnauthenticated` (signature, claims, token) de
+  `ErrProviderUnavailable` (JWKS HTTP, timeout, TLS, réponse malformée).
+  Un `kid` inconnu avec refresh JWKS réussi et token invalide reste `401` ;
+  un refresh impossible devient `502`.
+* `ErrProviderUnavailable` mappé en `502 authentication_unavailable` dans le
+  proxy et le handler MCP ; `WWW-Authenticate` uniquement sur `401`.
+* `authCache` clé par `provider.ID()` et non `provider.Name()`.
+* Cookies de session et de transaction OIDC paramétrés par provider.
+* `loginHandlers` indexés par host, `serveMCPProtectedResourceMetadata` par
+  access unit/provider.
+* `Reloadable` : nouvelle génération construite avec providers dégradés,
+  swap, drainage, puis `Close()` des anciens providers.
+* `Gateway.Close()` ferme les stores, les clients HTTP et les providers.
+
+== 3. Fixtures
+
+=== 3.1 Arborescence
+
+[source,text]
+----
+testdata/auth/
+  fake-google/
+    config.json              # issuer, client, users, groupes, hd
+    keys/                    # clés Ed25519 de test (jamais de secret réel)
+  broker/
+    acme.json                # tenant, clients, policy, audiences
+    contoso.json
+    policy.json
+  gateone/
+    two-tenants.json         # providers acme/contoso + routes
+    degraded.json            # un provider injoignable
+    public.json
+    api-jwt.json
+  keys/
+    acme-2026-01.json        # clé de test, marquée TEST ONLY
+    contoso-2026-01.json
+  certs/                     # V1.1 mTLS
+    ca.pem
+    client-acme.pem
+    client-acme-key.pem
+  plugins/                   # V2
+    valid.tar
+    bad-signature.tar
+    digest-mismatch.tar
+    revoked.tar
+    missing-dependency.tar
+----
+
+Les clés de `testdata/auth/keys` sont générées par un seed fixe et ne doivent
+jamais être utilisées hors test. Le README du dossier le rappelle.
+
+=== 3.2 Faux Google OIDC
+
+`internal/testutil/auth.NewFakeGoogle(t)` retourne un `httptest.Server` avec :
+
+[cols="2,3"]
+|===
+| Endpoint | Comportement
+
+| `/.well-known/openid-configuration`
+| issuer, authorize, token, jwks, userinfo
+
+| `/jwks.json`
+| clé Ed25519 courante + clé précédente pendant la rotation
+
+| `/authorize`
+| auto-consent ; paramètres `state`, `nonce`, PKCE, `login_hint`
+
+| `/token`
+| code exchange, client credentials, refresh
+
+| `/userinfo`
+| claims de test
+|===
+
+Toggles :
+
+* `FailDiscovery`, `FailJWKS`, `FailToken`, `Slow`, `InvalidJWKS` ;
+* `WrongNonce`, `WrongState`, `EmailUnverified`, `WrongHD` ;
+* `RotateKey`, `RetireOldKey`.
+
+Chaque toggle est un champ public protégé par mutex, remis à zéro par `t.Cleanup`.
+
+=== 3.3 Broker de test
+
+Deux modes :
+
+* **in-process** : le vrai code broker, SQLite dans `t.TempDir()`, clés fixes,
+  horloge injectée. Recommandé pour les tests d'intégration.
+* **fake minimal** : serveur qui ne sert que discovery/JWKS/token, pour les tests
+  unitaires de Gate One.
+
+Le broker de test expose `Down`, `FailJWKS`, `FailToken`, `RotateKey`, `Slow`,
+`Revoke(sid)`.
+
+=== 3.4 Faux `IdentityAdapter`
+
+`pkg/identityadapter/conformance/testadapter` implémente le contrat avec des
+étapes configurables :
+
+* `Start` → `Redirect`, `Challenge`, `Form` ou `Result` ;
+* `Continue` → `Result` ou erreur classifiée ;
+* `Enrich` optionnel ;
+* `Health` avec timeout/500.
+
+Il sert à tester la suite de conformité elle-même, puis le broker.
+
+=== 3.5 Tokens
+
+`internal/testutil/auth.MintToken(t, opts...)` génère :
+
+* valide ;
+* expiré ;
+* `nbf` futur ;
+* mauvais `iss` ;
+* mauvais `aud` ;
+* signature invalide ;
+* `alg: none` ;
+* HS256 avec la clé publique comme secret ;
+* `kid` absent ;
+* `kid` inconnu ;
+* token tronqué ;
+* claims dupliqués ;
+* `tenant` d'un autre tenant ;
+* `sid` révoqué.
+
+=== 3.6 Client HTTP
+
+* `cookiejar.New(nil)` pour les parcours navigateur.
+* `CheckRedirect` pour arrêter avant la redirection quand on teste l'URL.
+* `CountingTransport` pour compter les appels par host/path.
+* `httptest.NewTLSServer` + `InsecureSkipVerify` uniquement dans les tests.
+* Horloge fixe : `2026-01-01T00:00:00Z`.
+
+== 4. Niveaux de test
+
+[cols="2,3,2"]
+|===
+| Niveau | Contenu | Où
+
+| Unitaire
+| parsing JWT, validation claims, config, policy, erreurs
+| `go test`, sans réseau
+
+| Contrat
+| suite `IdentityAdapter`, parité in-process/HTTP, manifeste
+| `pkg/identityadapter/conformance`
+
+| Intégration
+| faux Google + broker + Gate One, cookies, JWKS, révocation
+| `go test -tags=integration`
+
+| E2E
+| deux tenants, routes MCP/API, panne broker
+| `go test -tags=e2e`
+
+| Chaos
+| broker lent/down, JWKS invalide, plugin crash/hang
+| nightly
+
+| Staging
+| vrai Google, navigateurs réels, DNS/TLS, charge
+| nightly/manuel
+
+| Ops
+| rotation de clé, révocation, restore, incident
+| drills
+|===
+
+== 5. Matrice de traçabilité
+
+[cols="1,3,3,2,2"]
+|===
+| ID | Critère | Test principal | Fixtures | Porte
+
+| AC-AUTH-01
+| Login Google → session avec `roles`, `tenant`, `sid`
+| `TestAC_AUTH_01_GoogleLoginCreatesSession`
+| fake Google, broker, two-tenants
+| merge
+
+| AC-AUTH-02
+| Token tenant A refusé sur tenant B
+| `TestAC_AUTH_02_CrossTenantTokenRejected`
+| tokens, two-tenants
+| PR
+
+| AC-AUTH-03
+| Validation MCP locale via JWKS, sans appel broker par requête
+| `TestAC_AUTH_03_MCPValidationUsesJWKSOnly`
+| counting transport, broker
+| merge
+
+| AC-AUTH-04
+| Rotation de clé sans déconnexion
+| `TestAC_AUTH_04_KeyRotationKeepsSessions`
+| fake clock, rotate key
+| merge
+
+| AC-AUTH-05
+| Révocation par back-channel logout uniquement
+| `TestAC_AUTH_05_BackchannelLogoutRevokesSession`
+| broker, revocation store
+| merge
+
+| AC-AUTH-06
+| Mode dégradé par tenant
+| `TestAC_AUTH_06_BrokerDownDegradesOnlyTenant`
+| two-tenants, down toggle
+| e2e
+
+| AC-AUTH-07
+| Aucun plugin de provider dans Gate One
+| `TestAC_AUTH_07_ProviderPluginRejected`
+| config, `go list`
+| PR
+
+| AC-AUTH-08
+| JWT refuse les tokens invalides
+| `TestAC_AUTH_08_JWTRejectsInvalidTokens`
+| token factory
+| PR
+
+| AC-AUTH-09
+| `IdentityAdapter` conforme
+| `TestAC_AUTH_09_IdentityAdapterConformance`
+| fake adapter, OIDC built-in
+| merge
+
+| AC-AUTH-10
+| In-process et HTTP équivalents
+| `TestAC_AUTH_10_HTTPBindingParity`
+| plugin test server
+| merge
+
+| AC-AUTH-11
+| Enrichissement optionnel
+| `TestAC_AUTH_11_EnrichmentOptional`
+| fake adapter
+| PR
+
+| AC-AUTH-12
+| Isolation par route
+| `TestAC_AUTH_12_PerRouteIsolation`
+| two-tenants, cookies
+| merge
+
+| AC-AUTH-13
+| Validation de config
+| `TestAC_AUTH_13_ConfigValidation`
+| golden configs
+| PR
+
+| AC-AUTH-14
+| Token invalide vs provider indisponible
+| `TestAC_AUTH_14_InvalidTokenVsUnavailable`
+| JWKS toggles
+| PR
+
+| AC-AUTH-15
+| Démarrage/reload dégradé par tenant
+| `TestAC_AUTH_15_DegradedStartupAndReload`
+| degraded.json
+| e2e
+
+| AC-AUTH-16
+| Manifeste/signature plugin V2
+| `TestAC_AUTH_16_PluginManifestV2`
+| plugins/*.tar
+| nightly
+
+| AC-AUTH-17
+| Pas de fuite de secret dans logs/erreurs
+| `TestAC_AUTH_17_NoSecretLeak`
+| capture logs
+| PR
+
+| AC-AUTH-18
+| Révocation Redis immédiate et partagée
+| `TestAC_AUTH_18_RedisRevocationStore`, `TestAC_AUTH_18_BrokerRedisStore`
+| miniredis
+| PR
+
+| AC-AUTH-19
+| JWT révoqué et Redis down = 401/502
+| `TestAC_AUTH_19_JWTImmediateRevocation`, `TestAC_AUTH_19_RedisFailClosedAndImmediateRevocation`
+| miniredis, JWKS
+| PR
+
+| AC-AUTH-22
+| Logout broker révoque le sid partagé du navigateur
+| `TestAC_AUTH_22_LogoutRevokesSharedSID`
+| fake Google, cookie broker
+| merge
+
+| AC-AUTH-23
+| Révocation cross-instance Gate One
+| `TestAC_AUTH_23_CrossInstanceRevocation`
+| miniredis, deux gateways
+| merge
+
+| AC-AUTH-24
+| Logout global utilisateur avec timestamp (pas de lockout)
+| `TestAC_AUTH_24_SubjectRevocationTimestamp`, `TestAC_AUTH_24_JWTGlobalLogout`
+| miniredis, JWT
+| PR
+
+| AC-AUTH-25
+| TTL de révocation déduit du refresh token broker
+| `TestAC_AUTH_25_RevocationTTLFromDiscovery`
+| discovery broker
+| PR
+
+| AC-AUTH-26
+| Warning explicite quand l'IdP ne publie pas le TTL
+| `TestAC_AUTH_26_RefreshTTLWarning`, `TestAC_AUTH_26_StartupWarning`, `TestAC_AUTH_26_CheckWarnsOnMissingTTL`
+| discovery sans champ
+| PR
+|===
+
+== 6. Détail des tests
+
+=== AC-AUTH-01 — Login Google
+
+`TestAC_AUTH_01_GoogleLoginCreatesSession`
+
+Étapes :
+
+. Démarrer faux Google, broker de test, Gate One avec le provider `acme`.
+. `GET /` sur `app.acme.test` sans cookie.
+. Suivre la redirection vers le broker puis Google.
+. Google auto-consent, callback broker, callback Gate One.
+. Vérifier le cookie de session, `roles`, `tenant`, `sid`.
+
+Assertions :
+
+* `200` sur la page protégée ;
+* cookie `cladone_acme_session` présent, `HttpOnly`, `Secure`, `SameSite=Lax` ;
+* claims `tenant=acme`, `roles` attendus, `sid` non vide ;
+* aucun cookie Google sur le domaine Gate One ;
+* le broker n'a jamais transmis le token Google à Gate One.
+
+Sous-tests :
+
+* `google_consent_ok` ;
+* `workspace_hd_required` ;
+* `email_unverified_rejected` ;
+* `wrong_nonce_rejected` ;
+* `wrong_state_rejected` ;
+* `pkce_required`.
+
+=== AC-AUTH-02 — Cross-tenant
+
+`TestAC_AUTH_02_CrossTenantTokenRejected`
+
+Table :
+
+[cols="2,2,2"]
+|===
+| Token | Route | Attendu
+
+| `iss=acme`, `aud=acme` | `contoso` | `401`
+| `iss=contoso`, `aud=contoso` | `acme` | `401`
+| `iss=acme`, `aud=contoso` | `contoso` | `401`
+| `tenant=acme` dans claims, `iss=contoso` | `acme` | `401`
+| token acme valide | `acme` | `200`
+|===
+
+Le test vérifie aussi que le cache d'identité n'est pas partagé : deux providers
+de même type `oidc` ne doivent pas avoir la même clé de cache.
+
+=== AC-AUTH-03 — Validation locale
+
+`TestAC_AUTH_03_MCPValidationUsesJWKSOnly`
+
+* Premier appel MCP : un fetch JWKS est autorisé.
+* Appels suivants avec le même `kid` : `CountingTransport` doit montrer **zéro**
+  appel au broker.
+* Le broker est ensuite arrêté ; le token encore valide doit continuer à passer.
+* Un token avec `kid` inconnu doit provoquer un fetch ; si le broker est down,
+  `502`.
+
+=== AC-AUTH-04 — Rotation de clé
+
+`TestAC_AUTH_04_KeyRotationKeepsSessions`
+
+* Émettre un token avec `kid=acme-2026-01`.
+* Publier `acme-2026-02` dans JWKS.
+* Émettre un nouveau token avec `acme-2026-02`.
+* Vérifier que l'ancien et le nouveau token sont acceptés pendant le chevauchement.
+* Avancer l'horloge au-delà de l'expiration de l'ancien token.
+* Retirer `acme-2026-01` du JWKS.
+* Vérifier qu'aucune session Gate One n'est déconnectée par la rotation.
+
+Sous-tests :
+
+* `old_token_valid_during_overlap` ;
+* `new_kid_triggers_refresh` ;
+* `old_key_retired_after_ttl` ;
+* `rotation_does_not_clear_session_cookie`.
+
+=== AC-AUTH-05 — Back-channel logout
+
+`TestAC_AUTH_05_BackchannelLogoutRevokesSession`
+
+* Login, récupérer `sid`.
+* Broker envoie un logout token signé à `/backchannel-logout`.
+* Vérifier le store de révocation.
+* Prochaine requête avec le cookie : `401`.
+* Le cache d'identité est invalidé.
+* Un logout token rejoué est idempotent.
+* Un logout token mal signé est refusé sans révocation.
+
+=== AC-AUTH-06 — Mode dégradé par tenant
+
+`TestAC_AUTH_06_BrokerDownDegradesOnlyTenant`
+
+Scénario :
+
+. Deux tenants `acme` et `contoso`, deux brokers.
+. Login sur les deux.
+. Arrêter le broker `acme`.
+. Requête avec session `acme` : `200` (validation locale).
+. Nouveau login `acme` : `502`.
+. MCP `acme` avec `kid` en cache : `200`.
+. MCP `acme` avec `kid` inconnu : `502`.
+. Routes `contoso` : `200`.
+. `/healthz` : `200`.
+. `/readyz` : `200` car `contoso` sert encore.
+. `/__gate-one/health/providers` : `acme=degraded`, `contoso=ready`.
+
+=== AC-AUTH-07 — Aucun plugin provider
+
+`TestAC_AUTH_07_ProviderPluginRejected`
+
+* Config `authProvider.type: "plugin"` → erreur de chargement.
+* Config `authProvider.type: "oidc"` → OK.
+* Test d'architecture : le package `internal/authn` n'importe pas
+  `pkg/pluginapi` ni un loader de plugins.
+* Aucun scan de `plugins.d` dans le chemin d'auth.
+
+=== AC-AUTH-08 — JWT invalides
+
+`TestAC_AUTH_08_JWTRejectsInvalidTokens`
+
+Table :
+
+[cols="2,2"]
+|===
+| Cas | Attendu
+
+| signature invalide | `401`
+| `alg: none` | `401`
+| HS256 avec clé publique | `401`
+| expiré | `401`
+| `nbf` futur | `401`
+| `iat` futur au-delà du skew | `401`
+| mauvais `iss` | `401`
+| mauvais `aud` | `401`
+| `kid` absent | `401`
+| `kid` inconnu, refresh OK, token invalide | `401`
+| token tronqué | `401`
+| claims dupliqués | `401`
+| token valide | `200`
+|===
+
+Le test vérifie aussi qu'aucun token n'est loggé en clair.
+
+=== AC-AUTH-09 — Conformance `IdentityAdapter`
+
+`TestAC_AUTH_09_IdentityAdapterConformance`
+
+La suite `pkg/identityadapter/conformance.Run(t, adapter)` est exécutée contre :
+
+* l'adaptateur OIDC built-in + faux Google ;
+* le faux `IdentityAdapter` ;
+* plus tard LDAP + faux LDAP ;
+* le client HTTP (`httpbinding`) ;
+* le client gRPC (V2).
+
+Assertions :
+
+* `Start` retourne un `Step` valide ;
+* `Continue` retourne `Result` ou une erreur classifiée ;
+* `State` est opaque, signé, à usage unique, avec TTL ;
+* `Assertion` ne contient que des faits ;
+* `Enrich` absent = skip ;
+* `Health` classe timeout/500/malformed ;
+* aucune décision `roles`/`tenant`/`aud` dans l'adaptateur.
+
+=== AC-AUTH-10 — Binding HTTP (parité avec in-process)
+
+`TestAC_AUTH_10_HTTPBindingParity`
+
+La même suite de conformité est lancée deux fois :
+
+* adaptateur in-process ;
+* adaptateur HTTP/JSON (`pkg/identityadapter/httpbinding`).
+
+Les résultats sont comparés : mêmes `Step.Kind`, mêmes erreurs, mêmes assertions
+(normalisation des champs aléatoires comme `State`).
+
+=== AC-AUTH-11 — Enrichissement optionnel
+
+`TestAC_AUTH_11_EnrichmentOptional`
+
+* Adaptateur sans capability `Enrichment` : le broker ne l'appelle pas.
+* Adaptateur avec capability : les claims enrichis sont fusionnés.
+* Échec d'enrichissement : politique `fail_closed` (défaut) → login refusé ;
+  `fail_open` → login accepté sans enrichissement.
+* L'adaptateur ne peut pas écraser `tenant`/`roles` décidés par le broker.
+
+=== AC-AUTH-12 — Isolation par route
+
+`TestAC_AUTH_12_PerRouteIsolation`
+
+* Deux providers, deux cookies, deux stores, deux caches.
+* Token A sur route B → `401`.
+* Cookie A sur route B → `401`.
+* Les métadonnées MCP de `acme` annoncent l'issuer `acme`, pas `contoso`.
+* Le badge/logout utilisent le provider de la route.
+
+=== AC-AUTH-13 — Validation de config
+
+`TestAC_AUTH_13_ConfigValidation`
+
+Cas :
+
+* `auth.provider` inconnu ;
+* ID de provider dupliqué ;
+* `loginHost` dupliqué ;
+* `cookieName` dupliqué sur le même domaine ;
+* même store bbolt pour deux providers ;
+* route publique avec `auth.provider` ;
+* provider non interactif sur route frontend avec guard ;
+* route MCP sans issuer ;
+* provider `module` sans manifeste signé ;
+* config legacy `authProvider` + `authProviders` simultanés.
+
+=== AC-AUTH-14 — Token invalide vs indisponible
+
+`TestAC_AUTH_14_InvalidTokenVsUnavailable`
+
+Table :
+
+[cols="2,2,2"]
+|===
+| Condition | Erreur | HTTP
+
+| signature invalide | `ErrUnauthenticated` | `401`
+| token expiré | `ErrUnauthenticated` | `401`
+| mauvais `aud` | `ErrUnauthenticated` | `401`
+| token absent | `ErrUnauthenticated` | `401`
+| JWKS 500 | `ErrProviderUnavailable` | `502`
+| JWKS timeout | `ErrProviderUnavailable` | `502`
+| JWKS malformé | `ErrProviderUnavailable` | `502`
+| `kid` inconnu + refresh OK + token invalide | `ErrUnauthenticated` | `401`
+| `kid` inconnu + refresh KO | `ErrProviderUnavailable` | `502`
+| store de révocation en erreur | `ErrProviderUnavailable` | `502`
+| session existante, broker down | aucune erreur | `200`
+| nouveau login, broker down | `ErrProviderUnavailable` | `502`
+|===
+
+Le test vérifie aussi les en-têtes : `WWW-Authenticate` uniquement sur `401`.
+
+=== AC-AUTH-15 — Démarrage/reload dégradé
+
+`TestAC_AUTH_15_DegradedStartupAndReload`
+
+* Démarrage avec `acme` down, `contoso` up : process démarre ; `acme` `degraded`,
+  `contoso` `ready` ; routes `contoso` `200`.
+* Reload avec `acme` down : nouvelle génération ; `acme` `degraded` ; `contoso`
+  mise à jour.
+* Reload avec config invalide : refusé ; ancienne génération active.
+* Reload avec un provider qui revient : `acme` repasse `ready` après health check.
+* Drain : les requêtes en cours sur l'ancienne génération se terminent.
+
+=== AC-AUTH-16 — Plugin V2
+
+`TestAC_AUTH_16_PluginManifestV2`
+
+* manifeste valide + signature valide + digest valide → chargé ;
+* clé inconnue → refus ;
+* signature invalide → refus ;
+* digest mismatch → refus ;
+* `hostAPI` incompatible → refus ;
+* dépendance manquante → refus ;
+* digest révoqué → refus ;
+* capability `auth` dans un plugin de route → refus ;
+* downgrade vers une version vulnérable → refus.
+
+=== AC-AUTH-17 — Pas de fuite de secret
+
+`TestAC_AUTH_17_NoSecretLeak`
+
+* Capturer les logs et les corps d'erreur.
+* Vérifier l'absence de token, code, mot de passe, clé privée, secret client.
+* Vérifier que les erreurs `502` ne contiennent pas l'URL interne complète si elle
+  contient des credentials.
+* Vérifier que `-check` ne sérialise pas les secrets.
+
+== 7. Noms et organisation des tests Go
+
+Convention :
+
+[source,text]
+----
+TestAC_AUTH_<NN>_<Description>
+  t.Run("case_snake_case", ...)
+----
+
+Packages :
+
+[cols="2,3"]
+|===
+| Package | Tests
+
+| `internal/core`
+| `TestAC_AUTH_13_ConfigValidation`
+
+| `internal/authn`
+| `TestAC_AUTH_04_KeyRotationKeepsSessions`, `TestAC_AUTH_08_JWTRejectsInvalidTokens`, `TestAC_AUTH_14_InvalidTokenVsUnavailable`
+
+| `internal/proxy`
+| `TestAC_AUTH_01_GoogleLoginCreatesSession`, `TestAC_AUTH_02_CrossTenantTokenRejected`, `TestAC_AUTH_03_MCPValidationUsesJWKSOnly`, `TestAC_AUTH_05_BackchannelLogoutRevokesSession`, `TestAC_AUTH_06_BrokerDownDegradesOnlyTenant`, `TestAC_AUTH_12_PerRouteIsolation`, `TestAC_AUTH_15_DegradedStartupAndReload`
+
+| `internal/broker`
+| `TestAC_AUTH_01_GoogleLoginCreatesSession`, `TestAC_AUTH_09_IdentityAdapterConformance`, `TestAC_AUTH_11_EnrichmentOptional`
+
+| `pkg/identityadapter/conformance`
+| `TestAC_AUTH_09_IdentityAdapterConformance`, `TestAC_AUTH_10_HTTPBindingParity`
+
+| `pkg/identityadapter/plugin`
+| `TestAC_AUTH_16_PluginManifestV2`
+
+| `internal/testutil/auth`
+| helpers, pas de tests AC
+|===
+
+Règles :
+
+* Aucun test AC ne dépend d'Internet.
+* Les tests d'intégration sont derrière `//go:build integration` ou `e2e`.
+* Les tests unitaires utilisent `t.TempDir()` et `t.Cleanup`.
+* Les clés de test sont fixes et documentées.
+* Les tests de temps utilisent une horloge injectée, pas `time.Sleep`.
+* Les tests de concurrence passent sous `-race`.
+
+== 8. Portes CI
+
+=== 8.1 PR
+
+[source,bash]
+----
+go test ./... -race -count=1
+go test -run 'TestAC_AUTH_' ./... -count=1
+go test ./internal/authn/... ./internal/core/... ./internal/proxy/... -race
+go test ./pkg/identityadapter/... -race
+go vet ./...
+staticcheck ./...
+gosec ./...
+govulncheck ./...
+go test -run 'TestAC_AUTH_07_ProviderPluginRejected' ./...
+go test -fuzz=FuzzJWTParse -fuzztime=30s ./internal/authn
+go test -fuzz=FuzzManifest -fuzztime=30s ./pkg/identityadapter
+----
+
+Porte : échec = merge bloqué.
+
+=== 8.2 Merge
+
+[source,bash]
+----
+go test -tags=integration ./... -race -count=1
+go test -tags=e2e ./... -race -count=1
+----
+
+Contenu :
+
+* faux Google + broker + deux tenants ;
+* rotation de clé ;
+* back-channel logout ;
+* broker down ;
+* isolation cookies/caches/stores ;
+* parité in-process/HTTP (gRPC : V2).
+
+=== 8.3 Nightly
+
+* staging avec vrai Google ;
+* charge : 1 000 req/s sur routes publiques, 200 req/s auth ;
+* chaos : broker lent/down, JWKS invalide, plugin crash/hang ;
+* fuzz long (10 min) ;
+* scan dépendances et images ;
+* test de restauration DB/clés.
+
+=== 8.4 Release
+
+* artefacts signés (cosign) ;
+* SBOM (CycloneDX/SPDX) ;
+* rapport de conformité `IdentityAdapter` ;
+* test de migration de config ;
+* vérification des manifestes plugins ;
+* `go test ./... -race` sur le tag.
+
+=== 8.5 Couverture
+
+* Seuil global : 80 %.
+* `internal/authn`, `internal/broker/policy`, `internal/broker/token` : 85 %.
+* Les chemins d'erreur de sécurité (401/403/502) doivent être couverts.
+* La couverture ne remplace pas les tests de contrat et e2e.
+
+=== 8.6 Tests instables
+
+* Un test instable est marqué `flaky` et sorti du gate PR.
+* Il doit être corrigé ou supprimé sous 5 jours ouvrés.
+* Aucun `time.Sleep` pour synchroniser ; utiliser des channels/conditions.
+
+== 9. Staging et drills
+
+=== 9.1 Vrai Google
+
+* Tenant Google de test dédié.
+* Parcours : login, consentement, refus, révocation, logout.
+* Vérifier `hd`, `email_verified`, groupes.
+* Nightly ou manuel avant release.
+
+=== 9.2 Navigateurs
+
+* Chrome, Firefox, Safari.
+* Cookies `SameSite`, domaines, ITP.
+* Logout, refresh, expiration.
+* Playwright en staging.
+
+=== 9.3 Rotation de clé
+
+* Publier la nouvelle clé.
+* Attendre le TTL JWKS.
+* Signer avec la nouvelle.
+* Vérifier l'absence de déconnexion.
+* Retirer l'ancienne après expiration.
+* Runbook et rollback.
+
+=== 9.4 Révocation
+
+* Back-channel logout.
+* Vérifier la session Gate One.
+* Vérifier l'idempotence.
+* Vérifier le cas broker down.
+
+=== 9.5 Panne broker
+
+* Arrêter le broker d'un tenant.
+* Vérifier les sessions existantes.
+* Vérifier les nouveaux logins.
+* Vérifier les autres tenants.
+* Vérifier `/healthz`, `/readyz`, logs, alertes.
+
+=== 9.6 Restore
+
+* Restaurer SQLite et clés.
+* Vérifier que les sessions/tokens existants restent valides ou sont révoqués
+  selon la politique.
+* Vérifier que le `storeID` invalide les cookies si la base est perdue.
+
+== 10. Politique de non-régression
+
+* Chaque critère a un ID `AC-AUTH-NN` présent dans le nom du test.
+* Chaque bug corrigé ajoute un test qui échoue avant le correctif.
+* Les tests de contrat sont versionnés avec `apiVersion`.
+* Les golden files couvrent discovery, JWKS, config résolue.
+* Mutation testing optionnel sur `internal/authn` et `internal/broker/policy`.
+* Toute modification de `IdentityAdapter` met à jour la suite de conformité.
+* Toute modification de statut HTTP met à jour la matrice 2.3.
+* Les secrets de test sont marqués `TEST ONLY` et scannés par `gitleaks`.
+
+== 11. Critères de sortie
+
+Phase A (contrat) :
+
+* suite de conformité écrite et verte sur le faux adaptateur ;
+* schéma de claims et statuts HTTP figés.
+
+Phase B (Gate One) :
+
+* AC-AUTH-02, 03, 04, 05, 06, 07, 08, 12, 13, 14, 15 verts ;
+* tests `-race` verts ;
+* aucune régression sur `testdata/api-routes.json`.
+
+Phase C (broker) :
+
+* AC-AUTH-01, 09, 10, 11 verts ;
+* faux Google + vrai broker en e2e ;
+* rotation et révocation vertes.
+
+Phase D (validation) :
+
+* staging vrai Google ;
+* chaos ;
+* charge ;
+* rapport de conformité.
+
+Phase E (rollout) :
+
+* deux tenants en staging ;
+* drills rotation/révocation/panne ;
+* runbooks à jour.
+
+== 12. Annexes
+
+=== 12.1 Génération des clés de test
+
+[source,bash]
+----
+go run ./cmd/cladone-auth testkey --tenant acme --kid acme-2026-01 \
+  --seed testdata/auth/keys/acme.seed
+----
+
+Le seed est public et réservé aux tests. Les clés de production ne sont jamais
+dans le dépôt.
+
+=== 12.2 Claims de référence
+
+[source,json]
+----
+{
+  "iss": "https://auth.test/t/acme",
+  "sub": "user-123",
+  "aud": "cladone-go",
+  "exp": 1770000000,
+  "iat": 1769999700,
+  "nbf": 1769999700,
+  "jti": "01J...",
+  "tenant": "acme",
+  "email": "alice@acme.test",
+  "preferred_username": "alice",
+  "roles": ["user"],
+  "scope": "openid profile email mcp-tools",
+  "sid": "session-abc"
+}
+----
+
+=== 12.3 Statuts HTTP
+
+[cols="2,1,2"]
+|===
+| Cas | Statut | Login proposé
+
+| token absent/invalide/expiré | `401` | oui (navigation)
+| scope insuffisant | `403` | non
+| identity refusée | `403` | non
+| provider/JWKS/store indisponible | `502` | non
+| config invalide | — | démarrage/reload refusé
+| rate limit | `429` | non
+|===
+
+=== 12.4 Glossaire
+
+* **Provider** : configuration Gate One d'un émetteur OIDC/JWT.
+* **Broker** : service qui fédère les IdP et ré-émet des JWT.
+* **IdentityAdapter** : contrat interne du broker pour un protocole d'IdP.
+* **Tenant** : domaine d'isolation (issuer, clé, audience, cookies, store).
+* **Fail-fast par tenant** : la panne d'un provider dégrade ses routes, pas les
+  autres tenants.
+* **Token invalide** : le client peut corriger (`401`).
+* **Provider indisponible** : Gate One ne peut pas vérifier (`502`).
+
+== 13. Statut d'implémentation
+
+État au 2026-10-28 :
+
+[cols="1,3,2"]
+|===
+| Phase | Implémenté | Reste
+
+| A — contrat
+| `pkg/identityadapter` : `IdentityAdapter`, `Manifest`, `Step`, `Assertion`, capabilités, erreurs classifiées ; suite `conformance` ; faux adaptateur ; binding HTTP/JSON `pkg/identityadapter/httpbinding` ; **le broker utilise l'adaptateur OIDC Google via ce contrat**
+| binding gRPC ; SDK TypeScript/Python
+
+| B — Gate One
+| `authProviders[]`, `defaultAuthProvider`, `auth.provider` ; provider `jwt` JWKS ; cache clé par provider ; cookies OIDC par provider ; démarrage/reload dégradé par tenant ; `ErrUnauthenticated` vs `ErrProviderUnavailable` ; Redis immédiat/fail-closed ; logout sid partagé + logout global sub timestampé ; `Close()`/drain
+| métriques par provider ; e2e navigateur complet
+
+| C — broker
+| `internal/broker` + `cmd/cladone-auth` : discovery, JWKS Ed25519 multi-clés, authorize/callback Google via `IdentityAdapter`, token code + client_credentials + refresh, policy rôles/tenant/audience ; store mémoire ou Redis ; CLI `keygen`/`revoke`
+| Entra/SAML/LDAP, mTLS/API key, endpoint HTTP d'administration
+
+| D — validation
+| `TestAC_AUTH_01..26` (authn, core, proxy, broker, conformance, binding HTTP, Redis immédiat/fail-closed, manifeste signé, rotation/clé broker, CLI revoke, logout sid partagé, logout global sub timestampé, TTL depuis discovery, warning IdP sans TTL, cross-instance) ; `make test-auth`, `make test-auth-race`
+| parity gRPC, vrai Google en staging, charge/chaos, scans CI
+
+| E — rollout
+| `doc/auth-broker.adoc`, `testdata/auth/broker.example.json`, README
+| runbooks rotation/révocation, drills staging
+|===
+
+Tests présents :
+
+* `TestAC_AUTH_01_GoogleLoginCreatesSession` (`internal/broker`)
+* `TestAC_AUTH_02_CrossTenantTokenRejected` (`internal/proxy`)
+* `TestAC_AUTH_03_MCPValidationUsesJWKSOnly` (`internal/authn`)
+* `TestAC_AUTH_04_KeyRotationKeepsSessions` (`internal/authn`)
+* `TestAC_AUTH_06_BrokerDownDegradesOnlyTenant` (`internal/proxy`)
+* `TestAC_AUTH_07_ProviderPluginRejected` (`internal/core`)
+* `TestAC_AUTH_08_JWTRejectsInvalidTokens` (`internal/authn`)
+* `TestAC_AUTH_09_IdentityAdapterConformance` (`pkg/identityadapter/conformance`, `internal/broker`)
+* `TestAC_AUTH_09_ClientCredentials` (`internal/broker`)
+* `TestAC_AUTH_10_HTTPBindingParity` (`pkg/identityadapter/httpbinding`)
+* `TestAC_AUTH_11_EnrichmentOptional` (`pkg/identityadapter/conformance`)
+* `TestAC_AUTH_12_PerRouteIsolation` (`internal/proxy`)
+* `TestAC_AUTH_13_ConfigValidation` (`internal/core`)
+* `TestAC_AUTH_13_BrokerRejectsBadRedirect` (`internal/broker`)
+* `TestAC_AUTH_14_InvalidTokenVsUnavailable` (`internal/proxy`, `internal/authn`)
+* `TestAC_AUTH_15_DegradedStartupAndReload` (`internal/proxy`)
+* `TestAC_AUTH_18_RedisRevocationStore` (`internal/authn`)
+* `TestAC_AUTH_18_RedisTTL` (`internal/authn`)
+* `TestAC_AUTH_18_BrokerRedisStore` (`internal/broker`)
+* `TestAC_AUTH_19_JWTImmediateRevocation` (`internal/authn`)
+* `TestAC_AUTH_19_RedisFailClosedAndImmediateRevocation` (`internal/proxy`)
+* `TestAC_AUTH_16_PluginManifestV2` (`pkg/pluginmanifest`)
+* `TestAC_AUTH_17_NoSecretLeak` (`internal/proxy`)
+* `TestAC_AUTH_20_BrokerKeyRotation` (`internal/broker`)
+* `TestAC_AUTH_21_RevokeWithConfig` (`internal/broker`)
+* `TestAC_AUTH_22_LogoutRevokesSharedSID` (`internal/broker`)
+* `TestAC_AUTH_23_CrossInstanceRevocation` (`internal/proxy`)
+* `TestAC_AUTH_24_SubjectRevocationTimestamp` (`internal/authn`)
+* `TestAC_AUTH_24_JWTGlobalLogout` (`internal/authn`)
+* `TestAC_AUTH_25_RevocationTTLFromDiscovery` (`internal/authn`)
+* `TestAC_AUTH_26_RefreshTTLWarning` (`internal/authn`)
+* `TestAC_AUTH_26_StartupWarning` (`internal/authn`)
+* `TestAC_AUTH_26_CheckWarnsOnMissingTTL` (`cmd/gate-one`)
+
+Tests existants réutilisés : back-channel logout (`TestOIDCBackchannelLogout`),
+cookies/session OIDC, MCP scope, et la suite `go test ./...`.
+
+=== 13.1 Commandes
+
+[source,bash]
+----
+make test-auth
+make test-auth-race
+go test ./internal/broker/... -v
+go test ./pkg/identityadapter/... -v
+----
+
+=== 13.2 Limites connues
+
+* Le broker utilise Redis quand `redis` est configuré ; sinon le store
+  mémoire reste le défaut de test/dev. En production multi-instance,
+  Redis est requis.
+* Le binding gRPC n'est pas encore implémenté ; le contrat et le binding
+  HTTP sont prêts.
+* Les tests de staging (vrai Google, navigateurs, charge, chaos) ne sont
+  pas automatisés dans ce dépôt.
+* Le mode dégradé couvre le démarrage, le reload et la panne runtime.
+* L'E2E navigateur complet Gate One <-> broker (cookie de domaine,
+  redirections réelles) n'est pas automatisé dans ce dépôt : les briques
+  sont testées séparément (broker fake Google, OIDC wiring, JWT/JWKS).
+  Le staging avec vrai Google reste la validation finale.

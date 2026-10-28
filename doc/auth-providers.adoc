@@ -1,8 +1,8 @@
 = Authentication providers
 
 Gate One never implements an identity provider for production. It
-delegates request verification to a provider selected by the top-level
-`authProvider` block. Three implementations share one contract:
+delegates request verification to a provider. Four implementations
+share one contract:
 
 [options="header",cols="1,2,2"]
 |===
@@ -19,10 +19,55 @@ adapter
 | `oidc` | Native OpenID Connect Relying Party: discovery, code + PKCE,
 state/nonce, JWKS, signed session, RP-initiated logout, local MCP
 bearer verification. | an OIDC IdP
+| `jwt` | Stateless JWKS bearer verifier for API/MCP routes; no login
+page, no session cookie. | a JWT issuer with JWKS
 |===
+
+For multi-tenant hosting, use the plural `authProviders` block and bind
+each route with `auth.provider`. Only `oidc` and `jwt` are allowed in
+this form; `http` (auth-bridge) and `dev` remain legacy single-provider
+modes. A provider that is unreachable at startup is degraded per tenant:
+its routes answer 502, the other tenants continue. See
+`doc/auth-broker.adoc` and `doc/auth-test-plan.adoc`.
 
 Absent `authProvider` keeps the legacy `oidc` + auth-bridge behaviour:
 existing configurations need no edit.
+
+For multi-instance or immediate revocation, set the OIDC revocation
+store to Redis:
+
+[source,json]
+----
+"authProvider": {
+  "type": "oidc",
+  "...": "...",
+  "sessionKeyEnv": "OIDC_SESSION_KEY",
+  "sessionStore": {
+    "type": "redis",
+    "url": "redis://redis:6379/0",
+    "passwordEnv": "REDIS_PASSWORD",
+    "prefix": "cladone:auth:v1:"
+  }
+}
+----
+
+`sessionKeyEnv` is mandatory for OIDC+Redis: every instance must sign
+the same session cookie. bbolt remains valid for a single instance.
+Redis is checked on every authenticated request; if it is unavailable,
+authenticated routes fail closed with `502 authentication_unavailable`
+(public routes are unaffected).
+
+`revocationTtlSeconds` defaults to the issuer's advertised
+`cladone_refresh_token_ttl_seconds` (the broker exposes its refresh-token
+lifetime), otherwise 30 days, and is never shorter than the session TTL.
+Set it explicitly only if the issuer does not advertise the value; a
+shorter value would let a refresh token outlive a global logout.
+
+When the value is absent from both the config and the discovery, Gate One
+logs a startup warning with typical places to find the IdP refresh-token
+lifetime (Keycloak Tokens, Entra token lifetime policy, Auth0/Okta
+settings). `-check` performs the same best-effort discovery probe; an
+unreachable issuer is reported as a warning, not a config failure.
 
 == Quickstart
 
@@ -181,15 +226,19 @@ default `./gate-one-state.db` relative to the config file):
 * `/backchannel-logout` validates the OIDC logout token (signature,
   `iss`, `aud`, `iat`, `events`, `sid`/`sub`, replay `jti`) and records
   the revocation synchronously;
-* `sid` revokes one session, `sub` (when no `sid`) revokes every session
-  of the user;
+* `sid` revokes one session; `sub` revokes every session of the user
+  issued **before** the revocation timestamp (a new login after logout
+  remains possible);
 * the revocation is checked **before** the gateway identity cache, so a
   cached identity cannot survive a logout;
-* entries expire after `revocationTtlSeconds` (default 24h).
+* entries expire after `revocationTtlSeconds`, default: issuer's
+  advertised refresh-token TTL, else 30 days, never shorter than the
+  session TTL.
 
 bbolt is single-writer: a second Gate One instance on the same file is
-refused. For HA, `sessionStore.type: redis` is the planned backend; it
-also requires `sessionKeyEnv` so all instances share the cookie key.
+refused. For HA and immediate cross-instance revocation, use
+`sessionStore.type: redis`; it also requires `sessionKeyEnv` so all
+instances share the cookie key.
 Losing/recreating the state file changes the store identity embedded in
 the cookie, so old sessions are rejected instead of being reactivated.
 `sessionKeyEnv` is optional for a single instance (the key is persisted
@@ -308,7 +357,7 @@ client; do not cut production over before that parity exists.
 
 [source,bash]
 ----
-gate-one -config api-routes.json -check   # grammar only (no network)
+gate-one -config api-routes.json -check   # grammar + best-effort OIDC TTL warning
 gate-one doctor -config api-routes.json   # discovery + provider health
 ----
 
