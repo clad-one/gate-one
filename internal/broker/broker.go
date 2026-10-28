@@ -1,0 +1,1034 @@
+package broker
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"cladone/gate-one/pkg/identityadapter"
+
+	"github.com/go-jose/go-jose/v4"
+)
+
+// Broker is a multi-tenant OIDC issuer federating an upstream IdP.
+type Broker struct {
+	cfg     *Config
+	tenants map[string]*tenantRuntime
+	store   store
+	now     func() time.Time
+	rand    io.Reader
+}
+
+type tenantRuntime struct {
+	cfg     Tenant
+	adapter identityadapter.Adapter
+	keys    []*signingKey
+}
+
+func (rt *tenantRuntime) activeKey() *signingKey {
+	if rt == nil || len(rt.keys) == 0 {
+		return nil
+	}
+	return rt.keys[len(rt.keys)-1]
+}
+
+type flow struct {
+	Tenant            string
+	ClientID          string
+	RedirectURI       string
+	State             string
+	Nonce             string
+	BrowserID         string
+	SID               string
+	Sub               string
+	SessionIssuedAt   time.Time
+	AdapterState      []byte
+	Scope             string
+	CodeChallenge     string
+	CodeChallengeMeth string
+	Expires           time.Time
+}
+
+type authCode struct {
+	Tenant            string
+	ClientID          string
+	RedirectURI       string
+	Scope             string
+	Nonce             string
+	CodeChallenge     string
+	CodeChallengeMeth string
+	Subject           string
+	Username          string
+	Email             string
+	Roles             []string
+	SID               string
+	IssuedAt          time.Time
+	Expires           time.Time
+}
+
+type refreshGrant struct {
+	Tenant   string
+	ClientID string
+	Subject  string
+	Username string
+	Email    string
+	Roles    []string
+	SID      string
+	IssuedAt time.Time
+	Scope    string
+	Audience string
+	Expires  time.Time
+}
+
+// Option customizes the broker (tests).
+type Option func(*Broker)
+
+// WithClock replaces time.Now.
+func WithClock(now func() time.Time) Option {
+	return func(b *Broker) {
+		if now != nil {
+			b.now = now
+		}
+	}
+}
+
+// WithRand replaces crypto/rand.Reader.
+func WithRand(r io.Reader) Option {
+	return func(b *Broker) {
+		if r != nil {
+			b.rand = r
+		}
+	}
+}
+
+// New discovers the upstream IdP and builds every tenant.
+func New(ctx context.Context, cfg *Config, opts ...Option) (*Broker, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("broker: nil config")
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	b := &Broker{
+		cfg:     cfg,
+		tenants: map[string]*tenantRuntime{},
+		now:     time.Now,
+		rand:    rand.Reader,
+	}
+	var st store = newMemoryStore()
+	if cfg.Redis != nil {
+		rs, err := newRedisStore(ctx, *cfg.Redis)
+		if err != nil {
+			return nil, err
+		}
+		st = rs
+	}
+	b.store = st
+	ok := false
+	defer func() {
+		if !ok {
+			_ = st.Close()
+		}
+	}()
+	for _, opt := range opts {
+		opt(b)
+	}
+	for i := range cfg.Tenants {
+		t := cfg.Tenants[i]
+		adapter, err := newOIDCAdapter(
+			ctx, t, cfg.PublicURL, nil, b.now, b.rand)
+		if err != nil {
+			return nil, err
+		}
+		var keyFiles []string
+		if len(t.KeyFiles) > 0 {
+			keyFiles = append(keyFiles, t.KeyFiles...)
+		} else {
+			keyFiles = []string{t.KeyFile}
+		}
+		keys := make([]*signingKey, 0, len(keyFiles))
+		seenKID := map[string]bool{}
+		for _, kf := range keyFiles {
+			key, err := loadSigningKey(t.ID, kf)
+			if err != nil {
+				return nil, err
+			}
+			if seenKID[key.kid] {
+				return nil, fmt.Errorf(
+					"tenant %s: duplicate signing key %s", t.ID, key.kid)
+			}
+			seenKID[key.kid] = true
+			keys = append(keys, key)
+		}
+		rt := &tenantRuntime{
+			cfg:     t,
+			adapter: adapter,
+			keys:    keys,
+		}
+		b.tenants[t.ID] = rt
+	}
+	ok = true
+	return b, nil
+}
+
+// Revoke writes a shared revocation key for a tenant session/user.
+// Gate One reads the same key (same authPrefix) on the next request.
+func (b *Broker) Revoke(
+	ctx context.Context, tenantID, sid, sub string, expires time.Time,
+) error {
+	rt := b.tenants[tenantID]
+	if rt == nil {
+		return fmt.Errorf("broker: unknown tenant %q", tenantID)
+	}
+	return b.store.Revoke(ctx, b.issuer(rt), sid, sub, expires)
+}
+
+// RevokeWithConfig writes a revocation without starting the broker or
+// discovering Google. It is used by the `cladone-auth revoke` CLI and
+// requires Redis (a memory store would not be shared).
+func RevokeWithConfig(
+	ctx context.Context, cfg *Config,
+	tenantID, sid, sub string, ttl time.Duration,
+) error {
+	if cfg == nil {
+		return fmt.Errorf("broker: nil config")
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if cfg.Redis == nil {
+		return fmt.Errorf("broker revoke: redis configuration is required")
+	}
+	var found *Tenant
+	for i := range cfg.Tenants {
+		if cfg.Tenants[i].ID == tenantID {
+			found = &cfg.Tenants[i]
+			break
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("broker revoke: unknown tenant %q", tenantID)
+	}
+	if sid == "" && sub == "" {
+		return fmt.Errorf("broker revoke: sid or sub is required")
+	}
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	st, err := newRedisStore(ctx, *cfg.Redis)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	issuer := cfg.PublicURL + "/t/" + found.ID
+	return st.Revoke(ctx, issuer, sid, sub, time.Now().Add(ttl))
+}
+
+// Close releases the Redis client (no-op for memory).
+func (b *Broker) Close() error {
+	if b.store != nil {
+		return b.store.Close()
+	}
+	return nil
+}
+
+// Handler returns the broker HTTP handler.
+func (b *Broker) Handler() http.Handler { return http.HandlerFunc(b.serveHTTP) }
+
+// SetPublicURL updates the external origin. It is used by tests after
+// httptest starts (the port is only known then) and by deployments
+// behind a dynamic ingress. Issuers and Google redirect URIs follow.
+func (b *Broker) SetPublicURL(raw string) {
+	b.cfg.PublicURL = strings.TrimRight(strings.TrimSpace(raw), "/")
+	for _, rt := range b.tenants {
+		if u, ok := rt.adapter.(interface{ SetRedirectURL(string) }); ok {
+			u.SetRedirectURL(b.cfg.PublicURL)
+		}
+	}
+}
+
+// browserSession reads the broker SSO cookie and returns the browser
+// session id plus the shared OIDC sid. The cookie is host-only on the
+// broker and scoped to /t/{tenant}: apps never receive it.
+func (b *Broker) browserSession(
+	ctx context.Context, rt *tenantRuntime, r *http.Request,
+) (browserID, sid, sub string, issuedAt time.Time, err error) {
+	c, cerr := r.Cookie(b.cfg.SessionCookieName)
+	if cerr != nil || c.Value == "" {
+		return "", "", "", time.Time{}, nil
+	}
+	sid, sub, issuedAt, err = b.store.GetSession(ctx, rt.cfg.ID, c.Value)
+	if err != nil {
+		return "", "", "", time.Time{}, err
+	}
+	if sid != "" {
+		revoked, rerr := b.store.IsRevoked(ctx, b.issuer(rt), sid, "")
+		if rerr != nil {
+			return "", "", "", time.Time{}, rerr
+		}
+		if !revoked && sub != "" {
+			revoked, rerr = b.store.IsSubjectRevoked(
+				ctx, b.issuer(rt), sub, issuedAt)
+			if rerr != nil {
+				return "", "", "", time.Time{}, rerr
+			}
+		}
+		if revoked {
+			// Gate One revoked this sid/sub (e.g. logout from another app).
+			// Start a fresh login/sid on the next callback.
+			_ = b.store.DeleteSession(ctx, rt.cfg.ID, c.Value)
+			return c.Value, "", "", time.Time{}, nil
+		}
+	}
+	return c.Value, sid, sub, issuedAt, nil
+}
+
+func (b *Broker) setBrowserSession(
+	w http.ResponseWriter, rt *tenantRuntime, id string,
+) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     b.cfg.SessionCookieName,
+		Value:    id,
+		Path:     "/t/" + rt.cfg.ID,
+		MaxAge:   int(rt.cfg.sessionTTL().Seconds()),
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(b.cfg.PublicURL, "https://"),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (b *Broker) clearBrowserSession(w http.ResponseWriter, rt *tenantRuntime) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     b.cfg.SessionCookieName,
+		Value:    "",
+		Path:     "/t/" + rt.cfg.ID,
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(b.cfg.PublicURL, "https://"),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// idTokenHintSID verifies a broker-issued ID token and extracts sid/sub.
+// The hint is only a hint: it is verified against the tenant keys.
+func (b *Broker) idTokenHintSID(
+	rt *tenantRuntime, raw string,
+) (sid, sub string) {
+	if raw == "" {
+		return "", ""
+	}
+	jws, err := jose.ParseSigned(raw, []jose.SignatureAlgorithm{jose.EdDSA})
+	if err != nil {
+		return "", ""
+	}
+	for _, k := range rt.keys {
+		if k == nil {
+			continue
+		}
+		payload, err := jws.Verify(k.pub)
+		if err != nil {
+			continue
+		}
+		var claims map[string]any
+		if json.Unmarshal(payload, &claims) != nil {
+			return "", ""
+		}
+		if iss, _ := claims["iss"].(string); iss != b.issuer(rt) {
+			return "", ""
+		}
+		sid, _ = claims["sid"].(string)
+		sub, _ = claims["sub"].(string)
+		return sid, sub
+	}
+	return "", ""
+}
+
+// revokeLogoutSession revokes the browser's shared sid (or sub when no
+// sid is available), deletes the broker session and clears the cookie.
+func (b *Broker) revokeLogoutSession(
+	ctx context.Context, w http.ResponseWriter, rt *tenantRuntime, r *http.Request,
+) error {
+	browserID, sid, sub, _, err := b.browserSession(ctx, rt, r)
+	if err != nil {
+		return err
+	}
+	if sid == "" {
+		sid, sub = b.idTokenHintSID(rt, r.URL.Query().Get("id_token_hint"))
+	}
+	if sid == "" && sub == "" {
+		b.clearBrowserSession(w, rt)
+		return nil
+	}
+	expires := b.now().Add(rt.cfg.logoutRevocationTTL())
+	if err := b.store.Revoke(ctx, b.issuer(rt), sid, sub, expires); err != nil {
+		return err
+	}
+	if browserID != "" {
+		_ = b.store.DeleteSession(ctx, rt.cfg.ID, browserID)
+	}
+	b.clearBrowserSession(w, rt)
+	return nil
+}
+
+func (b *Broker) sessionRevoked(
+	ctx context.Context, rt *tenantRuntime,
+	sid, sub string, issuedAt time.Time,
+) (bool, error) {
+	if sid != "" {
+		revoked, err := b.store.IsRevoked(ctx, b.issuer(rt), sid, "")
+		if err != nil || revoked {
+			return revoked, err
+		}
+	}
+	if sub != "" {
+		return b.store.IsSubjectRevoked(
+			ctx, b.issuer(rt), sub, issuedAt)
+	}
+	return false, nil
+}
+
+func (b *Broker) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+
+	if r.URL.Path == "/health" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"ok"}`)
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "t" {
+		http.NotFound(w, r)
+		return
+	}
+	tenantID := parts[1]
+	action := strings.Join(parts[2:], "/")
+	rt := b.tenants[tenantID]
+	if rt == nil {
+		http.NotFound(w, r)
+		return
+	}
+	switch action {
+	case ".well-known/openid-configuration":
+		b.discovery(w, r, rt)
+	case "jwks.json":
+		b.jwks(w, r, rt)
+	case "authorize":
+		b.authorize(w, r, rt)
+	case "callback":
+		b.callback(w, r, rt)
+	case "token":
+		b.token(w, r, rt)
+	case "logout":
+		b.logout(w, r, rt)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (b *Broker) issuer(rt *tenantRuntime) string {
+	return b.cfg.PublicURL + "/t/" + rt.cfg.ID
+}
+
+func (b *Broker) discovery(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	iss := b.issuer(rt)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"issuer":                                iss,
+		"authorization_endpoint":                iss + "/authorize",
+		"token_endpoint":                        iss + "/token",
+		"jwks_uri":                              iss + "/jwks.json",
+		"end_session_endpoint":                  iss + "/logout",
+		"response_types_supported":              []string{"code"},
+		"grant_types_supported":                 []string{"authorization_code", "client_credentials", "refresh_token"},
+		"subject_types_supported":               []string{"public"},
+		"id_token_signing_alg_values_supported": []string{"EdDSA"},
+		"scopes_supported":                      []string{"openid", "profile", "email", "mcp-tools"},
+		"token_endpoint_auth_methods_supported": []string{"client_secret_post", "none"},
+		"code_challenge_methods_supported":      []string{"S256"},
+		// Custom metadata: Gate One uses this as the default
+		// revocation retention so a logout blocks refresh tokens
+		// without a fixed 24h guess.
+		"cladone_refresh_token_ttl_seconds": rt.cfg.RefreshTokenTTL,
+	})
+}
+
+func (b *Broker) jwks(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(mergeJWKS(rt.keys))
+}
+
+func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	q := r.URL.Query()
+	clientID := q.Get("client_id")
+	redirectURI := q.Get("redirect_uri")
+	state := q.Get("state")
+	scope := q.Get("scope")
+	if clientID != rt.cfg.ClientID {
+		oauthError(w, http.StatusBadRequest, "invalid_client", "unknown client_id")
+		return
+	}
+	if !containsString(rt.cfg.RedirectURIs, redirectURI) {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "redirect_uri is not registered")
+		return
+	}
+	if q.Get("response_type") != "code" {
+		oauthError(w, http.StatusBadRequest, "unsupported_response_type", "only code is supported")
+		return
+	}
+	if state == "" {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "state is required")
+		return
+	}
+	if !scopeHas(scope, "openid") {
+		oauthError(w, http.StatusBadRequest, "invalid_scope", "openid scope is required")
+		return
+	}
+	challenge := q.Get("code_challenge")
+	method := q.Get("code_challenge_method")
+	if challenge != "" && method != "S256" {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "only S256 PKCE is supported")
+		return
+	}
+	if challenge == "" && rt.cfg.ClientSecret == "" {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "PKCE is required for a public client")
+		return
+	}
+
+	browserID, sharedSID, sharedSub, sharedIssuedAt, err := b.browserSession(r.Context(), rt, r)
+	if err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "session store unavailable")
+		return
+	}
+	nonce := q.Get("nonce")
+	if nonce == "" {
+		nonce = b.randomHex(16)
+	}
+	flowID := b.randomHex(24)
+
+	step, err := rt.adapter.Start(r.Context(), identityadapter.Request{
+		Tenant:     rt.cfg.ID,
+		Method:     r.Method,
+		URL:        r.URL.String(),
+		RemoteAddr: r.RemoteAddr,
+		Header:     r.Header.Clone(),
+		Params: map[string]string{
+			"broker_state": flowID,
+			"nonce":        nonce,
+		},
+	})
+	if err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "upstream login unavailable")
+		return
+	}
+	if step.Kind != identityadapter.StepRedirect || step.RedirectURL == "" {
+		oauthError(w, http.StatusBadGateway, "server_error", "upstream login did not redirect")
+		return
+	}
+	if err := b.store.PutFlow(r.Context(), rt.cfg.ID, flowID, &flow{
+		Tenant:            rt.cfg.ID,
+		ClientID:          clientID,
+		RedirectURI:       redirectURI,
+		State:             state,
+		Nonce:             nonce,
+		BrowserID:         browserID,
+		SID:               sharedSID,
+		Sub:               sharedSub,
+		SessionIssuedAt:   sharedIssuedAt,
+		AdapterState:      step.State,
+		Scope:             scope,
+		CodeChallenge:     challenge,
+		CodeChallengeMeth: method,
+		Expires:           b.now().Add(10 * time.Minute),
+	}, 10*time.Minute); err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "flow store unavailable")
+		return
+	}
+
+	http.Redirect(w, r, step.RedirectURL, http.StatusFound)
+}
+
+func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	q := r.URL.Query()
+	state := q.Get("state")
+	f, err := b.store.TakeFlow(r.Context(), rt.cfg.ID, state)
+	if err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "flow store unavailable")
+		return
+	}
+	if f == nil || b.now().After(f.Expires) {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "unknown or expired state")
+		return
+	}
+	if e := q.Get("error"); e != "" {
+		oauthError(w, http.StatusBadRequest, e, q.Get("error_description"))
+		return
+	}
+	code := q.Get("code")
+	if code == "" {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "missing code")
+		return
+	}
+	step, err := rt.adapter.Continue(
+		r.Context(),
+		identityadapter.Request{
+			Tenant:     rt.cfg.ID,
+			Method:     r.Method,
+			URL:        r.URL.String(),
+			RemoteAddr: r.RemoteAddr,
+			Header:     r.Header.Clone(),
+			Params:     map[string]string{"code": code},
+		},
+		f.AdapterState,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, identityadapter.ErrInvalidRequest):
+			oauthError(w, http.StatusBadRequest, "invalid_request", "upstream callback rejected")
+		case errors.Is(err, identityadapter.ErrUnauthenticated):
+			oauthError(w, http.StatusForbidden, "access_denied", "upstream identity rejected")
+		default:
+			oauthError(w, http.StatusBadGateway, "upstream_error", "upstream unavailable")
+		}
+		return
+	}
+	if step.Kind != identityadapter.StepResult || step.Assertion == nil {
+		oauthError(w, http.StatusBadGateway, "upstream_error", "upstream returned no assertion")
+		return
+	}
+	a := step.Assertion
+	claims := a.Claims
+	if claims == nil {
+		claims = map[string]any{}
+	}
+	if len(a.Groups) > 0 {
+		if _, ok := claims["groups"]; !ok {
+			claims["groups"] = a.Groups
+		}
+	}
+	if verified, ok := claims["email_verified"].(bool); ok && !verified {
+		oauthError(w, http.StatusForbidden, "access_denied", "email is not verified")
+		return
+	}
+	email := a.Email
+	if !rt.domainAllowed(email, claims) {
+		oauthError(w, http.StatusForbidden, "access_denied", "domain is not allowed")
+		return
+	}
+	sub := a.Subject
+	if sub == "" {
+		oauthError(w, http.StatusBadGateway, "upstream_error", "upstream subject is empty")
+		return
+	}
+	roles := rt.rolesFor(email, claims)
+	username := a.Username
+	if username == "" {
+		username = email
+	}
+	brokerCode := b.randomHex(24)
+	sid := f.SID
+	if sid == "" {
+		sid = b.randomHex(16)
+	}
+	browserID := f.BrowserID
+	if browserID == "" {
+		browserID = b.randomHex(24)
+	}
+	if sub == "" {
+		sub = a.Subject
+	}
+	issuedAt := f.SessionIssuedAt
+	if issuedAt.IsZero() {
+		issuedAt = b.now()
+	}
+	if err := b.store.PutSession(
+		r.Context(), rt.cfg.ID, browserID, sid, sub, issuedAt,
+		rt.cfg.sessionTTL(),
+	); err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "session store unavailable")
+		return
+	}
+	b.setBrowserSession(w, rt, browserID)
+	if err := b.store.PutCode(r.Context(), rt.cfg.ID, brokerCode, &authCode{
+		Tenant:            rt.cfg.ID,
+		ClientID:          f.ClientID,
+		RedirectURI:       f.RedirectURI,
+		Scope:             f.Scope,
+		Nonce:             f.Nonce,
+		CodeChallenge:     f.CodeChallenge,
+		CodeChallengeMeth: f.CodeChallengeMeth,
+		Subject:           sub,
+		Username:          username,
+		Email:             email,
+		Roles:             roles,
+		SID:               sid,
+		IssuedAt:          b.now(),
+		Expires:           b.now().Add(5 * time.Minute),
+	}, 5*time.Minute); err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "code store unavailable")
+		return
+	}
+
+	redirect, err := url.Parse(f.RedirectURI)
+	if err != nil {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "bad redirect_uri")
+		return
+	}
+	rq := redirect.Query()
+	rq.Set("code", brokerCode)
+	rq.Set("state", f.State)
+	redirect.RawQuery = rq.Encode()
+	http.Redirect(w, r, redirect.String(), http.StatusFound)
+}
+
+func (b *Broker) token(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		oauthError(w, http.StatusMethodNotAllowed, "invalid_request", "POST required")
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "bad form")
+		return
+	}
+	switch r.Form.Get("grant_type") {
+	case "authorization_code":
+		b.tokenCode(w, r, rt)
+	case "client_credentials":
+		b.tokenClientCredentials(w, r, rt)
+	case "refresh_token":
+		b.tokenRefresh(w, r, rt)
+	default:
+		oauthError(w, http.StatusBadRequest, "unsupported_grant_type", "unsupported grant_type")
+	}
+}
+
+func (b *Broker) tokenCode(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	clientID, ok := rt.clientAuthOK(r)
+	if !ok {
+		w.Header().Set("WWW-Authenticate", `Basic realm="token"`)
+		oauthError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed")
+		return
+	}
+	code := r.Form.Get("code")
+	redirectURI := r.Form.Get("redirect_uri")
+	verifier := r.Form.Get("code_verifier")
+
+	c, err := b.store.TakeCode(r.Context(), rt.cfg.ID, code)
+	if err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "code store unavailable")
+		return
+	}
+	if c == nil || b.now().After(c.Expires) {
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "unknown or expired code")
+		return
+	}
+	if clientID != c.ClientID {
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "client mismatch")
+		return
+	}
+	if redirectURI != c.RedirectURI {
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri mismatch")
+		return
+	}
+	if c.CodeChallenge != "" {
+		sum := sha256.Sum256([]byte(verifier))
+		got := base64.RawURLEncoding.EncodeToString(sum[:])
+		if got != c.CodeChallenge {
+			oauthError(w, http.StatusBadRequest, "invalid_grant", "PKCE verification failed")
+			return
+		}
+	}
+	revoked, err := b.sessionRevoked(r.Context(), rt, c.SID, c.Subject, c.IssuedAt)
+	if err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "revocation store unavailable")
+		return
+	}
+	if revoked {
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "session revoked")
+		return
+	}
+	b.writeTokens(r.Context(), w, rt, c.Subject, c.Username, c.Email, c.Roles, c.SID,
+		c.Scope, rt.defaultAudience(), c.Nonce, c.ClientID, true, true)
+}
+
+func (b *Broker) tokenClientCredentials(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	clientID, ok := rt.clientAuthOK(r)
+	if !ok || rt.cfg.ClientSecret == "" {
+		w.Header().Set("WWW-Authenticate", `Basic realm="token"`)
+		oauthError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed")
+		return
+	}
+	aud := r.Form.Get("audience")
+	if aud == "" {
+		aud = rt.defaultAudience()
+	}
+	if !rt.audienceAllowed(aud) {
+		oauthError(w, http.StatusBadRequest, "invalid_target", "unknown audience")
+		return
+	}
+	scope := r.Form.Get("scope")
+	if scope == "" {
+		scope = "mcp-tools"
+	}
+	b.writeTokens(r.Context(), w, rt, clientID, clientID, "", rt.cfg.DefaultRoles,
+		"", scope, aud, "", clientID, false, false)
+}
+
+func (b *Broker) tokenRefresh(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	raw := r.Form.Get("refresh_token")
+	g, err := b.store.TakeRefresh(r.Context(), rt.cfg.ID, raw)
+	if err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "refresh store unavailable")
+		return
+	}
+	if g == nil || b.now().After(g.Expires) {
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "unknown or expired refresh token")
+		return
+	}
+	revoked, err := b.sessionRevoked(r.Context(), rt, g.SID, g.Subject, g.IssuedAt)
+	if err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "revocation store unavailable")
+		return
+	}
+	if revoked {
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "session revoked")
+		return
+	}
+	b.writeTokens(r.Context(), w, rt, g.Subject, g.Username, g.Email, g.Roles, g.SID,
+		g.Scope, g.Audience, "", g.ClientID, false, true)
+}
+
+func (b *Broker) writeTokens(
+	ctx context.Context, w http.ResponseWriter, rt *tenantRuntime,
+	sub, username, email string, roles []string, sid, scope, aud,
+	nonce, clientID string, withID, withRefresh bool,
+) {
+	now := b.now()
+	access := map[string]any{
+		"iss": b.issuer(rt), "sub": sub, "aud": aud,
+		"exp": now.Add(rt.cfg.accessTTL()).Unix(),
+		"iat": now.Unix(), "jti": b.randomHex(16),
+		"tenant": rt.cfg.ID, "roles": roles, "scope": scope,
+		"sid": sid, "email": email, "preferred_username": username,
+	}
+	accessToken, err := rt.activeKey().sign(access)
+	if err != nil {
+		oauthError(w, http.StatusInternalServerError, "server_error", "signing failed")
+		return
+	}
+	resp := map[string]any{
+		"access_token": accessToken,
+		"token_type":   "Bearer",
+		"expires_in":   int(rt.cfg.accessTTL().Seconds()),
+	}
+	if withID {
+		id := map[string]any{
+			"iss": b.issuer(rt), "sub": sub, "aud": clientID,
+			"exp": now.Add(rt.cfg.idTTL()).Unix(),
+			"iat": now.Unix(), "nonce": nonce,
+			"tenant": rt.cfg.ID, "roles": roles, "sid": sid,
+			"email": email, "preferred_username": username,
+		}
+		raw, err := rt.activeKey().sign(id)
+		if err != nil {
+			oauthError(w, http.StatusInternalServerError, "server_error", "signing failed")
+			return
+		}
+		resp["id_token"] = raw
+	}
+	if withRefresh {
+		refreshToken := b.randomHex(32)
+		if err := b.store.PutRefresh(ctx, rt.cfg.ID, refreshToken, &refreshGrant{
+			Tenant: rt.cfg.ID, ClientID: clientID,
+			Subject: sub, Username: username, Email: email,
+			Roles: roles, SID: sid, Scope: scope, Audience: aud,
+			IssuedAt: now,
+			Expires:  now.Add(time.Duration(rt.cfg.RefreshTokenTTL) * time.Second),
+		}, time.Duration(rt.cfg.RefreshTokenTTL)*time.Second); err != nil {
+			oauthError(w, http.StatusBadGateway, "server_error", "refresh store unavailable")
+			return
+		}
+		resp["refresh_token"] = refreshToken
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	if err := b.revokeLogoutSession(
+		r.Context(), w, rt, r,
+	); err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "logout revocation failed")
+		return
+	}
+	redirect := r.URL.Query().Get("post_logout_redirect_uri")
+	if redirect == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// Only registered post-logout targets are allowed.
+	if !containsString(rt.cfg.PostLogoutRedirectURIs, redirect) &&
+		!containsString(rt.cfg.RedirectURIs, redirect) {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "post_logout_redirect_uri is not registered")
+		return
+	}
+	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+func (rt *tenantRuntime) defaultAudience() string {
+	if len(rt.cfg.Audiences) > 0 {
+		return rt.cfg.Audiences[0]
+	}
+	return rt.cfg.ID
+}
+
+func (rt *tenantRuntime) audienceAllowed(aud string) bool {
+	if len(rt.cfg.Audiences) == 0 {
+		return aud == rt.cfg.ID
+	}
+	return containsString(rt.cfg.Audiences, aud)
+}
+
+func (rt *tenantRuntime) domainAllowed(email string, claims map[string]any) bool {
+	if len(rt.cfg.AllowedDomains) == 0 {
+		return true
+	}
+	hd, _ := claims["hd"].(string)
+	for _, d := range rt.cfg.AllowedDomains {
+		if strings.EqualFold(hd, d) {
+			return true
+		}
+		if strings.HasSuffix(strings.ToLower(email), "@"+strings.ToLower(d)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (rt *tenantRuntime) rolesFor(email string, claims map[string]any) []string {
+	set := map[string]bool{}
+	for _, r := range rt.cfg.DefaultRoles {
+		if r != "" {
+			set[r] = true
+		}
+	}
+	for _, e := range rt.cfg.AdminEmails {
+		if strings.EqualFold(e, email) {
+			set["admin"] = true
+		}
+	}
+	for _, group := range claimStrings(claims["groups"]) {
+		for _, r := range rt.cfg.GroupRoles[group] {
+			if r != "" {
+				set[r] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for r := range set {
+		out = append(out, r)
+	}
+	sortStrings(out)
+	return out
+}
+
+func (b *Broker) randomHex(n int) string {
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(b.rand, buf); err != nil {
+		// crypto/rand should never fail; fall back to time-based
+		// entropy rather than returning a predictable empty string.
+		now := b.now().UnixNano()
+		for i := range buf {
+			buf[i] = byte(now >> (i % 8 * 8))
+		}
+	}
+	return hex.EncodeToString(buf)
+}
+
+func oauthError(w http.ResponseWriter, status int, code, desc string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error": code, "error_description": desc,
+	})
+}
+
+func (rt *tenantRuntime) clientAuthOK(r *http.Request) (string, bool) {
+	id, secret, basic := r.BasicAuth()
+	if !basic {
+		id = r.Form.Get("client_id")
+		secret = r.Form.Get("client_secret")
+	}
+	if id != rt.cfg.ClientID {
+		return id, false
+	}
+	if rt.cfg.ClientSecret == "" {
+		return id, true
+	}
+	if subtle.ConstantTimeCompare(
+		[]byte(secret), []byte(rt.cfg.ClientSecret)) != 1 {
+		return id, false
+	}
+	return id, true
+}
+
+func containsString(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func scopeHas(scope, want string) bool {
+	for _, s := range strings.Fields(scope) {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func claimStrings(v any) []string {
+	switch t := v.(type) {
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return t
+	case string:
+		if t == "" {
+			return nil
+		}
+		return strings.Fields(t)
+	default:
+		return nil
+	}
+}
+
+func sortStrings(v []string) {
+	for i := 1; i < len(v); i++ {
+		for j := i; j > 0 && v[j] < v[j-1]; j-- {
+			v[j], v[j-1] = v[j-1], v[j]
+		}
+	}
+}

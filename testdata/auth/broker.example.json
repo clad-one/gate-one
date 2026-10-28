@@ -1,0 +1,55 @@
+{
+  "publicUrl": "https://auth.example.com",
+  "listen": ":8081",
+  "tenants": [
+    {
+      "id": "acme",
+      "clientId": "cladone-go",
+      "redirectUris": [
+        "https://login.acme.example.com/auth/callback"
+      ],
+      "audiences": [
+        "https://mcp.acme.example.com"
+      ],
+      "google": {
+        "issuer": "https://accounts.google.com",
+        "clientId": "REPLACE_ME.apps.googleusercontent.com",
+        "hostedDomain": "acme.example.com",
+        "scopes": [
+          "openid",
+          "profile",
+          "email"
+        ],
+        "clientSecretEnv": "GOOGLE_CLIENT_SECRET"
+      },
+      "defaultRoles": [
+        "user"
+      ],
+      "allowedDomains": [
+        "acme.example.com"
+      ],
+      "adminEmails": [
+        "admin@acme.example.com"
+      ],
+      "groupRoles": {
+        "admins": [
+          "admin"
+        ]
+      },
+      "accessTokenTtlSeconds": 600,
+      "idTokenTtlSeconds": 600,
+      "refreshTokenTtlSeconds": 2592000,
+      "clientSecretEnv": "ACME_BROKER_CLIENT_SECRET",
+      "postLogoutRedirectUris": [
+        "https://app.acme.example.com/"
+      ],
+      "sessionTtlSeconds": 43200
+    }
+  ],
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "passwordEnv": "REDIS_PASSWORD",
+    "prefix": "cladone:broker:v1:",
+    "authPrefix": "cladone:auth:v1:"
+  }
+}

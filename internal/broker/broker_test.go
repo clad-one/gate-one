@@ -1,0 +1,742 @@
+package broker
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"cladone/gate-one/internal/authn"
+	"cladone/gate-one/pkg/identityadapter"
+	"cladone/gate-one/pkg/identityadapter/conformance"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/go-jose/go-jose/v4"
+)
+
+func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
+	google := newFakeGoogle(t)
+	b, srv := newTestBroker(t, google)
+	_ = b
+
+	verifier := "verifier-0123456789-0123456789-0123456789"
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+	redirectURI := "https://login.acme.test/auth/callback"
+	state := "client-state"
+	client := &http.Client{CheckRedirect: func(
+		*http.Request, []*http.Request,
+	) error {
+		return http.ErrUseLastResponse
+	}}
+
+	q := url.Values{}
+	q.Set("client_id", "cladone-go")
+	q.Set("redirect_uri", redirectURI)
+	q.Set("response_type", "code")
+	q.Set("scope", "openid profile email")
+	q.Set("state", state)
+	q.Set("nonce", "nonce-1")
+	q.Set("code_challenge", challenge)
+	q.Set("code_challenge_method", "S256")
+
+	resp, err := client.Get(srv.URL + "/t/acme/authorize?" + q.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize = %d", resp.StatusCode)
+	}
+	googleURL, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(googleURL.String(), google.srv.URL+"/authorize") {
+		t.Fatalf("google location = %s", googleURL)
+	}
+
+	// Fake Google auto-consents and redirects to the broker callback.
+	resp, err = client.Get(googleURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("google authorize = %d", resp.StatusCode)
+	}
+	cb, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Broker callback exchanges the code and redirects to the client.
+	resp, err = client.Get(cb.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("broker callback = %d: %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	clientRedirect, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clientRedirect.Scheme+"://"+clientRedirect.Host+clientRedirect.Path != redirectURI {
+		t.Fatalf("client redirect = %s", clientRedirect)
+	}
+	if clientRedirect.Query().Get("state") != state {
+		t.Fatalf("state = %q", clientRedirect.Query().Get("state"))
+	}
+	if len(resp.Cookies()) == 0 {
+		t.Fatal("broker did not set its SSO session cookie")
+	}
+	brokerCode := clientRedirect.Query().Get("code")
+	if brokerCode == "" {
+		t.Fatal("no broker code")
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", brokerCode)
+	form.Set("client_id", "cladone-go")
+	form.Set("client_secret", "secret")
+	form.Set("redirect_uri", redirectURI)
+	form.Set("code_verifier", verifier)
+	resp, err = http.PostForm(srv.URL+"/t/acme/token", form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("token = %d: %s", resp.StatusCode, body)
+	}
+	var tokens map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
+		t.Fatal(err)
+	}
+	access, _ := tokens["access_token"].(string)
+	id, _ := tokens["id_token"].(string)
+	if access == "" || id == "" {
+		t.Fatalf("tokens = %+v", tokens)
+	}
+
+	pub := b.tenants["acme"].activeKey().pub
+
+	accessClaims := verifyJWT(t, pub, access)
+	if accessClaims["iss"] != srv.URL+"/t/acme" {
+		t.Errorf("iss = %v", accessClaims["iss"])
+	}
+	if accessClaims["tenant"] != "acme" {
+		t.Errorf("tenant = %v", accessClaims["tenant"])
+	}
+	if accessClaims["email"] != "alice@acme.test" {
+		t.Errorf("email = %v", accessClaims["email"])
+	}
+	if accessClaims["sid"] == "" {
+		t.Error("sid missing")
+	}
+	idClaims := verifyJWT(t, pub, id)
+	if idClaims["nonce"] != "nonce-1" {
+		t.Errorf("nonce = %v", idClaims["nonce"])
+	}
+	if idClaims["aud"] != "cladone-go" {
+		t.Errorf("id aud = %v", idClaims["aud"])
+	}
+}
+
+func TestAC_AUTH_09_IdentityAdapterConformance(t *testing.T) {
+	// The broker's upstream adapter is the OIDC/Google adapter; the
+	// generic conformance suite is exercised in pkg/identityadapter.
+	// Here we assert the broker emits a conformant discovery + JWKS.
+	google := newFakeGoogle(t)
+	b, srv := newTestBroker(t, google)
+	_ = b
+
+	resp, err := http.Get(srv.URL + "/t/acme/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var disc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&disc); err != nil {
+		t.Fatal(err)
+	}
+	if disc["issuer"] != srv.URL+"/t/acme" {
+		t.Fatalf("issuer = %v", disc["issuer"])
+	}
+	for _, k := range []string{
+		"authorization_endpoint", "token_endpoint", "jwks_uri",
+		"code_challenge_methods_supported",
+		"cladone_refresh_token_ttl_seconds",
+	} {
+		if disc[k] == nil {
+			t.Errorf("discovery missing %s", k)
+		}
+	}
+
+	resp, err = http.Get(srv.URL + "/t/acme/jwks.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var set jose.JSONWebKeySet
+	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
+		t.Fatal(err)
+	}
+	if len(set.Keys) != 1 || set.Keys[0].KeyID == "" {
+		t.Fatalf("jwks = %+v", set)
+	}
+}
+
+func TestAC_AUTH_09_ClientCredentials(t *testing.T) {
+	google := newFakeGoogle(t)
+	b, srv := newTestBroker(t, google)
+	_ = b
+
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", "cladone-go")
+	form.Set("client_secret", "secret")
+	form.Set("audience", "https://mcp.acme.test")
+	form.Set("scope", "mcp-tools")
+	resp, err := http.PostForm(srv.URL+"/t/acme/token", form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("token = %d: %s", resp.StatusCode, body)
+	}
+	var tokens map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
+		t.Fatal(err)
+	}
+	access, _ := tokens["access_token"].(string)
+	if access == "" {
+		t.Fatal("no access token")
+	}
+	pub := b.tenants["acme"].activeKey().pub
+	claims := verifyJWT(t, pub, access)
+	if claims["sub"] != "cladone-go" {
+		t.Errorf("sub = %v", claims["sub"])
+	}
+	if claims["aud"] != "https://mcp.acme.test" {
+		t.Errorf("aud = %v", claims["aud"])
+	}
+	if claims["tenant"] != "acme" {
+		t.Errorf("tenant = %v", claims["tenant"])
+	}
+}
+
+func TestAC_AUTH_13_BrokerRejectsBadRedirect(t *testing.T) {
+	google := newFakeGoogle(t)
+	_, srv := newTestBroker(t, google)
+	resp, err := http.Get(srv.URL + "/t/acme/authorize?client_id=cladone-go&" +
+		"redirect_uri=https://evil.test/cb&response_type=code&scope=openid&state=x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func newTestBroker(t *testing.T, google *fakeGoogle) (*Broker, *httptest.Server) {
+	t.Helper()
+	cfg := &Config{
+		PublicURL: "http://placeholder.test",
+		Tenants: []Tenant{{
+			ID:           "acme",
+			ClientID:     "cladone-go",
+			ClientSecret: "secret",
+			RedirectURIs: []string{"https://login.acme.test/auth/callback"},
+			Audiences:    []string{"https://mcp.acme.test"},
+			Google: GoogleConfig{
+				Issuer:       google.srv.URL,
+				ClientID:     "google-client",
+				ClientSecret: "google-secret",
+				HostedDomain: "acme.test",
+				Scopes:       []string{"openid", "profile", "email"},
+			},
+			DefaultRoles:   []string{"user"},
+			AllowedDomains: []string{"acme.test"},
+			AdminEmails:    []string{"admin@acme.test"},
+		}},
+	}
+	b, err := New(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(b.Handler())
+	t.Cleanup(srv.Close)
+	b.SetPublicURL(srv.URL)
+	return b, srv
+}
+
+type fakeGoogle struct {
+	srv  *httptest.Server
+	priv ed25519.PrivateKey
+	pub  ed25519.PublicKey
+	kid  string
+	mu   sync.Mutex
+	code map[string]fakeCode
+}
+
+type fakeCode struct {
+	Nonce       string
+	RedirectURI string
+	Expires     time.Time
+}
+
+func newFakeGoogle(t *testing.T) *fakeGoogle {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &fakeGoogle{priv: priv, pub: pub, kid: "google-1", code: map[string]fakeCode{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration",
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                                g.srv.URL,
+				"authorization_endpoint":                g.srv.URL + "/authorize",
+				"token_endpoint":                        g.srv.URL + "/token",
+				"jwks_uri":                              g.srv.URL + "/jwks",
+				"response_types_supported":              []string{"code"},
+				"subject_types_supported":               []string{"public"},
+				"id_token_signing_alg_values_supported": []string{"EdDSA"},
+			})
+		})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
+			Key: pub, KeyID: g.kid, Algorithm: "EdDSA", Use: "sig",
+		}}})
+	})
+	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		code := "google-code"
+		g.mu.Lock()
+		g.code[code] = fakeCode{
+			Nonce:       q.Get("nonce"),
+			RedirectURI: q.Get("redirect_uri"),
+			Expires:     time.Now().Add(5 * time.Minute),
+		}
+		g.mu.Unlock()
+		u, _ := url.Parse(q.Get("redirect_uri"))
+		rq := u.Query()
+		rq.Set("code", code)
+		rq.Set("state", q.Get("state"))
+		u.RawQuery = rq.Encode()
+		http.Redirect(w, r, u.String(), http.StatusFound)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		code := r.Form.Get("code")
+		g.mu.Lock()
+		fc, ok := g.code[code]
+		delete(g.code, code)
+		g.mu.Unlock()
+		if !ok || time.Now().After(fc.Expires) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+			return
+		}
+		now := time.Now()
+		claims := map[string]any{
+			"iss": g.srv.URL, "aud": "google-client", "sub": "google-sub-1",
+			"exp": now.Add(time.Minute).Unix(), "iat": now.Unix(),
+			"nonce": fc.Nonce, "email": "alice@acme.test",
+			"email_verified": true, "hd": "acme.test",
+			"preferred_username": "alice", "name": "Alice",
+		}
+		tok := signFake(t, g.priv, g.kid, claims)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "google-access", "token_type": "Bearer",
+			"expires_in": 3600, "id_token": tok,
+		})
+	})
+	g.srv = httptest.NewServer(mux)
+	t.Cleanup(g.srv.Close)
+	return g
+}
+
+func signFake(
+	t *testing.T, priv ed25519.PrivateKey, kid string, claims map[string]any,
+) string {
+	t.Helper()
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.EdDSA, Key: priv},
+		(&jose.SignerOptions{}).WithHeader("kid", kid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(claims)
+	obj, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := obj.CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func verifyJWT(
+	t *testing.T, pub ed25519.PublicKey, raw string,
+) map[string]any {
+	t.Helper()
+	jws, err := jose.ParseSigned(raw, []jose.SignatureAlgorithm{jose.EdDSA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := jws.Verify(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatal(err)
+	}
+	return claims
+}
+
+func TestAC_AUTH_18_BrokerRedisStore(t *testing.T) {
+	mr := miniredis.RunT(t)
+	google := newFakeGoogle(t)
+	cfg := testBrokerConfig(google)
+	cfg.Redis = &RedisConfig{
+		URL:        "redis://" + mr.Addr() + "/0",
+		AuthPrefix: "test:auth:v1:",
+	}
+	b, err := New(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+
+	ctx := context.Background()
+	f := &flow{Tenant: "acme", ClientID: "cladone-go", Expires: time.Now().Add(time.Minute)}
+	if err := b.store.PutFlow(ctx, "acme", "flow-1", f, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.store.TakeFlow(ctx, "acme", "flow-1")
+	if err != nil || got == nil || got.ClientID != "cladone-go" {
+		t.Fatalf("flow = %+v, %v", got, err)
+	}
+	got, _ = b.store.TakeFlow(ctx, "acme", "flow-1")
+	if got != nil {
+		t.Fatal("flow was not consumed")
+	}
+
+	// A second broker instance sees the same code store.
+	b2, err := New(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b2.Close()
+	c := &authCode{Tenant: "acme", ClientID: "cladone-go", Expires: time.Now().Add(time.Minute)}
+	if err := b.store.PutCode(ctx, "acme", "code-1", c, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	gotCode, err := b2.store.TakeCode(ctx, "acme", "code-1")
+	if err != nil || gotCode == nil || gotCode.ClientID != "cladone-go" {
+		t.Fatalf("code across instances = %+v, %v", gotCode, err)
+	}
+
+	// Broker revocation is readable by Gate One's shared store.
+	if err := b.Revoke(ctx, "acme", "sid-1", "", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	gs, err := authn.OpenRedisStore(ctx, authn.RedisConfig{
+		URL:    "redis://" + mr.Addr() + "/0",
+		Prefix: "test:auth:v1:",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+	revoked, err := gs.IsRevoked(ctx, b.issuer(b.tenants["acme"]), "sid-1", "")
+	if err != nil || !revoked {
+		t.Fatalf("gate one sees revocation = %v, %v", revoked, err)
+	}
+}
+
+func testBrokerConfig(google *fakeGoogle) *Config {
+	return &Config{
+		PublicURL: "https://broker.test",
+		Tenants: []Tenant{{
+			ID:           "acme",
+			ClientID:     "cladone-go",
+			ClientSecret: "secret",
+			RedirectURIs: []string{"https://login.acme.test/auth/callback"},
+			Audiences:    []string{"https://mcp.acme.test"},
+			Google: GoogleConfig{
+				Issuer:       google.srv.URL,
+				ClientID:     "google-client",
+				ClientSecret: "google-secret",
+				HostedDomain: "acme.test",
+			},
+			DefaultRoles:   []string{"user"},
+			AllowedDomains: []string{"acme.test"},
+		}},
+	}
+}
+
+func TestAC_AUTH_09_GoogleAdapterConformance(t *testing.T) {
+	google := newFakeGoogle(t)
+	tnt := testBrokerConfig(google).Tenants[0]
+	a, err := newOIDCAdapter(context.Background(), tnt,
+		"https://broker.test", nil, time.Now, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conformance.Run(t, a)
+}
+
+func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
+	google := newFakeGoogle(t)
+	tnt := testBrokerConfig(google).Tenants[0]
+	a, err := newOIDCAdapter(context.Background(), tnt,
+		"https://broker.test", nil, time.Now, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := a.Start(context.Background(), identityadapter.Request{
+		Tenant: "acme",
+		Params: map[string]string{
+			"broker_state": "flow-1",
+			"nonce":        "nonce-adapter",
+		},
+		Header: map[string][]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != identityadapter.StepRedirect {
+		t.Fatalf("step = %s", step.Kind)
+	}
+	// Fake Google stores the code/nonce and redirects to the broker.
+	client := &http.Client{CheckRedirect: func(
+		*http.Request, []*http.Request,
+	) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Get(step.RedirectURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("google authorize = %d", resp.StatusCode)
+	}
+	cont, err := a.Continue(context.Background(), identityadapter.Request{
+		Tenant: "acme",
+		Params: map[string]string{"code": "google-code"},
+	}, step.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cont.Kind != identityadapter.StepResult || cont.Assertion == nil {
+		t.Fatalf("continue = %+v, want result", cont)
+	}
+	if cont.Assertion.Email != "alice@acme.test" {
+		t.Errorf("email = %q", cont.Assertion.Email)
+	}
+}
+
+func TestAC_AUTH_20_BrokerKeyRotation(t *testing.T) {
+	google := newFakeGoogle(t)
+	dir := t.TempDir()
+	writeKey := func(name string) (string, ed25519.PublicKey) {
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, name)
+		body := base64.RawURLEncoding.EncodeToString(priv.Seed())
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path, pub
+	}
+	k1, _ := writeKey("k1.key")
+	k2, pub2 := writeKey("k2.key")
+	cfg := testBrokerConfig(google)
+	cfg.Tenants[0].KeyFiles = []string{k1, k2}
+	b, err := New(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+
+	rt := b.tenants["acme"]
+	if len(rt.keys) != 2 {
+		t.Fatalf("keys = %d", len(rt.keys))
+	}
+	if rt.activeKey().kid == rt.keys[0].kid {
+		t.Fatal("active key is not the newest")
+	}
+	if got := len(mergeJWKS(rt.keys).Keys); got != 2 {
+		t.Fatalf("jwks keys = %d", got)
+	}
+	claims := map[string]any{"iss": "https://broker.test/t/acme", "sub": "u"}
+	tok, err := rt.activeKey().sign(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jws, err := jose.ParseSigned(tok, []jose.SignatureAlgorithm{jose.EdDSA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jws.Verify(pub2); err != nil {
+		t.Fatalf("active key verify: %v", err)
+	}
+}
+
+func TestAC_AUTH_21_RevokeWithConfig(t *testing.T) {
+	mr := miniredis.RunT(t)
+	google := newFakeGoogle(t)
+	cfg := testBrokerConfig(google)
+	cfg.Redis = &RedisConfig{
+		URL:        "redis://" + mr.Addr() + "/0",
+		AuthPrefix: "test:revoke:v1:",
+	}
+	ctx := context.Background()
+	if err := RevokeWithConfig(ctx, cfg, "acme", "sid-cli", "", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	gs, err := authn.OpenRedisStore(ctx, authn.RedisConfig{
+		URL:    "redis://" + mr.Addr() + "/0",
+		Prefix: "test:revoke:v1:",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+	revoked, err := gs.IsRevoked(ctx, cfg.PublicURL+"/t/acme", "sid-cli", "")
+	if err != nil || !revoked {
+		t.Fatalf("revoked = %v, %v", revoked, err)
+	}
+	if err := RevokeWithConfig(ctx, cfg, "nope", "sid", "", time.Hour); err == nil {
+		t.Fatal("unknown tenant accepted")
+	}
+}
+
+func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
+	google := newFakeGoogle(t)
+	b, srv := newTestBroker(t, google)
+	ctx := context.Background()
+	rt := b.tenants["acme"]
+
+	// A browser session shared by two apps in the same browser.
+	if err := b.store.PutSession(ctx, "acme", "browser-1", "sid-shared", "user-1",
+		time.Now().Add(-time.Minute), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	q := url.Values{}
+	q.Set("client_id", "cladone-go")
+	q.Set("redirect_uri", "https://login.acme.test/auth/callback")
+	q.Set("response_type", "code")
+	q.Set("scope", "openid")
+	q.Set("state", "client-state")
+	q.Set("nonce", "nonce-1")
+	q.Set("code_challenge", "challenge")
+	q.Set("code_challenge_method", "S256")
+	req := httptest.NewRequest(http.MethodGet,
+		srv.URL+"/t/acme/authorize?"+q.Encode(), nil)
+	req.AddCookie(&http.Cookie{Name: b.cfg.SessionCookieName, Value: "browser-1"})
+	rec := httptest.NewRecorder()
+	b.serveHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("authorize = %d: %s", rec.Code, rec.Body.String())
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flowID := loc.Query().Get("state")
+	f, err := b.store.TakeFlow(ctx, "acme", flowID)
+	if err != nil || f == nil {
+		t.Fatalf("flow = %+v, %v", f, err)
+	}
+	if f.SID != "sid-shared" {
+		t.Fatalf("flow sid = %q, want sid-shared", f.SID)
+	}
+
+	// Logout via the broker cookie revokes the shared sid immediately.
+	req = httptest.NewRequest(http.MethodGet, srv.URL+"/t/acme/logout", nil)
+	req.AddCookie(&http.Cookie{Name: b.cfg.SessionCookieName, Value: "browser-1"})
+	rec = httptest.NewRecorder()
+	b.serveHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout = %d: %s", rec.Code, rec.Body.String())
+	}
+	revoked, err := b.store.IsRevoked(ctx, b.issuer(rt), "sid-shared", "")
+	if err != nil || !revoked {
+		t.Fatalf("revoked = %v, %v", revoked, err)
+	}
+	// Global user logout: old sessions are revoked, a fresh login is not.
+	old, err := b.store.IsSubjectRevoked(ctx, b.issuer(rt), "user-1",
+		time.Now().Add(-time.Minute))
+	if err != nil || !old {
+		t.Fatalf("old subject = %v, %v", old, err)
+	}
+	fresh, err := b.store.IsSubjectRevoked(ctx, b.issuer(rt), "user-1",
+		time.Now().Add(time.Minute))
+	if err != nil || fresh {
+		t.Fatalf("fresh subject = %v, %v", fresh, err)
+	}
+	// A new login after the logout can reuse its new browser session.
+	if err := b.store.PutSession(ctx, "acme", "browser-2", "sid-new",
+		"user-1", time.Now().Add(time.Minute), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, srv.URL+"/t/acme/authorize", nil)
+	req.AddCookie(&http.Cookie{Name: b.cfg.SessionCookieName, Value: "browser-2"})
+	_, gotSID, _, _, err := b.browserSession(ctx, rt, req)
+	if err != nil || gotSID != "sid-new" {
+		t.Fatalf("fresh browser session = %q, %v", gotSID, err)
+	}
+
+	// id_token_hint path (no cookie): a valid broker ID token revokes its sid.
+	hint, err := rt.activeKey().sign(map[string]any{
+		"iss": b.issuer(rt), "sub": "user-1", "sid": "sid-hint",
+		"aud": "cladone-go", "exp": time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet,
+		srv.URL+"/t/acme/logout?id_token_hint="+url.QueryEscape(hint), nil)
+	rec = httptest.NewRecorder()
+	b.serveHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout hint = %d: %s", rec.Code, rec.Body.String())
+	}
+	revoked, err = b.store.IsRevoked(ctx, b.issuer(rt), "sid-hint", "")
+	if err != nil || !revoked {
+		t.Fatalf("hint revoked = %v, %v", revoked, err)
+	}
+}
