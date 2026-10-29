@@ -13,6 +13,9 @@ test-auth-race: ## Tests auth sous le race detector
 	go test -race ./cmd/gate-one/... ./internal/authn/... ./internal/broker/... ./internal/proxy/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -run 'TestAC_AUTH_' -count=1
 	go test -race ./internal/testutil/... -count=1
 
+test-e2e: ## E2E in-process (faux Google, 2 brokers, 2 Gate One, Redis)
+	go test -tags=e2e -count=1 ./test/e2e/...
+
 build-auth: ## Compile le broker OIDC dans bin/cladone-auth
 	go build -o ./bin/cladone-auth ./cmd/cladone-auth
 
@@ -31,4 +34,4 @@ check: build ## Valide la config de référence sans démarrer
 release: ## Prépare les artefacts locaux dans dist/ (aucun push, aucun tag)
 	./release.sh
 
-.PHONY: build test test-auth test-auth-race build-auth build-fake-google smoke run check release
+.PHONY: build test test-auth test-auth-race test-e2e build-auth build-fake-google smoke run check release
