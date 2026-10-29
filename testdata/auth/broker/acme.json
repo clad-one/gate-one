@@ -1,0 +1,59 @@
+{
+  "publicUrl": "http://auth.acme.localhost:8081",
+  "listen": ":8081",
+  "tenants": [
+    {
+      "id": "acme",
+      "clientId": "gate-one",
+      "clientSecret": "local-acme-secret",
+      "redirectUris": [
+        "http://login.acme.localhost:8080/auth/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "http://login.acme.localhost:8080/*",
+        "http://app.acme.localhost:8080/*",
+        "http://app2.acme.localhost:8080/*"
+      ],
+      "audiences": [
+        "http://api.acme.localhost:8080"
+      ],
+      "google": {
+        "issuer": "http://idp.acme.localhost:9000",
+        "clientId": "google-client",
+        "clientSecret": "google-secret",
+        "hostedDomain": "acme.test",
+        "scopes": [
+          "openid",
+          "profile",
+          "email"
+        ]
+      },
+      "keyFiles": [
+        "../keys/acme-2026.key"
+      ],
+      "defaultRoles": [
+        "user"
+      ],
+      "allowedDomains": [
+        "acme.test"
+      ],
+      "adminEmails": [
+        "alice@acme.test"
+      ],
+      "groupRoles": {
+        "admins": [
+          "admin"
+        ]
+      },
+      "accessTokenTtlSeconds": 600,
+      "idTokenTtlSeconds": 600,
+      "refreshTokenTtlSeconds": 2592000,
+      "sessionTtlSeconds": 43200
+    }
+  ],
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "prefix": "cladone:broker:acme:",
+    "authPrefix": "cladone:auth:v1:"
+  }
+}

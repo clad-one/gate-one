@@ -16,6 +16,12 @@ test-auth-race: ## Tests auth sous le race detector
 test-e2e: ## E2E in-process (faux Google, 2 brokers, 2 Gate One, Redis)
 	go test -tags=e2e -count=1 ./test/e2e/...
 
+e2e-up: ## Démarre la stack E2E locale (fake Google + broker + Redis + 2 Gate One)
+	docker compose -f testdata/auth/compose/compose.yaml up -d --build
+
+e2e-down: ## Arrête et supprime la stack E2E locale
+	docker compose -f testdata/auth/compose/compose.yaml down -v
+
 build-auth: ## Compile le broker OIDC dans bin/cladone-auth
 	go build -o ./bin/cladone-auth ./cmd/cladone-auth
 
@@ -34,4 +40,4 @@ check: build ## Valide la config de référence sans démarrer
 release: ## Prépare les artefacts locaux dans dist/ (aucun push, aucun tag)
 	./release.sh
 
-.PHONY: build test test-auth test-auth-race test-e2e build-auth build-fake-google smoke run check release
+.PHONY: build test test-auth test-auth-race test-e2e e2e-up e2e-down build-auth build-fake-google smoke run check release
