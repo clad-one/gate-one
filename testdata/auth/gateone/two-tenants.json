@@ -1,0 +1,124 @@
+{
+  "authProviders": [
+    {
+      "id": "acme",
+      "type": "oidc",
+      "issuer": "http://auth.acme.localhost:8081/t/acme",
+      "clientId": "gate-one",
+      "clientSecretEnv": "ACME_GATE_ONE_SECRET",
+      "loginBaseUrl": "http://login.acme.localhost:8080",
+      "cookieDomain": "acme.localhost",
+      "cookieName": "gate_one_acme",
+      "roleClaims": [
+        "roles",
+        "groups"
+      ],
+      "sessionStore": {
+        "type": "redis",
+        "url": "redis://redis:6379/0",
+        "prefix": "cladone:auth:v1:"
+      },
+      "sessionKeyEnv": "GATE_ONE_SESSION_KEY",
+      "sessionTtlSeconds": 1800,
+      "revocationTtlSeconds": 2592000,
+      "backchannelLogout": true
+    },
+    {
+      "id": "contoso",
+      "type": "oidc",
+      "issuer": "http://auth.contoso.localhost:8082/t/contoso",
+      "clientId": "gate-one",
+      "clientSecretEnv": "CONTOSO_GATE_ONE_SECRET",
+      "loginBaseUrl": "http://login.contoso.localhost:8080",
+      "cookieDomain": "contoso.localhost",
+      "cookieName": "gate_one_contoso",
+      "roleClaims": [
+        "roles",
+        "groups"
+      ],
+      "sessionStore": {
+        "type": "redis",
+        "url": "redis://redis:6379/0",
+        "prefix": "cladone:auth:v1:"
+      },
+      "sessionKeyEnv": "GATE_ONE_SESSION_KEY",
+      "sessionTtlSeconds": 1800,
+      "revocationTtlSeconds": 2592000,
+      "backchannelLogout": true
+    }
+  ],
+  "defaultAuthProvider": "acme",
+  "routes": [
+    {
+      "host": "app.acme.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://backend:8080",
+      "auth": {
+        "provider": "acme"
+      },
+      "userBadge": {
+        "position": "right",
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
+        "roles": true,
+        "scopes": true,
+        "logoutLabel": "Sign out"
+      }
+    },
+    {
+      "host": "app2.acme.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://backend:8080",
+      "auth": {
+        "provider": "acme"
+      },
+      "userBadge": {
+        "position": "right",
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
+        "roles": true,
+        "scopes": true,
+        "logoutLabel": "Sign out"
+      }
+    },
+    {
+      "host": "api.acme.localhost",
+      "path": "/*",
+      "backend": "http://backend:8080",
+      "auth": {
+        "provider": "acme"
+      }
+    },
+    {
+      "host": "public.acme.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://backend:8080"
+    },
+    {
+      "host": "app.contoso.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://backend:8080",
+      "auth": {
+        "provider": "contoso"
+      },
+      "userBadge": {
+        "position": "right",
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
+        "roles": true,
+        "scopes": true,
+        "logoutLabel": "Sign out"
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+.git
+bin
+dist
+doc
+node_modules
+testdata
+test/ui/node_modules

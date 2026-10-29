@@ -1,0 +1,191 @@
+name: gate-one-auth-e2e
+
+x-go-service: &go-service
+  image: gate-one-auth-e2e-tools
+  build:
+    context: ../../..
+    dockerfile: testdata/auth/compose/Dockerfile
+  restart: unless-stopped
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  fake-google-acme:
+    <<: *go-service
+    entrypoint: ["/usr/local/bin/fake-google"]
+    command:
+      - "-addr"
+      - ":9000"
+      - "-issuer"
+      - "http://idp.acme.localhost:9000"
+      - "-config"
+      - "/auth/fake-google/acme.json"
+    volumes:
+      - ../:/auth:ro
+    ports:
+      - "9000:9000"
+    networks:
+      default:
+        aliases:
+          - idp.acme.localhost
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  fake-google-contoso:
+    <<: *go-service
+    entrypoint: ["/usr/local/bin/fake-google"]
+    command:
+      - "-addr"
+      - ":9001"
+      - "-issuer"
+      - "http://idp.contoso.localhost:9001"
+      - "-config"
+      - "/auth/fake-google/contoso.json"
+    volumes:
+      - ../:/auth:ro
+    ports:
+      - "9001:9001"
+    networks:
+      default:
+        aliases:
+          - idp.contoso.localhost
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9001/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  broker-acme:
+    <<: *go-service
+    entrypoint: ["/usr/local/bin/cladone-auth"]
+    command: ["-config", "/auth/broker/acme.json"]
+    volumes:
+      - ../:/auth:ro
+    ports:
+      - "8081:8081"
+    networks:
+      default:
+        aliases:
+          - auth.acme.localhost
+    depends_on:
+      redis:
+        condition: service_healthy
+      fake-google-acme:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  broker-contoso:
+    <<: *go-service
+    entrypoint: ["/usr/local/bin/cladone-auth"]
+    command: ["-config", "/auth/broker/contoso.json"]
+    volumes:
+      - ../:/auth:ro
+    ports:
+      - "8082:8082"
+    networks:
+      default:
+        aliases:
+          - auth.contoso.localhost
+    depends_on:
+      redis:
+        condition: service_healthy
+      fake-google-contoso:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8082/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  backend:
+    image: python:3.12-alpine
+    command: ["python", "/app/server.py"]
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  gate-one-1:
+    <<: *go-service
+    entrypoint: ["/usr/local/bin/gate-one"]
+    command:
+      - "-config"
+      - "/auth/gateone/two-tenants.json"
+      - "-addr"
+      - ":8080"
+    volumes:
+      - ../:/auth:ro
+    ports:
+      - "8080:8080"
+    environment:
+      GATE_ONE_SESSION_KEY: local-session-key
+      ACME_GATE_ONE_SECRET: local-acme-secret
+      CONTOSO_GATE_ONE_SECRET: local-contoso-secret
+    depends_on:
+      redis:
+        condition: service_healthy
+      broker-acme:
+        condition: service_healthy
+      broker-contoso:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  gate-one-2:
+    <<: *go-service
+    entrypoint: ["/usr/local/bin/gate-one"]
+    command:
+      - "-config"
+      - "/auth/gateone/two-tenants.json"
+      - "-addr"
+      - ":8080"
+    volumes:
+      - ../:/auth:ro
+    ports:
+      - "8090:8080"
+    environment:
+      GATE_ONE_SESSION_KEY: local-session-key
+      ACME_GATE_ONE_SECRET: local-acme-secret
+      CONTOSO_GATE_ONE_SECRET: local-contoso-secret
+    depends_on:
+      redis:
+        condition: service_healthy
+      broker-acme:
+        condition: service_healthy
+      broker-contoso:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

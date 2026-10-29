@@ -14,11 +14,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"cladone/gate-one/internal/authn"
+	"cladone/gate-one/internal/testutil/fakegoogle"
 	"cladone/gate-one/pkg/identityadapter"
 	"cladone/gate-one/pkg/identityadapter/conformance"
 
@@ -291,116 +291,29 @@ func newTestBroker(t *testing.T, google *fakeGoogle) (*Broker, *httptest.Server)
 }
 
 type fakeGoogle struct {
-	srv  *httptest.Server
-	priv ed25519.PrivateKey
-	pub  ed25519.PublicKey
-	kid  string
-	mu   sync.Mutex
-	code map[string]fakeCode
-}
-
-type fakeCode struct {
-	Nonce       string
-	RedirectURI string
-	Expires     time.Time
+	srv *httptest.Server
 }
 
 func newFakeGoogle(t *testing.T) *fakeGoogle {
 	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	g := &fakeGoogle{priv: priv, pub: pub, kid: "google-1", code: map[string]fakeCode{}}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/openid-configuration",
-		func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"issuer":                                g.srv.URL,
-				"authorization_endpoint":                g.srv.URL + "/authorize",
-				"token_endpoint":                        g.srv.URL + "/token",
-				"jwks_uri":                              g.srv.URL + "/jwks",
-				"response_types_supported":              []string{"code"},
-				"subject_types_supported":               []string{"public"},
-				"id_token_signing_alg_values_supported": []string{"EdDSA"},
-			})
-		})
-	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
-			Key: pub, KeyID: g.kid, Algorithm: "EdDSA", Use: "sig",
-		}}})
+	fg, err := fakegoogle.New(fakegoogle.Config{
+		ClientID: "google-client",
+		Users: []fakegoogle.User{{
+			Sub:               "google-sub-1",
+			Email:             "alice@acme.test",
+			EmailVerified:     true,
+			HostedDomain:      "acme.test",
+			PreferredUsername: "alice",
+			Name:              "Alice",
+		}},
 	})
-	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		code := "google-code"
-		g.mu.Lock()
-		g.code[code] = fakeCode{
-			Nonce:       q.Get("nonce"),
-			RedirectURI: q.Get("redirect_uri"),
-			Expires:     time.Now().Add(5 * time.Minute),
-		}
-		g.mu.Unlock()
-		u, _ := url.Parse(q.Get("redirect_uri"))
-		rq := u.Query()
-		rq.Set("code", code)
-		rq.Set("state", q.Get("state"))
-		u.RawQuery = rq.Encode()
-		http.Redirect(w, r, u.String(), http.StatusFound)
-	})
-	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		code := r.Form.Get("code")
-		g.mu.Lock()
-		fc, ok := g.code[code]
-		delete(g.code, code)
-		g.mu.Unlock()
-		if !ok || time.Now().After(fc.Expires) {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
-			return
-		}
-		now := time.Now()
-		claims := map[string]any{
-			"iss": g.srv.URL, "aud": "google-client", "sub": "google-sub-1",
-			"exp": now.Add(time.Minute).Unix(), "iat": now.Unix(),
-			"nonce": fc.Nonce, "email": "alice@acme.test",
-			"email_verified": true, "hd": "acme.test",
-			"preferred_username": "alice", "name": "Alice",
-		}
-		tok := signFake(t, g.priv, g.kid, claims)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token": "google-access", "token_type": "Bearer",
-			"expires_in": 3600, "id_token": tok,
-		})
-	})
-	g.srv = httptest.NewServer(mux)
-	t.Cleanup(g.srv.Close)
-	return g
-}
-
-func signFake(
-	t *testing.T, priv ed25519.PrivateKey, kid string, claims map[string]any,
-) string {
-	t.Helper()
-	signer, err := jose.NewSigner(
-		jose.SigningKey{Algorithm: jose.EdDSA, Key: priv},
-		(&jose.SignerOptions{}).WithHeader("kid", kid))
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(claims)
-	obj, err := signer.Sign(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := obj.CompactSerialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
+	srv := httptest.NewServer(fg)
+	t.Cleanup(srv.Close)
+	fg.SetIssuer(srv.URL)
+	return &fakeGoogle{srv: srv}
 }
 
 func verifyJWT(
@@ -551,9 +464,17 @@ func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("google authorize = %d", resp.StatusCode)
 	}
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatal("fake google returned no code")
+	}
 	cont, err := a.Continue(context.Background(), identityadapter.Request{
 		Tenant: "acme",
-		Params: map[string]string{"code": "google-code"},
+		Params: map[string]string{"code": code},
 	}, step.State)
 	if err != nil {
 		t.Fatal(err)

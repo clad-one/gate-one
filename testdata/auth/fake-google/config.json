@@ -1,0 +1,27 @@
+{
+  "clientId": "google-client",
+  "users": [
+    {
+      "sub": "google-acme-alice",
+      "email": "alice@acme.test",
+      "emailVerified": true,
+      "hostedDomain": "acme.test",
+      "preferredUsername": "alice",
+      "name": "Alice",
+      "groups": [
+        "admins"
+      ]
+    },
+    {
+      "sub": "google-contoso-bob",
+      "email": "bob@contoso.test",
+      "emailVerified": true,
+      "hostedDomain": "contoso.test",
+      "preferredUsername": "bob",
+      "name": "Bob",
+      "groups": [
+        "users"
+      ]
+    }
+  ]
+}

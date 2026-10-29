@@ -1,0 +1,16 @@
+{
+  "clientId": "google-client",
+  "users": [
+    {
+      "sub": "google-acme-alice",
+      "email": "alice@acme.test",
+      "emailVerified": true,
+      "hostedDomain": "acme.test",
+      "preferredUsername": "alice",
+      "name": "Alice",
+      "groups": [
+        "admins"
+      ]
+    }
+  ]
+}

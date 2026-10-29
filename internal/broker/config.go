@@ -7,6 +7,7 @@ package broker
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,9 +174,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("tenants[%s]: at least one redirectUri is required", t.ID)
 		}
 		for _, u := range t.RedirectURIs {
-			if !strings.HasPrefix(u, "https://") &&
-				!strings.HasPrefix(u, "http://127.0.0.1") &&
-				!strings.HasPrefix(u, "http://localhost") {
+			if !isLocalRedirect(u) {
 				return fmt.Errorf(
 					"tenants[%s]: redirectUri %q must be https (or localhost for tests)",
 					t.ID, u)
@@ -184,6 +183,13 @@ func (c *Config) Validate() error {
 		if len(t.PostLogoutRedirectURIs) == 0 {
 			t.PostLogoutRedirectURIs = append(
 				[]string(nil), t.RedirectURIs...)
+		}
+		for _, u := range t.PostLogoutRedirectURIs {
+			if !isLocalRedirect(u) {
+				return fmt.Errorf(
+					"tenants[%s]: postLogoutRedirectUri %q must be https (or localhost for tests)",
+					t.ID, u)
+			}
 		}
 		if t.KeyFile != "" && len(t.KeyFiles) > 0 {
 			return fmt.Errorf(
@@ -258,4 +264,26 @@ func (t *Tenant) logoutRevocationTTL() time.Duration {
 		ttl = 24 * time.Hour
 	}
 	return ttl
+}
+
+// isLocalRedirect accepts HTTPS anywhere, or HTTP on a loopback or
+// .localhost name (RFC 6761). The .localhost form is what lets the
+// local Compose stack use real cookie domains (app.acme.localhost)
+// without TLS.
+func isLocalRedirect(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	return host == "127.0.0.1" || host == "::1"
 }
