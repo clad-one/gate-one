@@ -9,3 +9,8 @@ dist/
 /gate-one-state.db
 /gate-one-state.db.lock
 /fake-google
+
+# Playwright
+test/e2e/browser/node_modules/
+test/e2e/browser/test-results/
+test/e2e/browser/playwright-report/

@@ -22,6 +22,9 @@ e2e-up: ## Démarre la stack E2E locale (fake Google + broker + Redis + 2 Gate O
 e2e-down: ## Arrête et supprime la stack E2E locale
 	docker compose -f testdata/auth/compose/compose.yaml down -v
 
+test-browser: ## Playwright browser E2E (stack e2e-up requise)
+	cd test/e2e/browser && npm test
+
 build-auth: ## Compile le broker OIDC dans bin/cladone-auth
 	go build -o ./bin/cladone-auth ./cmd/cladone-auth
 
@@ -40,4 +43,4 @@ check: build ## Valide la config de référence sans démarrer
 release: ## Prépare les artefacts locaux dans dist/ (aucun push, aucun tag)
 	./release.sh
 
-.PHONY: build test test-auth test-auth-race test-e2e e2e-up e2e-down build-auth build-fake-google smoke run check release
+.PHONY: build test test-auth test-auth-race test-e2e e2e-up e2e-down test-browser build-auth build-fake-google smoke run check release

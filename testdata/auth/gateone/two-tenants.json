@@ -56,6 +56,16 @@
       "backend": "http://backend:8080",
       "auth": {
         "provider": "acme"
+      },
+      "userBadge": {
+        "position": "right",
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
+        "roles": true,
+        "scopes": true,
+        "logoutLabel": "Sign out"
       }
     },
     {
@@ -65,6 +75,16 @@
       "backend": "http://backend:8080",
       "auth": {
         "provider": "acme"
+      },
+      "userBadge": {
+        "position": "right",
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
+        "roles": true,
+        "scopes": true,
+        "logoutLabel": "Sign out"
       }
     },
     {
@@ -88,6 +108,16 @@
       "backend": "http://backend:8080",
       "auth": {
         "provider": "contoso"
+      },
+      "userBadge": {
+        "position": "right",
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
+        "roles": true,
+        "scopes": true,
+        "logoutLabel": "Sign out"
       }
     }
   ]
