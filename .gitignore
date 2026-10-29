@@ -8,3 +8,4 @@ dist/
 /gate-one
 /gate-one-state.db
 /gate-one-state.db.lock
+/fake-google
