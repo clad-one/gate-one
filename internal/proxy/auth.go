@@ -90,7 +90,7 @@ type authCacheEntry struct {
 var (
 	authCache     sync.Map
 	authCacheTTL  = 30 * time.Second
-	authCacheSize = 0
+	authCacheSize atomic.Int64
 )
 
 func authCacheKey(r *http.Request) string {
@@ -110,8 +110,11 @@ func cachedAuth(key string) (*RequestContext, bool) {
 	}
 	e := v.(*authCacheEntry)
 	if time.Now().After(e.expires) {
-		authCache.Delete(key)
-		authCacheSize--
+		// CompareAndDelete: concurrent misses on the same expired key
+		// must not decrement the size twice.
+		if authCache.CompareAndDelete(key, v) {
+			authCacheSize.Add(-1)
+		}
 		return nil, false
 	}
 	return e.identity, true
@@ -120,23 +123,24 @@ func cachedAuth(key string) (*RequestContext, bool) {
 // deleteAuth drops one cached identity (revoked session).
 func deleteAuth(key string) {
 	if _, ok := authCache.LoadAndDelete(key); ok {
-		authCacheSize--
+		authCacheSize.Add(-1)
 	}
 }
 
 func cacheAuth(key string, identity *RequestContext) {
-	if authCacheSize > 500 {
+	if authCacheSize.Load() > 500 {
 		// soft bound: purge expired entries before adding
 		now := time.Now()
 		authCache.Range(func(k, v any) bool {
 			if now.After(v.(*authCacheEntry).expires) {
-				authCache.Delete(k)
-				authCacheSize--
+				if authCache.CompareAndDelete(k, v) {
+					authCacheSize.Add(-1)
+				}
 			}
 			return true
 		})
 	}
-	if authCacheSize > 2000 {
+	if authCacheSize.Load() > 2000 {
 		return // never grow without bound (abusive upstream proxy)
 	}
 	cp := *identity
@@ -145,7 +149,7 @@ func cacheAuth(key string, identity *RequestContext) {
 	cp.Method, cp.Path, cp.Query = "", "", nil
 	cp.Host, cp.Body, cp.Headers = "", nil, nil
 	authCache.Store(key, &authCacheEntry{identity: &cp, expires: time.Now().Add(authCacheTTL)})
-	authCacheSize++
+	authCacheSize.Add(1)
 }
 
 // clearAuthCache: test usage — the cache is global to the process,
@@ -155,7 +159,7 @@ func clearAuthCache() {
 		authCache.Delete(k)
 		return true
 	})
-	authCacheSize = 0
+	authCacheSize.Store(0)
 }
 
 // ResetAuthCache drops every cached identity. Called on SIGHUP: a new
