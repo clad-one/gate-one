@@ -223,6 +223,65 @@ func (s *RedisStore) IsRevoked(
 	return false, nil
 }
 
+// CheckRevoked answers the sid and sub questions in ONE round trip
+// (pipelined EXISTS + GET). This is the per-request hot path: two
+// sequential round trips doubled the latency cost of every
+// authenticated request against a remote Redis.
+func (s *RedisStore) CheckRevoked(
+	ctx context.Context,
+	issuer, sid, sub string, issuedAt time.Time,
+) (bool, error) {
+	if sid == "" && sub == "" {
+		return false, nil
+	}
+
+	pipe := s.client.Pipeline()
+	var sidCmd *redis.IntCmd
+	if sid != "" {
+		sidCmd = pipe.Exists(ctx, s.key("revoked:sid", issuer, sid))
+	}
+	var subCmd *redis.StringCmd
+	if sub != "" {
+		subCmd = pipe.Get(ctx, s.key("revoked:sub", issuer, sub))
+	}
+	// A missing sub key (redis.Nil) is the normal "not revoked" case,
+	// not a pipeline failure.
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return false, fmt.Errorf(
+			"sessionStore.redis: revocation check: %w", err)
+	}
+
+	if sidCmd != nil {
+		n, err := sidCmd.Result()
+		if err != nil {
+			return false, fmt.Errorf(
+				"sessionStore.redis: exists: %w", err)
+		}
+		if n > 0 {
+			return true, nil
+		}
+	}
+	if subCmd == nil {
+		return false, nil
+	}
+	raw, err := subCmd.Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("sessionStore.redis: get sub: %w", err)
+	}
+	revokedAt, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return false, fmt.Errorf(
+			"sessionStore.redis: bad sub timestamp: %w", err)
+	}
+	if issuedAt.IsZero() {
+		return true, nil
+	}
+	return issuedAt.Unix() <= revokedAt, nil
+}
+
 func (s *RedisStore) IsSubjectRevoked(
 	ctx context.Context, issuer, sub string, issuedAt time.Time,
 ) (bool, error) {

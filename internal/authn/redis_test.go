@@ -123,3 +123,53 @@ func TestAC_AUTH_24_SubjectRevocationTimestamp(t *testing.T) {
 		t.Fatalf("other user = %v, %v", other, err)
 	}
 }
+
+// TestAC_AUTH_18_RedisCheckRevokedCombined covers the combined
+// sid+sub check used on the per-request hot path, including the
+// issuedAt boundary that allows a new login after a global logout.
+func TestAC_AUTH_18_RedisCheckRevokedCombined(t *testing.T) {
+	mr := miniredis.RunT(t)
+	ctx := context.Background()
+	s, err := OpenRedisStore(ctx, RedisConfig{
+		URL:    "redis://" + mr.Addr() + "/0",
+		Prefix: "test:auth:v1:",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const iss = "https://issuer.test"
+	before := time.Now().Add(-time.Minute)
+
+	// Nothing revoked.
+	revoked, err := s.CheckRevoked(ctx, iss, "sid-1", "sub-1", before)
+	if err != nil || revoked {
+		t.Fatalf("clean = %v, %v", revoked, err)
+	}
+
+	// Session revocation wins even without a sub.
+	if err := s.Revoke(ctx, iss, "sid-1", "", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	revoked, err = s.CheckRevoked(ctx, iss, "sid-1", "sub-1", before)
+	if err != nil || !revoked {
+		t.Fatalf("revoked sid = %v, %v", revoked, err)
+	}
+
+	// Subject revocation only applies to tokens issued before it.
+	if err := s.RevokeSubject(
+		ctx, iss, "sub-2", time.Now(), time.Now().Add(time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	revoked, err = s.CheckRevoked(ctx, iss, "", "sub-2", before)
+	if err != nil || !revoked {
+		t.Fatalf("old token after sub logout = %v, %v", revoked, err)
+	}
+	revoked, err = s.CheckRevoked(
+		ctx, iss, "", "sub-2", time.Now().Add(time.Minute))
+	if err != nil || revoked {
+		t.Fatalf("new token after sub logout = %v, %v", revoked, err)
+	}
+}

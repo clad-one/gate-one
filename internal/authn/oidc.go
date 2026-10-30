@@ -443,20 +443,10 @@ func (o *OIDC) CheckRevoked(
 	if o.store == nil {
 		return false, nil
 	}
-	revoked, err := o.store.IsRevoked(
-		ctx, o.issuer, id.SessionID, "")
+	revoked, err := o.store.CheckRevoked(
+		ctx, o.issuer, id.SessionID, id.UserID, id.IssuedAt)
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
-	}
-	if revoked {
-		return true, nil
-	}
-	if id.UserID != "" {
-		revoked, err = o.store.IsSubjectRevoked(
-			ctx, o.issuer, id.UserID, id.IssuedAt)
-		if err != nil {
-			return false, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
-		}
 	}
 	return revoked, nil
 }

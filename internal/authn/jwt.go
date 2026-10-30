@@ -218,20 +218,10 @@ func (j *JWT) CheckRevoked(
 	if j.store == nil {
 		return false, nil
 	}
-	revoked, err := j.store.IsRevoked(
-		ctx, j.issuer, id.SessionID, "")
+	revoked, err := j.store.CheckRevoked(
+		ctx, j.issuer, id.SessionID, id.UserID, id.IssuedAt)
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
-	}
-	if revoked {
-		return true, nil
-	}
-	if id.UserID != "" {
-		revoked, err = j.store.IsSubjectRevoked(
-			ctx, j.issuer, id.UserID, id.IssuedAt)
-		if err != nil {
-			return false, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
-		}
 	}
 	return revoked, nil
 }

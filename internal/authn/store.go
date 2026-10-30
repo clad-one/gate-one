@@ -37,6 +37,14 @@ type RevocationStore interface {
 	// IsRevoked reports whether the sid is revoked (sub is kept for
 	// compatibility and treated as an all-sessions revocation).
 	IsRevoked(ctx context.Context, issuer, sid, sub string) (bool, error)
+	// CheckRevoked reports whether the session (sid) or the user (sub,
+	// for tokens issued at or before issuedAt) is revoked. It is on the
+	// per-request hot path: stores that can answer both questions in a
+	// single round trip SHOULD implement it that way.
+	CheckRevoked(
+		ctx context.Context, issuer, sid, sub string,
+		issuedAt time.Time,
+	) (bool, error)
 	// IsSubjectRevoked reports whether sub was globally revoked after
 	// issuedAt. issuedAt zero is fail-closed.
 	IsSubjectRevoked(
@@ -368,6 +376,24 @@ func (s *BoltStore) IsSubjectRevoked(
 	return s.isSubjectRevokedLocked(issuer, sub, issuedAt)
 }
 
+// CheckRevoked answers the sid and sub questions under one lock.
+func (s *BoltStore) CheckRevoked(
+	_ context.Context, issuer, sid, sub string, issuedAt time.Time,
+) (bool, error) {
+	now := time.Now().Unix()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if sid != "" {
+		if exp, ok := s.revoked[revKey("sid", issuer, sid)]; ok && exp > now {
+			return true, nil
+		}
+	}
+	if sub == "" {
+		return false, nil
+	}
+	return s.isSubjectRevokedLocked(issuer, sub, issuedAt)
+}
+
 func (s *BoltStore) isSubjectRevokedLocked(
 	issuer, sub string, issuedAt time.Time,
 ) (bool, error) {
@@ -596,6 +622,31 @@ func (s *MemoryStore) IsSubjectRevoked(
 	}
 	if issuedAt.IsZero() {
 		return true, nil // fail-closed for legacy/unknown issue time
+	}
+	return issuedAt.Unix() <= e.revokedAt, nil
+}
+
+// CheckRevoked answers the sid and sub questions under one lock.
+func (s *MemoryStore) CheckRevoked(
+	_ context.Context, issuer, sid, sub string, issuedAt time.Time,
+) (bool, error) {
+	now := time.Now().Unix()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if sid != "" {
+		if exp, ok := s.revoked[revKey("sid", issuer, sid)]; ok && exp > now {
+			return true, nil
+		}
+	}
+	if sub == "" {
+		return false, nil
+	}
+	e, ok := s.subRevoked[revKey("sub", issuer, sub)]
+	if !ok || e.expires <= now {
+		return false, nil
+	}
+	if issuedAt.IsZero() {
+		return true, nil
 	}
 	return issuedAt.Unix() <= e.revokedAt, nil
 }
