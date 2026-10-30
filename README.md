@@ -283,10 +283,15 @@ load.
   JSON `401`.
 
 An identity failure (`403`) is a **rights refusal**, not an auth problem,
-so a login is never offered (it would loop):
+so a login is never offered **automatically** (it would loop on the same
+account):
 
 - a **browser navigation** gets a readable built-in HTML page (not the
-  raw JSON body);
+  raw JSON body). When the route's provider hosts an interactive login,
+  the page names the refused account and offers **Sign out and use
+  another account**: it clears the RP session, revokes it, and returns
+  to the refused URL so a different account can sign in. Without that
+  action a new tab would reuse the same session and stay blocked;
 - a **`fetch()`/XHR** keeps the JSON `403` unchanged, so the app handles
   the refusal itself.
 

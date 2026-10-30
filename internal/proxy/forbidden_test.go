@@ -177,3 +177,35 @@ func TestBackendForbiddenNotMarked(t *testing.T) {
 		t.Errorf("backend 403 body altered: %q", b)
 	}
 }
+
+// TestForbiddenPageRendering covers the sign-out action added for
+// rights refusals: it must be present only when a logout URL exists,
+// and every interpolated value must be escaped.
+func TestForbiddenPageRendering(t *testing.T) {
+	logout := "https://login.test/logout?returnTo=https%3A%2F%2Fapp.test%2F"
+	page := forbiddenPageHTML(
+		"Rights <missing>", "alice@example.com", logout)
+
+	for _, want := range []string{
+		"Access denied",
+		"Signed in as",
+		"alice@example.com",
+		"Sign out and use another account",
+		`href="` + logout + `"`,
+		"Rights &lt;missing&gt;",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("forbidden page missing %q:\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "<missing>") {
+		t.Fatal("message not HTML-escaped")
+	}
+
+	// No interactive login: no identity line, no action.
+	page = forbiddenPageHTML("msg", "", "")
+	if strings.Contains(page, "Sign out") ||
+		strings.Contains(page, "Signed in as") {
+		t.Fatalf("action rendered without a logout URL:\n%s", page)
+	}
+}

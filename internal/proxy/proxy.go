@@ -1550,13 +1550,19 @@ const defaultForbiddenMessage = "Access denied — your account does not " +
 //     marker lets the injected guard show its opt-in banner) — the
 //     front handles the refusal itself.
 //
-// A login is never offered: a rights refusal is not an authentication
-// problem (offering a login would loop).
-func writeIdentityForbidden(
+// A login is never offered AUTOMATICALLY: a rights refusal is not an
+// authentication problem (redirecting to the IdP would loop on the
+// same account). A browser navigation does get an explicit
+// sign-out/switch-account action when the route's provider hosts an
+// interactive login: without it the user is trapped on the 403 page,
+// since a new tab reuses the same session.
+func (g *Gateway) writeIdentityForbidden(
 	w http.ResponseWriter,
 	r *http.Request,
-	route *core.Route,
+	cr *compiledRoute,
+	ctx *RequestContext,
 ) {
+	route := cr.route
 	w.Header().Set(GatewayForbiddenHeader, gatewayForbiddenValue)
 
 	if isBrowserRequest(r) {
@@ -1565,7 +1571,11 @@ func writeIdentityForbidden(
 			http.Redirect(w, r, fb.PageURL, http.StatusFound)
 			return
 		}
-		writeForbiddenPage(w, fb)
+		writeForbiddenPage(
+			w, fb,
+			forbiddenIdentityLabel(ctx),
+			g.forbiddenLogoutURL(cr, r),
+		)
 		return
 	}
 
@@ -1576,9 +1586,49 @@ func writeIdentityForbidden(
 	))
 }
 
+// forbiddenIdentityLabel: the account shown on the 403 page, so the
+// user understands which identity is being refused (and which one to
+// switch away from).
+func forbiddenIdentityLabel(ctx *RequestContext) string {
+	if ctx == nil {
+		return ""
+	}
+	if ctx.Email != "" {
+		return ctx.Email
+	}
+	return ctx.Username
+}
+
+// forbiddenLogoutURL: the provider's sign-out endpoint, with returnTo
+// pointing back at the refused URL. After sign-out the app starts a
+// fresh login, where another account can be chosen. Empty when the
+// route's provider has no interactive login (jwt, auth-bridge): there
+// is no RP session to clear, so no action is offered.
+func (g *Gateway) forbiddenLogoutURL(
+	cr *compiledRoute,
+	r *http.Request,
+) string {
+	entry := g.providerFor(cr)
+	if entry == nil || entry.loginHandler == nil {
+		return ""
+	}
+	loginURL := g.config.LoginURLFor(cr.route)
+	u, err := url.Parse(loginURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	returnTo := clientScheme(r) + "://" + r.Host + r.RequestURI
+	return u.Scheme + "://" + u.Host + "/logout?returnTo=" +
+		url.QueryEscape(returnTo)
+}
+
 // writeForbiddenPage serves the built-in HTML 403 page (inline CSS, no
 // external asset, message configurable via authGuard.forbidden.message).
-func writeForbiddenPage(w http.ResponseWriter, fb *core.AuthGuardForbiddenPolicy) {
+func writeForbiddenPage(
+	w http.ResponseWriter,
+	fb *core.AuthGuardForbiddenPolicy,
+	signedInAs, logoutURL string,
+) {
 	msg := defaultForbiddenMessage
 	if fb != nil && fb.Message != "" {
 		msg = fb.Message
@@ -1586,12 +1636,26 @@ func writeForbiddenPage(w http.ResponseWriter, fb *core.AuthGuardForbiddenPolicy
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusForbidden)
-	w.Write([]byte(forbiddenPageHTML(msg)))
+	w.Write([]byte(forbiddenPageHTML(msg, signedInAs, logoutURL)))
 }
 
 // forbiddenPageHTML: the self-contained forbidden page (no external
-// asset, adaptive light/dark). The message is HTML-escaped.
-func forbiddenPageHTML(message string) string {
+// asset, adaptive light/dark). Every interpolated value is
+// HTML-escaped.
+func forbiddenPageHTML(message, signedInAs, logoutURL string) string {
+	var extra strings.Builder
+	if signedInAs != "" {
+		fmt.Fprintf(&extra,
+			"<p class=\"who\">Signed in as <strong>%s</strong>.</p>\n",
+			html.EscapeString(signedInAs))
+	}
+	if logoutURL != "" {
+		fmt.Fprintf(&extra,
+			"<p><a class=\"btn\" href=\"%s\">"+
+				"Sign out and use another account</a></p>\n",
+			html.EscapeString(logoutURL))
+	}
+
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1606,15 +1670,22 @@ body{margin:0;min-height:100vh;display:flex;align-items:center;` +
 main{max-width:34em;margin:2rem;padding:2rem 2.25rem;background:#fff;` +
 		`border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08)}
 h1{margin:0 0 .6rem;font-size:1.4rem}
-p{margin:0;color:#444}
+p{margin:0 0 .8rem;color:#444}
+p:last-child{margin-bottom:0}
+p.who{font-size:.95rem;color:#555}
+a.btn{display:inline-block;margin-top:.4rem;padding:.6rem 1rem;` +
+		`border-radius:8px;background:#2563eb;color:#fff;` +
+		`text-decoration:none;font-weight:600}
+a.btn:hover{background:#1d4ed8}
 @media (prefers-color-scheme:dark){body{background:#16181d;color:#eef0f3}` +
-		`main{background:#20242e}p{color:#c7ccd6}}
+		`main{background:#20242e}p{color:#c7ccd6}p.who{color:#aab2c0}` +
+		`a.btn{background:#3b82f6}a.btn:hover{background:#60a5fa}}
 </style>
 </head>
 <body>
 <main>
 <h1>Access denied</h1>
-<p>` + html.EscapeString(message) + `</p>
+` + extra.String() + `<p>` + html.EscapeString(message) + `</p>
 </main>
 </body>
 </html>`
@@ -2237,16 +2308,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		//
 		// Identity conditions (roles/scopes/claims/user):
 		// authenticated but insufficient → 403. A rights refusal must
-		// not trigger a login invitation (loop): the response is a
-		// readable page for a navigation, JSON for a fetch (see
-		// writeIdentityForbidden — marked so the guard banner only
-		// reacts to the gateway's OWN 403).
+		// not trigger an AUTOMATIC login invitation (loop): the
+		// response is a readable page for a navigation — with an
+		// explicit sign-out/switch-account action when possible — and
+		// JSON for a fetch (see writeIdentityForbidden — marked so the
+		// guard banner only reacts to the gateway's OWN 403).
 		//
 		if route.Auth != nil &&
 			hasIdentityConditions(route.Auth.Identity) &&
 			!matchesIdentity(route.Auth.Identity, ctx) {
 
-			writeIdentityForbidden(w, r, route)
+			g.writeIdentityForbidden(w, r, cr, ctx)
 			return
 		}
 	}

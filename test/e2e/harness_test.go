@@ -116,6 +116,12 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 				Groups: []string{"admins"},
 			},
 			{
+				Sub: "google-acme-carol", Email: "carol@acme.test",
+				EmailVerified: true, HostedDomain: acmeDomain,
+				PreferredUsername: "carol", Name: "Carol",
+				Groups: []string{"superusers"},
+			},
+			{
 				Sub: "google-contoso-bob", Email: "bob@contoso.test",
 				EmailVerified: true, HostedDomain: contosoDomain,
 				PreferredUsername: "bob", Name: "Bob",
@@ -234,6 +240,9 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 			 "backend": %q, "auth": {"provider": "acme"}},
 			{"host": "public.acme.test", "path": "/*", "frontend": true,
 			 "backend": %q},
+			{"host": "denied.acme.test", "path": "/*", "frontend": true,
+			 "backend": %q, "auth": {"provider": "acme",
+			  "identity": {"roles": ["superusers"]}}},
 			{"host": "app.contoso.test", "path": "/*", "frontend": true,
 			 "backend": %q, "auth": {"provider": "contoso"}}
 		]
@@ -243,7 +252,7 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		s.contosoSrv.URL+"/t/contoso", clientSecretEnv, contosoDomain,
 		redisAddr, authPrefix, sessionKeyEnv,
 		s.backend.URL(), s.backend.URL(), s.backend.URL(),
-		s.backend.URL(), s.backend.URL(),
+		s.backend.URL(), s.backend.URL(), s.backend.URL(),
 	))
 
 	gw1, err := proxy.New(cfg)
@@ -274,6 +283,7 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		"login.acme.test":    s.gw1Srv,
 		"api.acme.test":      s.gw1Srv,
 		"public.acme.test":   s.gw1Srv,
+		"denied.acme.test":   s.gw1Srv,
 		"app.contoso.test":   s.gw1Srv,
 		"login.contoso.test": s.gw1Srv,
 	}
@@ -318,6 +328,7 @@ func newBrokerConfig(
 				"https://login." + domain + "/*",
 				"https://app." + domain + "/*",
 				"https://app2." + domain + "/*",
+				"https://denied." + domain + "/*",
 			},
 			Audiences: []string{"https://api." + domain},
 			Google: broker.GoogleConfig{
@@ -329,6 +340,12 @@ func newBrokerConfig(
 			},
 			DefaultRoles:   []string{"user"},
 			AllowedDomains: []string{domain},
+			// The broker is the policy point: a Google group becomes
+			// a role in the emitted ID token. Gate One only reads
+			// roles (it does not need the upstream groups claim).
+			GroupRoles: map[string][]string{
+				"superusers": {"superusers"},
+			},
 		}},
 		Redis: &broker.RedisConfig{
 			URL:        "redis://" + redisAddr + "/0",

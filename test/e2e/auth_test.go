@@ -4,6 +4,8 @@ package e2e
 
 import (
 	"context"
+	"html"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -197,5 +199,105 @@ func TestE2E_BrokerDown_PerTenant(t *testing.T) {
 	body := s.login("https://app.contoso.test/")
 	if !strings.Contains(body, "__cladoneAuthGuard") {
 		t.Fatal("contoso login failed while acme is degraded")
+	}
+}
+
+// TestE2E_Forbidden_SwitchAccount covers the blocked-user path: an
+// authenticated user missing a route role gets a readable 403 with an
+// explicit sign-out action, and can come back as another account with
+// the required role. Without the action the user is trapped (a new tab
+// reuses the same session).
+func TestE2E_Forbidden_SwitchAccount(t *testing.T) {
+	s := NewStack(t)
+	s.setUser("alice@acme.test") // roles: user, admins — not superusers
+	s.login("https://app.acme.test/")
+
+	// A real browser navigation (Accept: text/html); an API client
+	// still gets the JSON 403 unchanged.
+	browserGet := func(target string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, target, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Accept", "text/html,application/xhtml+xml")
+		resp, err := s.noRedirect.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	resp := browserGet("https://denied.acme.test/")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("denied route = %d, want 403", resp.StatusCode)
+	}
+	page := string(body)
+	if !strings.Contains(page, "Signed in as") ||
+		!strings.Contains(page, "alice@acme.test") {
+		t.Fatalf("403 page does not name the refused account:\n%s", page)
+	}
+	if !strings.Contains(page, "Sign out and use another account") {
+		t.Fatalf("403 page has no sign-out action:\n%s", page)
+	}
+
+	start := strings.Index(page, `href="`)
+	if start < 0 {
+		t.Fatal("no href on the 403 page")
+	}
+	rest := page[start+len(`href="`):]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		t.Fatal("unterminated href on the 403 page")
+	}
+	link := html.UnescapeString(rest[:end])
+	if !strings.HasPrefix(link, "https://login.acme.test/logout?returnTo=") {
+		t.Fatalf("sign-out link = %q", link)
+	}
+	if !strings.Contains(link, "denied.acme.test") {
+		t.Fatalf("sign-out does not return to the refused URL: %q", link)
+	}
+
+	// Gate One clears its cookie, then redirects to the broker's
+	// end-session (which revokes the shared session).
+	logout, err := s.noRedirect.Get(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logout.Body.Close()
+	if logout.StatusCode != http.StatusFound {
+		t.Fatalf("logout = %d, want 302", logout.StatusCode)
+	}
+	brokerLogout := logout.Header.Get("Location")
+	if !strings.Contains(brokerLogout, "/t/acme/logout") {
+		t.Fatalf("logout did not reach the broker: %q", brokerLogout)
+	}
+	bl, err := s.noRedirect.Get(brokerLogout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bl.Body.Close()
+	if bl.StatusCode != http.StatusFound {
+		t.Fatalf("broker logout = %d, want 302", bl.StatusCode)
+	}
+
+	// The RP session is gone: the route starts a fresh login instead of
+	// showing the 403 again.
+	after := browserGet("https://denied.acme.test/")
+	after.Body.Close()
+	if after.StatusCode != http.StatusFound {
+		t.Fatalf("after sign-out = %d, want 302 to login", after.StatusCode)
+	}
+
+	// Another account, this time with the role, gets in.
+	s.setUser("carol@acme.test")
+	body2 := s.login("https://denied.acme.test/")
+	if !strings.Contains(body2, "ok") {
+		t.Fatalf("carol login did not reach the backend: %s", body2)
+	}
+	if roles := s.backend.headers("denied.acme.test").Get("X-Roles"); !strings.Contains(roles, "superusers") {
+		t.Fatalf("X-Roles = %q, want superusers", roles)
 	}
 }

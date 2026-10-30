@@ -109,7 +109,7 @@ Health :
 | Conditions d'identité (`roles`, `scopes`, `claims`, `user`) non satisfaites
 | `ErrPolicyDenied`
 | `403`
-| Page/JSON `forbidden` ; pas de redirection login
+| Page/JSON `forbidden` ; pas de redirection login automatique ; action « se déconnecter et changer de compte » sur la page (provider interactif)
 
 | JWKS inaccessible, timeout, TLS, réponse malformée
 | `ErrProviderUnavailable`
