@@ -231,6 +231,7 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 			}
 		],
 		"defaultAuthProvider": "acme",
+		"defaultAppUrl": "https://app.acme.test/",
 		"routes": [
 			{"host": "app.acme.test", "path": "/*", "frontend": true,
 			 "backend": %q, "auth": {"provider": "acme"}},

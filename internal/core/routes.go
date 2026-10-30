@@ -1276,6 +1276,14 @@ type Config struct {
 	// declared.
 	DefaultAuthProvider string `json:"defaultAuthProvider,omitempty"`
 
+	// DefaultAppURL: where a bare visit to the login host root is
+	// redirected (302), preserving the query string. Email
+	// verification links (Firebase `?mode=verifyEmail&oobCode=…`,
+	// Keycloak account links) that land on https://login.<domain>/
+	// must reach the application that handles the code. Empty = the
+	// login host root stays 404.
+	DefaultAppURL string `json:"defaultAppUrl,omitempty"`
+
 	// TokenBroker: internal per-user credential broker, used only
 	// by routes declaring upstream.delegated. The shared secret is
 	// read from the named environment variable at load; it is never
@@ -2229,6 +2237,15 @@ func (c *Config) validateAuthProviders() error {
 func (c *Config) validate() error {
 	if err := c.validateAuthProviders(); err != nil {
 		return err
+	}
+	if c.DefaultAppURL != "" {
+		u, err := url.Parse(c.DefaultAppURL)
+		if err != nil || u.Host == "" ||
+			(u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf(
+				"defaultAppUrl %q: absolute http(s) URL required",
+				c.DefaultAppURL)
+		}
 	}
 	if c.SecurityHeaders != nil {
 		if err := validateSecurityHeaders(c.SecurityHeaders); err != nil {

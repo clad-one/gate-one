@@ -334,6 +334,10 @@
       "type": "string",
       "description": "Provider id used by routes that do not set auth.provider. Required when more than one authProviders entry is declared."
     },
+    "defaultAppUrl": {
+      "type": "string",
+      "description": "Absolute http(s) URL where a bare visit to the login host root is redirected (302), preserving the query string. Email verification links (Firebase mode=verifyEmail&oobCode, Keycloak account links) land on https://login.<domain>/ and must reach the application that handles the code. Absent = the login host root stays 404."
+    },
     "oidc": {
       "type": "object",
       "description": "LEGACY platform IdP block. When authProvider is absent, it is translated into an http provider (auth-bridge) at load; existing configs keep working. New configurations should use authProvider.",

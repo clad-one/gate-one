@@ -207,6 +207,19 @@ restarts; the revocation is checked before the gateway identity cache.
 bbolt is single-writer (one Gate One instance); for HA and immediate
 revocation use `sessionStore.type: "redis"` (see above).
 
+A bare visit to the login host root (`https://login.example.com/`) is a
+dead end by default. Set `defaultAppUrl` to send it to the application,
+**preserving the query string** — required for email-verification links
+that land there (Firebase `?mode=verifyEmail&oobCode=…`, Keycloak
+account links):
+
+```json
+{
+  "defaultAppUrl": "https://app.example.com/",
+  "authProvider": { "...": "..." }
+}
+```
+
 `gate-one init --oidc --issuer ... --client-id ...` writes this block and
 prints the URIs to register. auth-bridge stays fully supported
 for OIDC too: use `type: "http"` when you want the bridge in front of

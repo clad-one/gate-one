@@ -1247,3 +1247,29 @@ func TestAuthGuardForbiddenPolicy(t *testing.T) {
 		}
 	})
 }
+
+func TestDefaultAppURLValidation(t *testing.T) {
+	load := func(value string) error {
+		t.Helper()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "routes.json")
+		cfg := fmt.Sprintf(`{
+			"defaultAppUrl": %q,
+			"routes": [{"host": "a.local", "path": "/*", "backend": "http://x"}]
+		}`, value)
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(path)
+		return err
+	}
+
+	if err := load("https://vers.example.com/"); err != nil {
+		t.Fatalf("valid defaultAppUrl rejected: %v", err)
+	}
+	for _, bad := range []string{"/relative", "vers.example.com", "ftp://x/"} {
+		if err := load(bad); err == nil {
+			t.Fatalf("defaultAppUrl %q accepted", bad)
+		}
+	}
+}

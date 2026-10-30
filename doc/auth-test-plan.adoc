@@ -111,6 +111,10 @@ Health :
 | `403`
 | Page/JSON `forbidden` ; pas de redirection login automatique ; action « se déconnecter et changer de compte » sur la page (provider interactif)
 
+| Racine de l'hôte de login (`https://login.<domaine>/`)
+| `302`
+| Redirection vers `defaultAppUrl` (query conservée : `mode=verifyEmail&oobCode=…`, liens de vérification) ; sans `defaultAppUrl`, `404`
+
 | JWKS inaccessible, timeout, TLS, réponse malformée
 | `ErrProviderUnavailable`
 | `502`

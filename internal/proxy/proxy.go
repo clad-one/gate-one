@@ -2033,6 +2033,21 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// production login.<domain>. Per-route providers can each host
 	// their own login surface.
 	if lh := g.loginHandlerFor(ctx.Host); lh != nil {
+		// A bare login-host root is not a login endpoint. Email
+		// verification links (Firebase oobCode, Keycloak account
+		// links) land here and must reach the app that handles the
+		// code: redirect to defaultAppUrl, query preserved.
+		if ctx.Path == "/" && g.config.DefaultAppURL != "" {
+			target := g.config.DefaultAppURL
+			if r.URL.RawQuery != "" {
+				if u, err := url.Parse(target); err == nil {
+					u.RawQuery = r.URL.RawQuery
+					target = u.String()
+				}
+			}
+			http.Redirect(w, r, target, http.StatusFound)
+			return
+		}
 		lh.ServeLogin(w, r)
 		return
 	}

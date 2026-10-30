@@ -325,3 +325,39 @@ func TestE2E_ReadyzOnLoginHost(t *testing.T) {
 		}
 	}
 }
+
+// TestE2E_LoginHostRootRedirectsToApp: an email-verification link that
+// lands on the login host root (Firebase `?mode=verifyEmail&oobCode=…`,
+// Keycloak account link) must reach the app, query preserved — not a
+// 404 dead end.
+func TestE2E_LoginHostRootRedirectsToApp(t *testing.T) {
+	s := NewStack(t)
+	req, err := http.NewRequest(http.MethodGet,
+		"https://login.acme.test/?mode=verifyEmail&oobCode=abc123&lang=fr",
+		nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s.noRedirect.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("login root = %d, want 302", resp.StatusCode)
+	}
+	want := "https://app.acme.test/?mode=verifyEmail&oobCode=abc123&lang=fr"
+	if got := resp.Header.Get("Location"); got != want {
+		t.Fatalf("redirect = %q, want %q", got, want)
+	}
+
+	// A real login path is untouched.
+	login, err := s.noRedirect.Get("https://login.acme.test/login?returnTo=https%3A%2F%2Fapp.acme.test%2F")
+	if err != nil {
+		t.Fatal(err)
+	}
+	login.Body.Close()
+	if login.StatusCode != http.StatusFound {
+		t.Fatalf("/login = %d, want 302 to the IdP", login.StatusCode)
+	}
+}
