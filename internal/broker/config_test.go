@@ -61,3 +61,38 @@ func TestAC_AUTH_13_BrokerLocalRedirectURIs(t *testing.T) {
 		t.Fatal("public http redirect URI accepted")
 	}
 }
+
+func TestAC_AUTH_13_GoogleClientIDEnv(t *testing.T) {
+	t.Setenv("E2E_GOOGLE_CLIENT_ID", "client-from-env")
+
+	build := func() *Config {
+		return &Config{
+			PublicURL: "https://broker.test",
+			Tenants: []Tenant{{
+				ID:           "acme",
+				ClientID:     "gate-one",
+				ClientSecret: "secret",
+				RedirectURIs: []string{
+					"https://login.acme.test/auth/callback",
+				},
+				Google: GoogleConfig{
+					Issuer:      "https://accounts.google.com",
+					ClientIDEnv: "E2E_GOOGLE_CLIENT_ID",
+				},
+			}},
+		}
+	}
+
+	cfg := build()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Tenants[0].Google.ClientID; got != "client-from-env" {
+		t.Fatalf("google.clientId = %q", got)
+	}
+
+	t.Setenv("E2E_GOOGLE_CLIENT_ID", "")
+	if err := build().Validate(); err == nil {
+		t.Fatal("empty google clientIdEnv accepted")
+	}
+}

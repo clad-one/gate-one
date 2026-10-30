@@ -79,7 +79,8 @@ type Tenant struct {
 // GoogleConfig configures the upstream OIDC client.
 type GoogleConfig struct {
 	Issuer          string   `json:"issuer,omitempty"` // default https://accounts.google.com
-	ClientID        string   `json:"clientId"`
+	ClientID        string   `json:"clientId,omitempty"`
+	ClientIDEnv     string   `json:"clientIdEnv,omitempty"`
 	ClientSecret    string   `json:"clientSecret,omitempty"`
 	ClientSecretEnv string   `json:"clientSecretEnv,omitempty"`
 	HostedDomain    string   `json:"hostedDomain,omitempty"`
@@ -203,6 +204,15 @@ func (c *Config) Validate() error {
 		}
 		if t.Google.Issuer == "" {
 			t.Google.Issuer = "https://accounts.google.com"
+		}
+		if t.Google.ClientIDEnv != "" {
+			id, ok := os.LookupEnv(t.Google.ClientIDEnv)
+			if !ok || id == "" {
+				return fmt.Errorf(
+					"tenants[%s]: environment variable %s is empty",
+					t.ID, t.Google.ClientIDEnv)
+			}
+			t.Google.ClientID = id
 		}
 		if t.Google.ClientID == "" {
 			return fmt.Errorf("tenants[%s]: google.clientId is required", t.ID)
