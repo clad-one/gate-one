@@ -96,3 +96,23 @@ func TestAC_AUTH_13_GoogleClientIDEnv(t *testing.T) {
 		t.Fatal("empty google clientIdEnv accepted")
 	}
 }
+
+func TestAC_AUTH_13_BrokerPostLogoutWildcard(t *testing.T) {
+	cases := []struct {
+		list []string
+		raw  string
+		want bool
+	}{
+		{[]string{"https://app.example.com/*"}, "https://app.example.com/", true},
+		{[]string{"https://app.example.com/*"}, "https://app.example.com/a/b", true},
+		{[]string{"https://app.example.com/*"}, "https://evil.example.com/", false},
+		{[]string{"https://exact.example.com/"}, "https://exact.example.com/", true},
+		{[]string{"https://exact.example.com/"}, "https://exact.example.com/x", false},
+	}
+	for _, c := range cases {
+		if got := redirectAllowed(c.list, c.raw); got != c.want {
+			t.Errorf("redirectAllowed(%v, %q) = %t, want %t",
+				c.list, c.raw, got, c.want)
+		}
+	}
+}

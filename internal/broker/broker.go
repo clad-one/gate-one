@@ -879,8 +879,10 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntim
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	// Only registered post-logout targets are allowed.
-	if !containsString(rt.cfg.PostLogoutRedirectURIs, redirect) &&
+	// Only registered post-logout targets are allowed. Entries ending
+	// in "/*" accept any path under that origin (the Gate One guard
+	// sends its current URL, including the bare origin "/").
+	if !redirectAllowed(rt.cfg.PostLogoutRedirectURIs, redirect) &&
 		!containsString(rt.cfg.RedirectURIs, redirect) {
 		oauthError(w, http.StatusBadRequest, "invalid_request", "post_logout_redirect_uri is not registered")
 		return
@@ -983,6 +985,20 @@ func (rt *tenantRuntime) clientAuthOK(r *http.Request) (string, bool) {
 		return id, false
 	}
 	return id, true
+}
+
+// redirectAllowed matches exact entries and "/*" suffix patterns.
+func redirectAllowed(list []string, raw string) bool {
+	for _, allowed := range list {
+		if allowed == raw {
+			return true
+		}
+		if strings.HasSuffix(allowed, "/*") &&
+			strings.HasPrefix(raw, strings.TrimSuffix(allowed, "*")) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsString(list []string, want string) bool {

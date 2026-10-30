@@ -30,6 +30,7 @@ type oidcAdapter struct {
 	httpClient *http.Client
 	now        func() time.Time
 	rand       io.Reader
+	prompt     string
 }
 
 type adapterState struct {
@@ -78,6 +79,7 @@ func newOIDCAdapter(
 		httpClient: httpClient,
 		now:        now,
 		rand:       rnd,
+		prompt:     strings.TrimSpace(t.Google.Prompt),
 	}, nil
 }
 
@@ -112,11 +114,14 @@ func (a *oidcAdapter) Start(
 	if err != nil {
 		return identityadapter.Step{}, err
 	}
-	url := a.oauth.AuthCodeURL(
-		brokerState,
+	opts := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("nonce", nonce),
 		oauth2.S256ChallengeOption(verifier),
-	)
+	}
+	if a.prompt != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", a.prompt))
+	}
+	url := a.oauth.AuthCodeURL(brokerState, opts...)
 	return identityadapter.Step{
 		Kind:        identityadapter.StepRedirect,
 		RedirectURL: url,

@@ -78,13 +78,17 @@ type Tenant struct {
 
 // GoogleConfig configures the upstream OIDC client.
 type GoogleConfig struct {
-	Issuer          string   `json:"issuer,omitempty"` // default https://accounts.google.com
-	ClientID        string   `json:"clientId,omitempty"`
-	ClientIDEnv     string   `json:"clientIdEnv,omitempty"`
-	ClientSecret    string   `json:"clientSecret,omitempty"`
-	ClientSecretEnv string   `json:"clientSecretEnv,omitempty"`
-	HostedDomain    string   `json:"hostedDomain,omitempty"`
-	Scopes          []string `json:"scopes,omitempty"`
+	Issuer          string `json:"issuer,omitempty"` // default https://accounts.google.com
+	ClientID        string `json:"clientId,omitempty"`
+	ClientIDEnv     string `json:"clientIdEnv,omitempty"`
+	ClientSecret    string `json:"clientSecret,omitempty"`
+	ClientSecretEnv string `json:"clientSecretEnv,omitempty"`
+	// Prompt is forwarded to the upstream authorize endpoint. The
+	// canary uses "select_account" so a logout is not silently undone
+	// by the Google account session.
+	Prompt       string   `json:"prompt,omitempty"`
+	HostedDomain string   `json:"hostedDomain,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
 }
 
 // Load reads and validates a broker configuration.
