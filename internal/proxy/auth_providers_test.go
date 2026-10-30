@@ -569,3 +569,85 @@ func TestAC_AUTH_23_CrossInstanceRevocation(t *testing.T) {
 		t.Fatalf("gw2 after = %d, want 401", rec.Code)
 	}
 }
+
+// TestReadyz_LocalProviderState covers /readyz: local state only, and
+// a single broken tenant must not mark the whole instance unready.
+func TestReadyz_LocalProviderState(t *testing.T) {
+	_, pub := testKey(t)
+	_, jwksURL := testJWKS(t, pub, "contoso-1")
+	bad := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+		}))
+	badURL := bad.URL
+	bad.Close()
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	t.Cleanup(backend.Close)
+
+	degradedAcme := fmt.Sprintf(`{"id": "acme", "type": "oidc",
+		 "issuer": %q, "clientId": "cladone-go",
+		 "loginBaseUrl": "https://login.acme.test",
+		 "cookieDomain": "acme.test", "cookieName": "acme_session",
+		 "sessionStore": {"type": "bolt", "path": "./acme.db"}}`, badURL)
+	healthyJWT := fmt.Sprintf(`{"id": "contoso", "type": "jwt",
+		 "issuer": "https://auth.test/t/contoso",
+		 "jwksUrl": %q, "audience": "cladone-go"}`, jwksURL)
+
+	build := func(providers string) *Gateway {
+		t.Helper()
+		cfg := loadProxyAuthConfig(t, fmt.Sprintf(`{
+			"authProviders": [%s],
+			"defaultAuthProvider": "acme",
+			"routes": [
+				{"host": "acme.test", "path": "/*", "backend": %q,
+				 "auth": {"provider": "acme"}}
+			]
+		}`, providers, backend.URL))
+		gw, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return gw
+	}
+
+	readReady := func(gw *Gateway) (int, map[string]any) {
+		t.Helper()
+		resp := doGet(t, gw, "acme.test", "/readyz")
+		defer resp.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, body
+	}
+
+	// One degraded tenant, one healthy: the instance stays ready.
+	code, body := readReady(build(degradedAcme + "," + healthyJWT))
+	if code != http.StatusOK {
+		t.Fatalf("mixed providers /readyz = %d, want 200: %v", code, body)
+	}
+	providers, _ := body["providers"].(map[string]any)
+	acme, _ := providers["acme"].(map[string]any)
+	if acme["status"] != "degraded" {
+		t.Fatalf("acme status = %v, want degraded", acme["status"])
+	}
+	if _, leaked := acme["error"]; leaked {
+		t.Fatal("error details exposed without ?verbose=1")
+	}
+	contoso, _ := providers["contoso"].(map[string]any)
+	if contoso["status"] != "ok" {
+		t.Fatalf("contoso status = %v, want ok", contoso["status"])
+	}
+
+	// Only a degraded provider: fail-closed readiness.
+	code, body = readReady(build(degradedAcme))
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("all-degraded /readyz = %d, want 503: %v", code, body)
+	}
+	if body["status"] != "degraded" {
+		t.Fatalf("status = %v, want degraded", body["status"])
+	}
+}

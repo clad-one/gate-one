@@ -1966,6 +1966,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
 		return
+	case "/readyz", "/__gate-one/health/providers":
+		g.serveReady(w, r)
+		return
 	case "/__gate-one/stats":
 		serveStats(w, r)
 		return
