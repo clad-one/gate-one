@@ -9,6 +9,8 @@ package e2e
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -23,11 +25,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"cladone/gate-one/internal/broker"
 	"cladone/gate-one/internal/core"
 	"cladone/gate-one/internal/proxy"
 	"cladone/gate-one/internal/testutil/fakegoogle"
+	"cladone/gate-one/internal/testutil/netchaos"
 
 	"github.com/alicebob/miniredis/v2"
 )
@@ -45,6 +49,16 @@ const (
 
 type stackOptions struct {
 	acmeBrokerDown bool
+	// acmeBrokerDelay injects a per-request delay into the acme broker
+	// handler (0 = none). Adjustable at runtime via s.acmeDelay.
+	acmeBrokerDelay time.Duration
+	// redisDelay injects a per-direction TCP delay in front of the
+	// shared Redis (0 = direct connection).
+	redisDelay time.Duration
+	// acmeBrokerProxy puts a stable, swappable HTTP proxy in front of
+	// the acme broker so a key rotation can replace the broker
+	// instance behind the same public URL.
+	acmeBrokerProxy bool
 }
 
 // Stack is one isolated E2E environment.
@@ -58,6 +72,14 @@ type Stack struct {
 	acmeBroker *broker.Broker
 	acmeSrv    *httptest.Server
 	acmeCfg    *broker.Config
+	acmeDelay  *netchaos.HTTPDelay
+
+	// Set when the acme broker sits behind a stable proxy (key
+	// rotation test).
+	brokerProxy *netchaos.HTTPProxy
+	acmeKeyFile string
+
+	redisProxy *netchaos.DelayProxy
 
 	contosoBroker *broker.Broker
 	contosoSrv    *httptest.Server
@@ -111,17 +133,55 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 
 	s.backend = newBackend(t)
 
-	s.acmeCfg = newBrokerConfig("acme", s.fakeSrv.URL, s.redis.Addr(), acmeDomain)
-	s.acmeBroker, s.acmeSrv = newBroker(t, s.acmeCfg)
+	redisAddr := s.redis.Addr()
+	if opts.redisDelay > 0 {
+		dp, err := netchaos.NewDelayProxy(redisAddr, opts.redisDelay)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(dp.Close)
+		s.redisProxy = dp
+		redisAddr = dp.Addr()
+	}
+
+	s.acmeCfg = newBrokerConfig("acme", s.fakeSrv.URL, redisAddr, acmeDomain)
+	if opts.acmeBrokerProxy {
+		// A stable key file so the rotated config can keep the old
+		// key in keyFiles (overlap window).
+		kf := filepath.Join(t.TempDir(), "acme.key")
+		if err := writeTestKey(kf); err != nil {
+			t.Fatal(err)
+		}
+		s.acmeKeyFile = kf
+		s.acmeCfg.Tenants[0].KeyFiles = []string{kf}
+	}
+	s.acmeBroker, s.acmeSrv, s.acmeDelay = newBroker(t, s.acmeCfg)
+	if opts.acmeBrokerDelay > 0 {
+		s.acmeDelay.SetDelay(opts.acmeBrokerDelay)
+	}
 	if opts.acmeBrokerDown {
 		// Close only the HTTP surface: the broker object (and its
 		// Redis client) stays alive so t.Cleanup closes it once.
 		s.acmeSrv.Close()
 	}
+	if opts.acmeBrokerProxy {
+		bp, err := netchaos.NewHTTPProxy(s.acmeSrv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(bp.Close)
+		s.brokerProxy = bp
+		s.acmeBroker.SetPublicURL(bp.URL())
+	}
 
 	s.contosoCfg = newBrokerConfig(
-		"contoso", s.fakeSrv.URL, s.redis.Addr(), contosoDomain)
-	s.contosoBroker, s.contosoSrv = newBroker(t, s.contosoCfg)
+		"contoso", s.fakeSrv.URL, redisAddr, contosoDomain)
+	s.contosoBroker, s.contosoSrv, _ = newBroker(t, s.contosoCfg)
+
+	acmeIssuer := s.acmeSrv.URL
+	if s.brokerProxy != nil {
+		acmeIssuer = s.brokerProxy.URL()
+	}
 
 	cfg := loadConfig(t, fmt.Sprintf(`{
 		"authProviders": [
@@ -178,10 +238,10 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 			 "backend": %q, "auth": {"provider": "contoso"}}
 		]
 	}`,
-		s.acmeSrv.URL+"/t/acme", clientSecretEnv, acmeDomain,
-		s.redis.Addr(), authPrefix, sessionKeyEnv,
+		acmeIssuer+"/t/acme", clientSecretEnv, acmeDomain,
+		redisAddr, authPrefix, sessionKeyEnv,
 		s.contosoSrv.URL+"/t/contoso", clientSecretEnv, contosoDomain,
-		s.redis.Addr(), authPrefix, sessionKeyEnv,
+		redisAddr, authPrefix, sessionKeyEnv,
 		s.backend.URL(), s.backend.URL(), s.backend.URL(),
 		s.backend.URL(), s.backend.URL(),
 	))
@@ -280,19 +340,31 @@ func newBrokerConfig(
 
 func newBroker(
 	t *testing.T, cfg *broker.Config,
-) (*broker.Broker, *httptest.Server) {
+) (*broker.Broker, *httptest.Server, *netchaos.HTTPDelay) {
 	t.Helper()
 	b, err := broker.New(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(b.Handler())
+	delayer := netchaos.NewHTTPDelay(b.Handler())
+	srv := httptest.NewServer(delayer)
 	t.Cleanup(func() {
 		srv.Close()
 		_ = b.Close()
 	})
 	b.SetPublicURL(srv.URL)
-	return b, srv
+	return b, srv, delayer
+}
+
+// writeTestKey writes a fresh Ed25519 signing key (base64 raw seed),
+// the same format as `cladone-auth keygen`.
+func writeTestKey(path string) error {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	body := base64.RawURLEncoding.EncodeToString(priv.Seed()) + "\n"
+	return os.WriteFile(path, []byte(body), 0o600)
 }
 
 func loadConfig(t *testing.T, raw string) *core.Config {
@@ -331,6 +403,15 @@ func (m *mapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone.URL = &u
 	clone.Host = req.URL.Host
 	return m.base.RoundTrip(clone)
+}
+
+// CloseIdleConnections forwards to the wrapped transport: without it
+// http.Client.CloseIdleConnections is a silent no-op through the
+// mapping layer (goroutine-leak tests would see idle conns forever).
+func (m *mapTransport) CloseIdleConnections() {
+	if c, ok := m.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 // backend records the identity headers Gate One forwards.
