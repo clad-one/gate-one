@@ -301,3 +301,27 @@ func TestE2E_Forbidden_SwitchAccount(t *testing.T) {
 		t.Fatalf("X-Roles = %q, want superusers", roles)
 	}
 }
+
+// TestE2E_ReadyzOnLoginHost: operational endpoints are served on every
+// gateway host, including the dedicated login host (a load balancer
+// may probe /readyz there instead of the app host).
+func TestE2E_ReadyzOnLoginHost(t *testing.T) {
+	s := NewStack(t)
+	for _, base := range []string{
+		"https://login.acme.test",
+		"https://app.acme.test",
+	} {
+		resp, err := s.noRedirect.Get(base + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s/readyz = %d: %s", base, resp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), `"status":"ready"`) {
+			t.Fatalf("%s/readyz body = %s", base, body)
+		}
+	}
+}

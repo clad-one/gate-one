@@ -2013,6 +2013,21 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Operations endpoints (gateway-served, ANY host — including the
+	// login host: a load balancer may probe /readyz there).
+	switch ctx.Path {
+	case "/healthz":
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+		return
+	case "/readyz", "/__gate-one/health/providers":
+		g.serveReady(w, r)
+		return
+	case "/__gate-one/stats":
+		serveStats(w, r)
+		return
+	}
+
 	// Native provider login host (dev, later OIDC): a dedicated
 	// virtual host served BEFORE route matching, exactly like the
 	// production login.<domain>. Per-route providers can each host
@@ -2029,20 +2044,6 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			g.serveMCPProtectedResourceMetadata(w, r, unit)
 			return
 		}
-	}
-
-	// Operations endpoints (gateway-served, any host)
-	switch ctx.Path {
-	case "/healthz":
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
-		return
-	case "/readyz", "/__gate-one/health/providers":
-		g.serveReady(w, r)
-		return
-	case "/__gate-one/stats":
-		serveStats(w, r)
-		return
 	}
 
 	if g.isPubliclyForbidden(ctx) {
