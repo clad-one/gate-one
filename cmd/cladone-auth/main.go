@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"cladone/gate-one/internal/broker"
+	"cladone/gate-one/internal/ops"
 )
 
 func main() {
@@ -38,6 +39,9 @@ func main() {
 
 	configPath := flag.String("config", "cladone-auth.json", "broker config path")
 	addr := flag.String("addr", "", "listen address (default: config listen or :8081)")
+	pprofAddr := flag.String(
+		"pprof-addr", "",
+		"optional pprof listen address (e.g. 127.0.0.1:6061)")
 	flag.Parse()
 
 	cfg, err := broker.Load(*configPath)
@@ -79,6 +83,16 @@ func main() {
 
 	fmt.Printf("Cladone Auth broker listening on %s (public %s)\n",
 		*addr, cfg.PublicURL)
+
+	psrv, err := ops.StartPprof(*pprofAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if psrv != nil {
+		defer psrv.Close()
+		log.Printf("pprof listening on %s", *pprofAddr)
+	}
+
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

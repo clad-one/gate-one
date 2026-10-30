@@ -16,6 +16,7 @@ import (
 
 	"cladone/gate-one/internal/authn"
 	"cladone/gate-one/internal/core"
+	"cladone/gate-one/internal/ops"
 	"cladone/gate-one/internal/proxy"
 )
 
@@ -132,6 +133,14 @@ func main() {
 		"dev-allow-remote",
 		false,
 		"allow the dev auth provider on a non-loopback listen address",
+	)
+	// pprofAddr: opt-in profiling/goroutine dump endpoint (phase 4.5
+	// leak diagnosis). Empty = disabled, so nothing listens by
+	// default.
+	pprofAddr := flag.String(
+		"pprof-addr",
+		"",
+		"optional pprof listen address (e.g. 127.0.0.1:6060)",
 	)
 	showVersion := flag.Bool(
 		"version",
@@ -269,6 +278,15 @@ func main() {
 
 	log.Printf("Cladone G.O. Gate One listening on %s", *addr)
 	printReady(cfg, *addr)
+
+	psrv, err := ops.StartPprof(*pprofAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if psrv != nil {
+		defer psrv.Close()
+		log.Printf("pprof listening on %s", *pprofAddr)
+	}
 
 	if err := srv.ListenAndServe(); err != nil &&
 		err != http.ErrServerClosed {
