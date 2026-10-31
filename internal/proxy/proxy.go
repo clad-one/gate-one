@@ -367,8 +367,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			return nil, err
 		}
 
+		// Startup only: leave room for Sentinel to converge after a
+		// topology change (the store retries a READONLY replica).
 		ctx, cancel := context.WithTimeout(
-			context.Background(), 5*time.Second)
+			context.Background(), 15*time.Second)
 		providers, err := c.Providers(ctx)
 		cancel()
 		if err != nil {
@@ -963,8 +965,10 @@ func openRevocationStore(
 		}
 		return store, store.StoreID(), nil
 	case "redis":
+		// Startup only: leave room for Sentinel to converge after a
+		// topology change (the store retries a READONLY replica).
 		ctx, cancel := context.WithTimeout(
-			context.Background(), 5*time.Second)
+			context.Background(), 15*time.Second)
 		defer cancel()
 		store, err := authn.OpenRedisStore(ctx, authn.RedisConfig{
 			URL:              st.URL,

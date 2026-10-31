@@ -428,11 +428,6 @@ func newRedisStore(ctx context.Context, cfg RedisConfig) (*redisStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := redis.NewUniversalClient(opts)
-	if err := client.Ping(ctx).Err(); err != nil {
-		_ = client.Close()
-		return nil, fmt.Errorf("broker.redis: ping: %w", err)
-	}
 	data := strings.TrimSpace(cfg.Prefix)
 	if data == "" {
 		data = "cladone:broker:v1:"
@@ -440,11 +435,69 @@ func newRedisStore(ctx context.Context, cfg RedisConfig) (*redisStore, error) {
 	if !strings.HasSuffix(data, ":") {
 		data += ":"
 	}
-	return &redisStore{
-		client:     client,
-		dataPrefix: data,
-		authPrefix: authstate.Prefix(cfg.AuthPrefix),
-	}, nil
+	// Same race as Gate One: right after a Sentinel topology change,
+	// discovery can return the previous master (now a read-only
+	// replica). Probe with a write and retry with a fresh client so it
+	// re-resolves the master instead of failing every flow write.
+	deadline := time.Now().Add(redisOpenTimeout)
+	var lastErr error
+	for {
+		client := redis.NewUniversalClient(opts)
+		err := probeRedisWritable(ctx, client, data)
+		if err == nil {
+			return &redisStore{
+				client:     client,
+				dataPrefix: data,
+				authPrefix: authstate.Prefix(cfg.AuthPrefix),
+			}, nil
+		}
+		_ = client.Close()
+		lastErr = err
+		if !redisRetryable(err) || time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return nil, lastErr
+		case <-time.After(redisRetryDelay):
+		}
+	}
+}
+
+const (
+	redisOpenTimeout = 8 * time.Second
+	redisRetryDelay  = 200 * time.Millisecond
+)
+
+// probeRedisWritable pings and writes a short-lived probe key so a
+// read-only replica is detected at startup, not on the first login.
+func probeRedisWritable(
+	ctx context.Context, client redis.UniversalClient, dataPrefix string,
+) error {
+	if err := client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("broker.redis: ping: %w", err)
+	}
+	key := dataPrefix + "meta:probe"
+	if err := client.Set(ctx, key, "1", 5*time.Second).Err(); err != nil {
+		return fmt.Errorf("broker.redis: write probe: %w", err)
+	}
+	_ = client.Del(ctx, key).Err()
+	return nil
+}
+
+// redisRetryable reports whether opening the store should be retried.
+// A READONLY error means Sentinel handed us a replica: retrying with a
+// fresh client re-resolves the master. Connection errors are retried
+// too (the stack may still be coming up); a cancelled context is not.
+func redisRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
 }
 
 func (s *redisStore) put(

@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -55,23 +56,70 @@ type RedisStore struct {
 
 // OpenRedisStore connects, pings, and initialises the shared store id.
 // A Redis outage at startup is fail-closed: the provider is refused.
+//
+// In Sentinel mode the first resolution can race a topology change (for
+// example right after the whole stack was recreated): Sentinel may
+// still return the previous master, which is now a read-only replica.
+// Writes then fail with READONLY. We retry with a fresh client so the
+// client re-resolves the master instead of keeping a stale connection.
 func OpenRedisStore(ctx context.Context, cfg RedisConfig) (*RedisStore, error) {
 	opts, err := redisOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
-	client := redis.NewUniversalClient(opts)
-	if err := client.Ping(ctx).Err(); err != nil {
+	deadline := time.Now().Add(redisOpenTimeout)
+	var lastErr error
+	for {
+		client := redis.NewUniversalClient(opts)
+		s, err := initRedisStore(ctx, client, cfg)
+		if err == nil {
+			return s, nil
+		}
 		_ = client.Close()
+		lastErr = err
+		if !redisRetryable(err) || time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return nil, lastErr
+		case <-time.After(redisRetryDelay):
+		}
+	}
+}
+
+const (
+	redisOpenTimeout = 8 * time.Second
+	redisRetryDelay  = 200 * time.Millisecond
+)
+
+func initRedisStore(
+	ctx context.Context, client redis.UniversalClient, cfg RedisConfig,
+) (*RedisStore, error) {
+	if err := client.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("sessionStore.redis: ping: %w", err)
 	}
-	prefix := authstate.Prefix(cfg.Prefix)
-	s := &RedisStore{client: client, prefix: prefix}
+	s := &RedisStore{client: client, prefix: authstate.Prefix(cfg.Prefix)}
 	if err := s.initStoreID(ctx); err != nil {
-		_ = client.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// redisRetryable reports whether opening the store should be retried.
+// A READONLY error means Sentinel handed us a replica: retrying with a
+// fresh client is exactly what makes the provider recover. Connection
+// errors are retried too (the stack may still be coming up); a
+// cancelled context is not.
+func redisRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
 }
 
 // redisOptions builds the go-redis options for URL or Sentinel mode.

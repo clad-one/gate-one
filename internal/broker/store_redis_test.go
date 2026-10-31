@@ -1,7 +1,9 @@
 package broker
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,5 +146,24 @@ func TestBrokerRedisConfigSentinelValidation(t *testing.T) {
 	}
 	if cfg.Redis.SentinelPassword != "sp" {
 		t.Fatalf("sentinel password not resolved")
+	}
+}
+
+func TestBrokerRedisRetryable(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"readonly", errors.New("READONLY You can't write against a read only replica."), true},
+		{"refused", errors.New("dial tcp: connection refused"), true},
+		{"cancelled", context.Canceled, false},
+		{"deadline", context.DeadlineExceeded, false},
+	}
+	for _, c := range cases {
+		if got := redisRetryable(c.err); got != c.want {
+			t.Errorf("%s: retryable = %t, want %t", c.name, got, c.want)
+		}
 	}
 }

@@ -3,6 +3,7 @@ package authn
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -254,5 +255,24 @@ func TestRedisOptionsTLSCaInvalid(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "no PEM certificate") {
 		t.Fatalf("err = %v, want invalid CA refusal", err)
+	}
+}
+
+func TestRedisRetryable(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"readonly", errors.New("READONLY You can't write against a read only replica."), true},
+		{"refused", errors.New("dial tcp 127.0.0.1:6379: connect: connection refused"), true},
+		{"cancelled", context.Canceled, false},
+		{"deadline", context.DeadlineExceeded, false},
+	}
+	for _, c := range cases {
+		if got := redisRetryable(c.err); got != c.want {
+			t.Errorf("%s: retryable = %t, want %t", c.name, got, c.want)
+		}
 	}
 }
