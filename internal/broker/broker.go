@@ -517,6 +517,8 @@ func (b *Broker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		b.token(w, r, rt)
 	case "logout":
 		b.logout(w, r, rt)
+	case "logout/done":
+		b.logoutDone(w, r, rt)
 	case "login":
 		b.login(w, r, rt)
 	case "register":
@@ -1104,7 +1106,22 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntim
 				q.Set("client_id", upstream.ClientID)
 			}
 			if redirect != "" {
-				q.Set("post_logout_redirect_uri", redirect)
+				// ONE broker-owned landing is registered at the
+				// upstream (not every app URL): the app target rides
+				// in a short-lived, host-only cookie and is validated
+				// again by /logout/done.
+				http.SetCookie(w, &http.Cookie{
+					Name: "broker_logout_to",
+					Value: base64.RawURLEncoding.EncodeToString(
+						[]byte(redirect)),
+					Path:     "/t/" + rt.cfg.ID + "/logout/done",
+					MaxAge:   300,
+					HttpOnly: true,
+					Secure:   strings.HasPrefix(b.cfg.PublicURL, "https://"),
+					SameSite: http.SameSiteLaxMode,
+				})
+				q.Set("post_logout_redirect_uri",
+					b.issuer(rt)+"/logout/done")
 			}
 			u.RawQuery = q.Encode()
 			http.Redirect(w, r, u.String(), http.StatusFound)
@@ -1117,6 +1134,43 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntim
 		return
 	}
 	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+// logoutDone is the single post-logout landing registered at every
+// upstream IdP. It returns to the application carried by the
+// short-lived cookie, after validating it against the client's
+// registered post-logout targets (no open redirect).
+func (b *Broker) logoutDone(
+	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
+) {
+	target := ""
+	if c, err := r.Cookie("broker_logout_to"); err == nil {
+		if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
+			target = string(raw)
+		}
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "broker_logout_to",
+		Value:    "",
+		Path:     "/t/" + rt.cfg.ID + "/logout/done",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(b.cfg.PublicURL, "https://"),
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	if target != "" &&
+		(redirectAllowed(rt.cfg.PostLogoutRedirectURIs, target) ||
+			containsString(rt.cfg.RedirectURIs, target)) {
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
+	if len(rt.cfg.AppOrigins) > 0 {
+		http.Redirect(w, r, rt.cfg.AppOrigins[0], http.StatusFound)
+		return
+	}
+	writeAccountPage(w, http.StatusOK, "Déconnecté",
+		"Vous êtes déconnecté. Vous pouvez fermer cette page.")
 }
 
 func (rt *tenantRuntime) defaultAudience() string {

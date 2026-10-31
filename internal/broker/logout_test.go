@@ -26,6 +26,7 @@ func newLogoutTestBroker(t *testing.T) *Broker {
 	rt := &tenantRuntime{cfg: Tenant{
 		ID:                     "acme",
 		PostLogoutRedirectURIs: []string{"https://app.test/*"},
+		AppOrigins:             []string{"https://app.test/"},
 	}}
 	b.tenants["acme"] = rt
 	t.Cleanup(func() { _ = b.Close() })
@@ -77,9 +78,33 @@ func TestLogoutUpstreamRPInitiated(t *testing.T) {
 	if q.Get("client_id") != "upstream-client" {
 		t.Fatalf("client_id = %q", q.Get("client_id"))
 	}
-	if q.Get("post_logout_redirect_uri") != "https://app.test/" {
+	if q.Get("post_logout_redirect_uri") !=
+		"https://broker.test/t/acme/logout/done" {
 		t.Fatalf("post_logout_redirect_uri = %q",
 			q.Get("post_logout_redirect_uri"))
+	}
+
+	// The app target rides in the short-lived cookie; /logout/done
+	// validates it and redirects.
+	var logoutCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "broker_logout_to" {
+			logoutCookie = c
+		}
+	}
+	if logoutCookie == nil || logoutCookie.Value == "" {
+		t.Fatal("broker_logout_to cookie missing")
+	}
+	req := httptest.NewRequest(http.MethodGet,
+		"https://broker.test/t/acme/logout/done", nil)
+	req.AddCookie(logoutCookie)
+	done := httptest.NewRecorder()
+	b.Handler().ServeHTTP(done, req)
+	if done.Code != http.StatusFound {
+		t.Fatalf("logout/done = %d", done.Code)
+	}
+	if got := done.Header().Get("Location"); got != "https://app.test/" {
+		t.Fatalf("logout/done redirect = %q", got)
 	}
 
 	if up, err := b.store.GetUpstream(ctx, "acme", bid); err != nil || up != nil {
