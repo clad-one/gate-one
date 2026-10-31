@@ -89,6 +89,11 @@ type flow struct {
 	Expires           time.Time
 }
 
+// flowTTL is the authorize-to-callback window. It must be at least
+// the Gate One OIDC transaction TTL so a slow upstream login (email
+// verification, MFA) does not expire one side before the other.
+const flowTTL = 15 * time.Minute
+
 type authCode struct {
 	Tenant            string
 	ClientID          string
@@ -626,8 +631,8 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 			CodeChallengeMeth: method,
 			AuthorizeQuery:    r.URL.RawQuery,
 			CSRF:              csrf,
-			Expires:           b.now().Add(10 * time.Minute),
-		}, 10*time.Minute); err != nil {
+			Expires:           b.now().Add(flowTTL),
+		}, flowTTL); err != nil {
 			oauthError(w, http.StatusBadGateway, "server_error", "flow store unavailable")
 			return
 		}
@@ -676,8 +681,8 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		Scope:             scope,
 		CodeChallenge:     challenge,
 		CodeChallengeMeth: method,
-		Expires:           b.now().Add(10 * time.Minute),
-	}, 10*time.Minute); err != nil {
+		Expires:           b.now().Add(flowTTL),
+	}, flowTTL); err != nil {
 		oauthError(w, http.StatusBadGateway, "server_error", "flow store unavailable")
 		return
 	}
@@ -694,7 +699,8 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 		return
 	}
 	if f == nil || b.now().After(f.Expires) {
-		oauthError(w, http.StatusBadRequest, "invalid_request", "unknown or expired state")
+		writeRestartPage(w, rt,
+			"La session de connexion a expiré ou a déjà été utilisée.")
 		return
 	}
 	if e := q.Get("error"); e != "" {

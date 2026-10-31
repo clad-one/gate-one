@@ -214,9 +214,32 @@ func (b *Broker) verifyEmail(
 
 // writeAccountPage is a minimal self-contained page for the account
 // lifecycle (no external asset, values escaped).
+func writeRestartPage(
+	w http.ResponseWriter, rt *tenantRuntime, message string,
+) {
+	link := ""
+	if rt != nil && len(rt.cfg.AppOrigins) > 0 {
+		link = rt.cfg.AppOrigins[0]
+	}
+	writeAccountPageLink(w, http.StatusBadRequest,
+		"Session de connexion expirée", message, link)
+}
+
 func writeAccountPage(
 	w http.ResponseWriter, code int, title, message string,
 ) {
+	writeAccountPageLink(w, code, title, message, "")
+}
+
+func writeAccountPageLink(
+	w http.ResponseWriter, code int, title, message, link string,
+) {
+	var action string
+	if link != "" {
+		action = fmt.Sprintf(
+			"<p><a class=\"btn\" href=\"%s\">Recommencer depuis l'application</a></p>",
+			html.EscapeString(link))
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
@@ -233,9 +256,10 @@ h1{margin:0 0 .6rem;font-size:1.4rem}p{margin:0;color:#444}
 @media (prefers-color-scheme:dark){body{background:#16181d;color:#eef0f3}main{background:#20242e}p{color:#c7ccd6}}
 </style>
 </head>
-<body><main><h1>%s</h1><p>%s</p></main></body>
+<body><main><h1>%s</h1><p>%s</p>%s</main></body>
 </html>`,
 		html.EscapeString(title),
 		html.EscapeString(title),
-		html.EscapeString(message))
+		html.EscapeString(message),
+		action)
 }

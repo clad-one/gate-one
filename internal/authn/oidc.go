@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"log"
@@ -25,7 +26,7 @@ import (
 const (
 	oidcSessionCookie = "gate_one_session"
 	oidcTxCookie      = "gate_one_oidc_tx"
-	oidcTxTTL         = 5 * time.Minute
+	oidcTxTTL         = 15 * time.Minute
 	oidcSessionTTL    = time.Hour
 )
 
@@ -611,10 +612,30 @@ func (o *OIDC) handleLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
+// writeTxExpired answers an expired/missing OIDC transaction with a
+// readable page (the raw text was a dead end, especially after a slow
+// upstream login).
+func (o *OIDC) writeTxExpired(w http.ResponseWriter) {
+	login := strings.TrimRight(o.loginBase.String(), "/") + "/login"
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusBadRequest)
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session expirée</title>
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f4f5f7;color:#1c1f26;font:16px/1.5 system-ui,sans-serif}main{max-width:32em;margin:2rem;padding:2rem;background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08)}h1{margin:0 0 .6rem;font-size:1.3rem}p{margin:0 0 1rem;color:#444}a.btn{display:inline-block;padding:.6rem 1rem;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;font-weight:600}</style>
+</head><body><main>
+<h1>Session de connexion expirée</h1>
+<p>Le délai de connexion est dépassé (ou la page a été rechargée).</p>
+<p><a class="btn" href="%s">Recommencer la connexion</a></p>
+</main></body></html>`, html.EscapeString(login))
+}
+
 func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	tx, ok := o.tx.read(r)
 	if !ok {
-		http.Error(w, "login state expired — restart the login", http.StatusBadRequest)
+		o.writeTxExpired(w)
 		return
 	}
 	o.tx.clear(w)
