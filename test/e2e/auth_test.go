@@ -446,3 +446,24 @@ func TestE2E_LoginHostLanding(t *testing.T) {
 		t.Fatalf("/login = %d, want 302 to the IdP", login.StatusCode)
 	}
 }
+
+// TestE2E_LoginForwardsIdpHint: Gate One forwards the optional `idp`
+// hint from its /login URL to the upstream authorize endpoint (e.g.
+// the broker's local password login).
+func TestE2E_LoginForwardsIdpHint(t *testing.T) {
+	s := NewStack(t)
+	resp, err := s.noRedirect.Get(
+		"https://login.acme.test/login?idp=local&returnTo=" +
+			"https%3A%2F%2Fapp.acme.test%2F")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("login = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.Contains(loc, "idp=local") {
+		t.Fatalf("idp hint not forwarded: %q", loc)
+	}
+}

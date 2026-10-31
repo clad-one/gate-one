@@ -601,11 +601,16 @@ func (o *OIDC) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Expires:  o.now().Add(oidcTxTTL).Unix(),
 	})
 
-	authURL := o.oauth2.AuthCodeURL(
-		state,
+	opts := []oauth2.AuthCodeOption{
 		oidc.Nonce(nonce),
 		oauth2.S256ChallengeOption(verifier),
-	)
+	}
+	// idp is an optional upstream hint (e.g. the broker's "local"
+	// password login). Unknown values are ignored by standard IdPs.
+	if idp := strings.TrimSpace(r.URL.Query().Get("idp")); idp != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("idp", idp))
+	}
+	authURL := o.oauth2.AuthCodeURL(state, opts...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 

@@ -59,6 +59,7 @@ type flow struct {
 	Scope             string
 	CodeChallenge     string
 	CodeChallengeMeth string
+	CSRF              string
 	Expires           time.Time
 }
 
@@ -457,6 +458,8 @@ func (b *Broker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		b.token(w, r, rt)
 	case "logout":
 		b.logout(w, r, rt)
+	case "login":
+		b.login(w, r, rt)
 	case "register":
 		b.register(w, r, rt)
 	case "verify-email":
@@ -545,6 +548,37 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		nonce = b.randomHex(16)
 	}
 	flowID := b.randomHex(24)
+
+	if q.Get("idp") == "local" {
+		if !rt.cfg.LocalAccounts {
+			oauthError(w, http.StatusBadRequest, "invalid_request",
+				"local login is not enabled for this tenant")
+			return
+		}
+		csrf := b.randomHex(16)
+		if err := b.store.PutFlow(r.Context(), rt.cfg.ID, flowID, &flow{
+			Tenant:            rt.cfg.ID,
+			ClientID:          clientID,
+			RedirectURI:       redirectURI,
+			State:             state,
+			Nonce:             nonce,
+			BrowserID:         browserID,
+			SID:               sharedSID,
+			Sub:               sharedSub,
+			SessionIssuedAt:   sharedIssuedAt,
+			Scope:             scope,
+			CodeChallenge:     challenge,
+			CodeChallengeMeth: method,
+			CSRF:              csrf,
+			Expires:           b.now().Add(10 * time.Minute),
+		}, 10*time.Minute); err != nil {
+			oauthError(w, http.StatusBadGateway, "server_error", "flow store unavailable")
+			return
+		}
+		http.Redirect(w, r, b.issuer(rt)+"/login?flow="+flowID,
+			http.StatusFound)
+		return
+	}
 
 	step, err := rt.adapter.Start(r.Context(), identityadapter.Request{
 		Tenant:     rt.cfg.ID,
@@ -665,6 +699,30 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 	if username == "" {
 		username = email
 	}
+	b.finishLogin(w, r, rt, f, loginIdentity{
+		Sub:      sub,
+		Username: username,
+		Email:    email,
+		Roles:    roles,
+	})
+}
+
+// loginIdentity is the authenticated principal a completed login
+// (upstream or local) hands to the code/session issuance.
+type loginIdentity struct {
+	Sub      string
+	Username string
+	Email    string
+	Roles    []string
+}
+
+// finishLogin stores the broker SSO session, sets the cookie, issues a
+// single-use authorization code and redirects to the RP callback.
+// Shared by the upstream callback and the local password login.
+func (b *Broker) finishLogin(
+	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
+	f *flow, id loginIdentity,
+) {
 	brokerCode := b.randomHex(24)
 	sid := f.SID
 	if sid == "" {
@@ -674,15 +732,12 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 	if browserID == "" {
 		browserID = b.randomHex(24)
 	}
-	if sub == "" {
-		sub = a.Subject
-	}
 	issuedAt := f.SessionIssuedAt
 	if issuedAt.IsZero() {
 		issuedAt = b.now()
 	}
 	if err := b.store.PutSession(
-		r.Context(), rt.cfg.ID, browserID, sid, sub, issuedAt,
+		r.Context(), rt.cfg.ID, browserID, sid, id.Sub, issuedAt,
 		rt.cfg.sessionTTL(),
 	); err != nil {
 		oauthError(w, http.StatusBadGateway, "server_error", "session store unavailable")
@@ -697,10 +752,10 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 		Nonce:             f.Nonce,
 		CodeChallenge:     f.CodeChallenge,
 		CodeChallengeMeth: f.CodeChallengeMeth,
-		Subject:           sub,
-		Username:          username,
-		Email:             email,
-		Roles:             roles,
+		Subject:           id.Sub,
+		Username:          id.Username,
+		Email:             id.Email,
+		Roles:             id.Roles,
 		SID:               sid,
 		IssuedAt:          b.now(),
 		Expires:           b.now().Add(5 * time.Minute),

@@ -20,6 +20,7 @@ import (
 // default; Redis is required for multi-instance and restart safety.
 type store interface {
 	PutFlow(ctx context.Context, tenant, id string, f *flow, ttl time.Duration) error
+	GetFlow(ctx context.Context, tenant, id string) (*flow, error)
 	TakeFlow(ctx context.Context, tenant, id string) (*flow, error)
 	PutCode(ctx context.Context, tenant, id string, c *authCode, ttl time.Duration) error
 	TakeCode(ctx context.Context, tenant, id string) (*authCode, error)
@@ -135,6 +136,20 @@ func (s *memoryStore) gcLocked() {
 func (s *memoryStore) PutFlow(_ context.Context, tenant, id string, f *flow, ttl time.Duration) error {
 	return s.put(s.flows, tenant+"\x00"+id, f, ttl)
 }
+func (s *memoryStore) GetFlow(_ context.Context, tenant, id string) (*flow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.flows[tenant+"\x00"+id]
+	if !ok || time.Now().After(e.expires) {
+		return nil, nil
+	}
+	var f flow
+	if err := json.Unmarshal(e.value, &f); err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
 func (s *memoryStore) TakeFlow(_ context.Context, tenant, id string) (*flow, error) {
 	var f flow
 	if err := s.take(s.flows, tenant+"\x00"+id, &f); err != nil {
@@ -349,6 +364,20 @@ func (s *redisStore) put(
 	return s.client.Set(ctx, key, raw, ttl).Err()
 }
 
+func (s *redisStore) get(
+	ctx context.Context, kind, tenant, id string, out any,
+) error {
+	key := s.dataPrefix + kind + ":" + tenant + ":" + id
+	raw, err := s.client.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return errStoreNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
+}
+
 var getDelScript = redis.NewScript(`
 local v = redis.call('GET', KEYS[1])
 if v then redis.call('DEL', KEYS[1]) end
@@ -372,6 +401,17 @@ func (s *redisStore) take(
 func (s *redisStore) PutFlow(ctx context.Context, tenant, id string, f *flow, ttl time.Duration) error {
 	return s.put(ctx, "flow", tenant, id, f, ttl)
 }
+func (s *redisStore) GetFlow(ctx context.Context, tenant, id string) (*flow, error) {
+	var f flow
+	if err := s.get(ctx, "flow", tenant, id, &f); err != nil {
+		if errors.Is(err, errStoreNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &f, nil
+}
+
 func (s *redisStore) TakeFlow(ctx context.Context, tenant, id string) (*flow, error) {
 	var f flow
 	if err := s.take(ctx, "flow", tenant, id, &f); err != nil {
