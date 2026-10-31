@@ -1818,18 +1818,21 @@ func (g *Gateway) serveAuthState(
 	sctx, err := g.checkAuthWithProvider(w, r, ctx, g.providerFor(cr))
 	if err != nil {
 		if errors.Is(err, authn.ErrProviderUnavailable) {
+			log.Printf("AUTH STATE host=%s status=503", ctx.Host)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(
 				`{"error":"authentication_unavailable"}`))
 			return
 		}
+		log.Printf("AUTH STATE host=%s status=401", ctx.Host)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"authentication_required"}`))
 		return
 	}
 
+	log.Printf("AUTH STATE host=%s status=200 user=%q", ctx.Host, sctx.UserID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
