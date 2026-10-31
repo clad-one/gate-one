@@ -59,6 +59,66 @@ type stackOptions struct {
 	// the acme broker so a key rotation can replace the broker
 	// instance behind the same public URL.
 	acmeBrokerProxy bool
+	// redisHA replaces the miniredis URL with a real Sentinel cluster
+	// (TLS + ACL). Used by the e2e_ha build tag against the local
+	// Redis HA stack.
+	redisHA *redisHAConfig
+}
+
+// redisHAConfig is the Sentinel-mode store used by the HA E2E test.
+// The password fields are read from the environment by the driver.
+type redisHAConfig struct {
+	SentinelAddrs    []string
+	MasterName       string
+	SentinelUsername string
+	SentinelPassword string
+	Username         string
+	Password         string
+	TLSCaFile        string
+	TLSServerName    string
+	// AuthPrefix is shared by Gate One's sessionStore and the broker's
+	// revocation keys. It must be allowed by the Redis ACL.
+	AuthPrefix string
+}
+
+// sessionStoreJSON renders the Gate One sessionStore block.
+func (r *redisHAConfig) sessionStoreJSON(prefix string) string {
+	return fmt.Sprintf(`{
+		"type": "redis",
+		"masterName": %q,
+		"sentinelAddrs": %s,
+		"sentinelUsername": %q,
+		"sentinelPasswordEnv": "E2E_HA_SENTINEL_PASSWORD",
+		"username": %q,
+		"passwordEnv": "E2E_HA_APP_PASSWORD",
+		"tls": true,
+		"tlsCaFile": %q,
+		"tlsServerName": %q,
+		"prefix": %q
+	}`, r.MasterName, jsonStrings(r.SentinelAddrs), r.SentinelUsername,
+		r.Username, r.TLSCaFile, r.TLSServerName, prefix)
+}
+
+// brokerRedis renders the broker redis block (same cluster).
+func (r *redisHAConfig) brokerRedis(dataPrefix string) *broker.RedisConfig {
+	return &broker.RedisConfig{
+		MasterName:          r.MasterName,
+		SentinelAddrs:       r.SentinelAddrs,
+		SentinelUsername:    r.SentinelUsername,
+		SentinelPasswordEnv: "E2E_HA_SENTINEL_PASSWORD",
+		Username:            r.Username,
+		PasswordEnv:         "E2E_HA_APP_PASSWORD",
+		Prefix:              "cladone:broker:canari:e2e:" + dataPrefix + ":",
+		AuthPrefix:          r.AuthPrefix,
+		TLS:                 true,
+		TLSCaFile:           r.TLSCaFile,
+		TLSServerName:       r.TLSServerName,
+	}
+}
+
+func jsonStrings(items []string) string {
+	raw, _ := json.Marshal(items)
+	return string(raw)
 }
 
 // Stack is one isolated E2E environment.
@@ -150,7 +210,25 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		redisAddr = dp.Addr()
 	}
 
-	s.acmeCfg = newBrokerConfig("acme", s.fakeSrv.URL, redisAddr, acmeDomain)
+	// Default: miniredis URL. The e2e_ha test swaps in a real Sentinel
+	// cluster (TLS + ACL) with the same config shape.
+	sessionStore := fmt.Sprintf(
+		`{"type":"redis","url":"redis://%s/0","prefix":%q}`,
+		redisAddr, authPrefix)
+	brokerRedis := func(id string) *broker.RedisConfig {
+		return &broker.RedisConfig{
+			URL:        "redis://" + redisAddr + "/0",
+			Prefix:     "e2e:broker:" + id + ":",
+			AuthPrefix: authPrefix,
+		}
+	}
+	if opts.redisHA != nil {
+		sessionStore = opts.redisHA.sessionStoreJSON(opts.redisHA.AuthPrefix)
+		brokerRedis = opts.redisHA.brokerRedis
+	}
+
+	s.acmeCfg = newBrokerConfig(
+		"acme", s.fakeSrv.URL, brokerRedis("acme"), acmeDomain)
 	if opts.acmeBrokerProxy {
 		// A stable key file so the rotated config can keep the old
 		// key in keyFiles (overlap window).
@@ -181,7 +259,7 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 	}
 
 	s.contosoCfg = newBrokerConfig(
-		"contoso", s.fakeSrv.URL, redisAddr, contosoDomain)
+		"contoso", s.fakeSrv.URL, brokerRedis("contoso"), contosoDomain)
 	s.contosoBroker, s.contosoSrv, _ = newBroker(t, s.contosoCfg)
 
 	acmeIssuer := s.acmeSrv.URL
@@ -200,11 +278,7 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 				"cookieDomain": %q,
 				"cookieName": "gate_one_acme",
 				"roleClaims": ["roles", "groups"],
-				"sessionStore": {
-					"type": "redis",
-					"url": "redis://%s/0",
-					"prefix": %q
-				},
+				"sessionStore": %s,
 				"sessionKeyEnv": %q,
 				"sessionTtlSeconds": 3600,
 				"revocationTtlSeconds": 2592000,
@@ -219,11 +293,7 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 				"cookieDomain": %q,
 				"cookieName": "gate_one_contoso",
 				"roleClaims": ["roles", "groups"],
-				"sessionStore": {
-					"type": "redis",
-					"url": "redis://%s/0",
-					"prefix": %q
-				},
+				"sessionStore": %s,
 				"sessionKeyEnv": %q,
 				"sessionTtlSeconds": 3600,
 				"revocationTtlSeconds": 2592000,
@@ -249,9 +319,9 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		]
 	}`,
 		acmeIssuer+"/t/acme", clientSecretEnv, acmeDomain,
-		redisAddr, authPrefix, sessionKeyEnv,
+		sessionStore, sessionKeyEnv,
 		s.contosoSrv.URL+"/t/contoso", clientSecretEnv, contosoDomain,
-		redisAddr, authPrefix, sessionKeyEnv,
+		sessionStore, sessionKeyEnv,
 		s.backend.URL(), s.backend.URL(), s.backend.URL(),
 		s.backend.URL(), s.backend.URL(), s.backend.URL(),
 	))
@@ -314,7 +384,7 @@ func NewStack(t *testing.T) *Stack {
 }
 
 func newBrokerConfig(
-	id, fakeURL, redisAddr, domain string,
+	id, fakeURL string, redis *broker.RedisConfig, domain string,
 ) *broker.Config {
 	return &broker.Config{
 		PublicURL: "http://placeholder.invalid",
@@ -348,11 +418,7 @@ func newBrokerConfig(
 				"superusers": {"superusers"},
 			},
 		}},
-		Redis: &broker.RedisConfig{
-			URL:        "redis://" + redisAddr + "/0",
-			Prefix:     "e2e:broker:" + id + ":",
-			AuthPrefix: authPrefix,
-		},
+		Redis: redis,
 	}
 }
 
