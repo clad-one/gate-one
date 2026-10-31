@@ -57,6 +57,34 @@ Redis is checked on every authenticated request; if it is unavailable,
 authenticated routes fail closed with `502 authentication_unavailable`
 (public routes are unaffected).
 
+For a highly available Redis, use Sentinel mode. The Sentinels may
+require their own credentials (separate from the Redis ACL user) and
+TLS:
+
+[source,json]
+----
+"sessionStore": {
+  "type": "redis",
+  "masterName": "authmaster",
+  "sentinelAddrs": ["redis-sentinel-1:26379", "redis-sentinel-2:26379"],
+  "sentinelUsername": "sentinel-user",
+  "sentinelPasswordEnv": "REDIS_SENTINEL_PASSWORD",
+  "username": "app",
+  "passwordEnv": "REDIS_PASSWORD",
+  "tls": true,
+  "tlsCaFile": "/etc/gate-one/redis-ca.pem",
+  "tlsServerName": "redis.internal",
+  "prefix": "cladone:auth:v1:"
+}
+----
+
+`tls` applies to both the Sentinel connections and the discovered
+master/replica. In URL mode, use a `rediss://` URL instead; `tls`,
+`tlsCaFile`, `tlsServerName` and `sentinelUsername` are rejected with a
+URL. `tlsCaFile` is optional (system roots by default) and is checked at
+startup. `tlsServerName` is useful when the Sentinels are addressed by
+IP.
+
 `revocationTtlSeconds` defaults to the issuer's advertised
 `cladone_refresh_token_ttl_seconds` (the broker exposes its refresh-token
 lifetime), otherwise 30 days, and is never shorter than the session TTL.

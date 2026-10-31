@@ -281,3 +281,123 @@ func TestAuthRouteWithoutLoginRefused(t *testing.T) {
 		t.Fatalf("err = %v, want no login URL refusal", err)
 	}
 }
+
+func TestSessionStoreSentinelAuthTLSResolved(t *testing.T) {
+	t.Setenv("TEST_SESSION_KEY", "session-key")
+	t.Setenv("TEST_SENTINEL_PASSWORD", "sentinel-secret")
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, []byte("dummy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "oidc",
+			"issuer": "https://auth.example.com/realms/acme",
+			"clientId": "gate-one",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com",
+			"sessionKeyEnv": "TEST_SESSION_KEY",
+			"sessionStore": {
+				"type": "redis",
+				"masterName": "authmaster",
+				"sentinelAddrs": ["s1:26379", "s2:26379"],
+				"sentinelUsername": "sentinel-user",
+				"sentinelPasswordEnv": "TEST_SENTINEL_PASSWORD",
+				"username": "app",
+				"tls": true,
+				"tlsCaFile": "`+caPath+`",
+				"tlsServerName": "redis.internal"
+			}
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := cfg.AuthProvider.SessionStore
+	if st.SentinelUsername != "sentinel-user" ||
+		st.SentinelPassword != "sentinel-secret" {
+		t.Errorf("sentinel auth = %q/%q",
+			st.SentinelUsername, st.SentinelPassword)
+	}
+	if !st.TLS || st.TLSCaFile != caPath ||
+		st.TLSServerName != "redis.internal" {
+		t.Errorf("tls = %v/%q/%q", st.TLS, st.TLSCaFile, st.TLSServerName)
+	}
+}
+
+func TestSessionStoreSentinelFieldsRequireSentinelMode(t *testing.T) {
+	t.Setenv("TEST_SESSION_KEY", "session-key")
+	_, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "oidc",
+			"issuer": "https://auth.example.com/realms/acme",
+			"clientId": "gate-one",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com",
+			"sessionKeyEnv": "TEST_SESSION_KEY",
+			"sessionStore": {
+				"type": "redis",
+				"url": "redis://redis:6379/0",
+				"sentinelUsername": "sentinel-user"
+			}
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "only valid in sentinel mode") {
+		t.Fatalf("err = %v, want sentinel-mode refusal", err)
+	}
+}
+
+func TestSessionStoreTLSHelpersRequireTLS(t *testing.T) {
+	t.Setenv("TEST_SESSION_KEY", "session-key")
+	_, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "oidc",
+			"issuer": "https://auth.example.com/realms/acme",
+			"clientId": "gate-one",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com",
+			"sessionKeyEnv": "TEST_SESSION_KEY",
+			"sessionStore": {
+				"type": "redis",
+				"masterName": "authmaster",
+				"sentinelAddrs": ["s1:26379"],
+				"tlsServerName": "redis.internal"
+			}
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "require tls=true") {
+		t.Fatalf("err = %v, want tls=true refusal", err)
+	}
+}
+
+func TestSessionStoreTLSCaFileMissing(t *testing.T) {
+	t.Setenv("TEST_SESSION_KEY", "session-key")
+	_, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "oidc",
+			"issuer": "https://auth.example.com/realms/acme",
+			"clientId": "gate-one",
+			"loginBaseUrl": "https://login.example.com",
+			"cookieDomain": "example.com",
+			"sessionKeyEnv": "TEST_SESSION_KEY",
+			"sessionStore": {
+				"type": "redis",
+				"masterName": "authmaster",
+				"sentinelAddrs": ["s1:26379"],
+				"tls": true,
+				"tlsCaFile": "/nonexistent/ca.pem"
+			}
+		},
+		"routes": [{"host": "app.example.com", "path": "/*",
+			"backend": "http://127.0.0.1:1"}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "tlsCaFile") {
+		t.Fatalf("err = %v, want missing CA refusal", err)
+	}
+}

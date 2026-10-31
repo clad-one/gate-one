@@ -8,6 +8,10 @@
 //	  -e REDIS_HA_APP_PASSWORD=... -v /tmp/redis-ha-probe:/probe:ro \
 //	  alpine:3 /probe \
 //	  -sentinels redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+//
+// With Sentinel authentication or TLS, add -sentinel-user,
+// -sentinel-password-env (pointing at an env var), -tls, -tls-ca and
+// -tls-server-name as needed.
 package main
 
 import (
@@ -35,6 +39,12 @@ func run() error {
 			"comma-separated sentinel host:port list")
 		master = flag.String(
 			"master", "authmaster", "sentinel master name")
+		sentinelUser = flag.String(
+			"sentinel-user", "",
+			"ACL user for the sentinels (empty = no sentinel auth)")
+		sentinelPassEnv = flag.String(
+			"sentinel-password-env", "",
+			"environment variable holding the sentinel password")
 		user    = flag.String("user", "app", "ACL user")
 		passEnv = flag.String(
 			"password-env", "REDIS_HA_APP_PASSWORD",
@@ -42,6 +52,12 @@ func run() error {
 		prefix = flag.String(
 			"prefix", "cladone:auth:v1:",
 			"shared key prefix (must be allowed by the ACL)")
+		useTLS = flag.Bool(
+			"tls", false, "speak TLS to the sentinels and Redis")
+		tlsCa = flag.String(
+			"tls-ca", "", "PEM CA bundle (default: system roots)")
+		tlsServerName = flag.String(
+			"tls-server-name", "", "TLS server name override")
 	)
 	flag.Parse()
 
@@ -52,19 +68,32 @@ func run() error {
 	if password == "" {
 		return fmt.Errorf("environment variable %s is empty", *passEnv)
 	}
+	var sentinelPassword string
+	if *sentinelPassEnv != "" {
+		sentinelPassword = os.Getenv(*sentinelPassEnv)
+		if sentinelPassword == "" {
+			return fmt.Errorf(
+				"environment variable %s is empty", *sentinelPassEnv)
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	store, err := authn.OpenRedisStore(ctx, authn.RedisConfig{
-		SentinelAddrs: strings.Split(*sentinels, ","),
-		MasterName:    *master,
-		Username:      *user,
-		Password:      password,
-		Prefix:        *prefix,
-		DialTimeout:   2 * time.Second,
-		ReadTimeout:   2 * time.Second,
-		WriteTimeout:  2 * time.Second,
+		SentinelAddrs:    strings.Split(*sentinels, ","),
+		MasterName:       *master,
+		SentinelUsername: *sentinelUser,
+		SentinelPassword: sentinelPassword,
+		Username:         *user,
+		Password:         password,
+		Prefix:           *prefix,
+		DialTimeout:      2 * time.Second,
+		ReadTimeout:      2 * time.Second,
+		WriteTimeout:     2 * time.Second,
+		TLS:              *useTLS,
+		TLSCaFile:        *tlsCa,
+		TLSServerName:    *tlsServerName,
 	})
 	if err != nil {
 		return fmt.Errorf("open via sentinel: %w", err)

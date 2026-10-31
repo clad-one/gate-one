@@ -2,9 +2,12 @@ package broker
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,19 +46,25 @@ type store interface {
 // match Gate One's sessionStore.redis.prefix so revocations are read
 // by the gateway.
 type RedisConfig struct {
-	URL            string   `json:"url,omitempty"`
-	SentinelAddrs  []string `json:"sentinelAddrs,omitempty"`
-	MasterName     string   `json:"masterName,omitempty"`
-	Username       string   `json:"username,omitempty"`
-	PasswordEnv    string   `json:"passwordEnv,omitempty"`
-	Password       string   `json:"-"`
-	DB             int      `json:"db,omitempty"`
-	Prefix         string   `json:"prefix,omitempty"`
-	AuthPrefix     string   `json:"authPrefix,omitempty"`
-	DialTimeoutMS  int      `json:"dialTimeoutMs,omitempty"`
-	ReadTimeoutMS  int      `json:"readTimeoutMs,omitempty"`
-	WriteTimeoutMS int      `json:"writeTimeoutMs,omitempty"`
-	PoolSize       int      `json:"poolSize,omitempty"`
+	URL                 string   `json:"url,omitempty"`
+	SentinelAddrs       []string `json:"sentinelAddrs,omitempty"`
+	MasterName          string   `json:"masterName,omitempty"`
+	SentinelUsername    string   `json:"sentinelUsername,omitempty"`
+	SentinelPasswordEnv string   `json:"sentinelPasswordEnv,omitempty"`
+	SentinelPassword    string   `json:"-"`
+	Username            string   `json:"username,omitempty"`
+	PasswordEnv         string   `json:"passwordEnv,omitempty"`
+	Password            string   `json:"-"`
+	DB                  int      `json:"db,omitempty"`
+	Prefix              string   `json:"prefix,omitempty"`
+	AuthPrefix          string   `json:"authPrefix,omitempty"`
+	DialTimeoutMS       int      `json:"dialTimeoutMs,omitempty"`
+	ReadTimeoutMS       int      `json:"readTimeoutMs,omitempty"`
+	WriteTimeoutMS      int      `json:"writeTimeoutMs,omitempty"`
+	PoolSize            int      `json:"poolSize,omitempty"`
+	TLS                 bool     `json:"tls,omitempty"`
+	TLSCaFile           string   `json:"tlsCaFile,omitempty"`
+	TLSServerName       string   `json:"tlsServerName,omitempty"`
 }
 
 type memoryStore struct {
@@ -334,7 +343,11 @@ type redisStore struct {
 	authPrefix string
 }
 
-func newRedisStore(ctx context.Context, cfg RedisConfig) (*redisStore, error) {
+// redisOptions builds the go-redis options for URL or Sentinel mode.
+// Sentinel mode may authenticate to the Sentinels themselves and use
+// TLS (shared with the discovered master). In URL mode, TLS comes from
+// a rediss:// URL.
+func redisOptions(cfg RedisConfig) (*redis.UniversalOptions, error) {
 	opts := &redis.UniversalOptions{
 		Username:     cfg.Username,
 		Password:     cfg.Password,
@@ -350,28 +363,70 @@ func newRedisStore(ctx context.Context, cfg RedisConfig) (*redisStore, error) {
 		}
 		opts.MasterName = cfg.MasterName
 		opts.Addrs = cfg.SentinelAddrs
-	} else {
-		if strings.TrimSpace(cfg.URL) == "" {
-			return nil, fmt.Errorf("broker.redis: url required")
+		opts.SentinelUsername = cfg.SentinelUsername
+		opts.SentinelPassword = cfg.SentinelPassword
+		if cfg.TLS {
+			tlsCfg, err := tlsConfig(cfg)
+			if err != nil {
+				return nil, err
+			}
+			opts.TLSConfig = tlsCfg
 		}
-		parsed, err := redis.ParseURL(cfg.URL)
+		return opts, nil
+	}
+	if cfg.TLS || cfg.TLSCaFile != "" || cfg.TLSServerName != "" {
+		return nil, fmt.Errorf(
+			"broker.redis: tls options are only valid in sentinel mode; " +
+				"use a rediss:// url otherwise")
+	}
+	if strings.TrimSpace(cfg.URL) == "" {
+		return nil, fmt.Errorf("broker.redis: url required")
+	}
+	parsed, err := redis.ParseURL(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("broker.redis.url: %w", err)
+	}
+	if cfg.Username != "" {
+		parsed.Username = cfg.Username
+	}
+	if cfg.Password != "" {
+		parsed.Password = cfg.Password
+	}
+	if cfg.DB != 0 {
+		parsed.DB = cfg.DB
+	}
+	opts.Addrs = []string{parsed.Addr}
+	opts.Username = parsed.Username
+	opts.Password = parsed.Password
+	opts.DB = parsed.DB
+	opts.TLSConfig = parsed.TLSConfig
+	return opts, nil
+}
+
+func tlsConfig(cfg RedisConfig) (*tls.Config, error) {
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: cfg.TLSServerName,
+	}
+	if cfg.TLSCaFile != "" {
+		pem, err := os.ReadFile(cfg.TLSCaFile)
 		if err != nil {
-			return nil, fmt.Errorf("broker.redis.url: %w", err)
+			return nil, fmt.Errorf("broker.redis.tlsCaFile: %w", err)
 		}
-		if cfg.Username != "" {
-			parsed.Username = cfg.Username
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf(
+				"broker.redis.tlsCaFile: no PEM certificate found")
 		}
-		if cfg.Password != "" {
-			parsed.Password = cfg.Password
-		}
-		if cfg.DB != 0 {
-			parsed.DB = cfg.DB
-		}
-		opts.Addrs = []string{parsed.Addr}
-		opts.Username = parsed.Username
-		opts.Password = parsed.Password
-		opts.DB = parsed.DB
-		opts.TLSConfig = parsed.TLSConfig
+		tlsCfg.RootCAs = pool
+	}
+	return tlsCfg, nil
+}
+
+func newRedisStore(ctx context.Context, cfg RedisConfig) (*redisStore, error) {
+	opts, err := redisOptions(cfg)
+	if err != nil {
+		return nil, err
 	}
 	client := redis.NewUniversalClient(opts)
 	if err := client.Ping(ctx).Err(); err != nil {

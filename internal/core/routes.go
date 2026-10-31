@@ -1521,6 +1521,16 @@ type SessionStoreConfig struct {
 	ReadTimeoutMS  int      `json:"readTimeoutMs,omitempty"`
 	WriteTimeoutMS int      `json:"writeTimeoutMs,omitempty"`
 	PoolSize       int      `json:"poolSize,omitempty"`
+
+	// Sentinel-only: authenticate to the Sentinels themselves (separate
+	// from the Redis ACL user) and/or speak TLS to them and to the
+	// discovered master. In URL mode use a rediss:// URL instead.
+	SentinelUsername    string `json:"sentinelUsername,omitempty"`
+	SentinelPasswordEnv string `json:"sentinelPasswordEnv,omitempty"`
+	SentinelPassword    string `json:"-"`
+	TLS                 bool   `json:"tls,omitempty"`
+	TLSCaFile           string `json:"tlsCaFile,omitempty"`
+	TLSServerName       string `json:"tlsServerName,omitempty"`
 }
 
 // AuthHeadersConfig maps the Gate One identity contract to the
@@ -3184,7 +3194,9 @@ func (c *Config) resolveSessionStore(
 	case "bolt":
 		if st.URL != "" || len(st.SentinelAddrs) > 0 ||
 			st.MasterName != "" || st.PasswordEnv != "" ||
-			st.Username != "" || st.DB != 0 || st.Prefix != "" {
+			st.Username != "" || st.DB != 0 || st.Prefix != "" ||
+			st.SentinelUsername != "" || st.SentinelPasswordEnv != "" ||
+			st.TLS || st.TLSCaFile != "" || st.TLSServerName != "" {
 			return fmt.Errorf(
 				"authProvider.sessionStore: redis fields set with type bolt")
 		}
@@ -3201,6 +3213,10 @@ func (c *Config) resolveSessionStore(
 		st.MasterName = strings.TrimSpace(st.MasterName)
 		st.Username = strings.TrimSpace(st.Username)
 		st.Prefix = strings.TrimSpace(st.Prefix)
+		st.SentinelUsername = strings.TrimSpace(st.SentinelUsername)
+		st.SentinelPasswordEnv = strings.TrimSpace(st.SentinelPasswordEnv)
+		st.TLSCaFile = strings.TrimSpace(st.TLSCaFile)
+		st.TLSServerName = strings.TrimSpace(st.TLSServerName)
 		if st.MasterName != "" && len(st.SentinelAddrs) == 0 {
 			return fmt.Errorf(
 				"authProvider.sessionStore: sentinelAddrs required with masterName")
@@ -3212,6 +3228,17 @@ func (c *Config) resolveSessionStore(
 		if st.MasterName == "" && len(st.SentinelAddrs) > 0 {
 			return fmt.Errorf(
 				"authProvider.sessionStore: masterName required with sentinelAddrs")
+		}
+		if st.MasterName == "" && (st.SentinelUsername != "" ||
+			st.SentinelPasswordEnv != "" || st.TLS ||
+			st.TLSCaFile != "" || st.TLSServerName != "") {
+			return fmt.Errorf(
+				"authProvider.sessionStore: sentinelUsername/sentinelPasswordEnv/tls " +
+					"are only valid in sentinel mode (masterName + sentinelAddrs)")
+		}
+		if !st.TLS && (st.TLSCaFile != "" || st.TLSServerName != "") {
+			return fmt.Errorf(
+				"authProvider.sessionStore: tlsCaFile/tlsServerName require tls=true")
 		}
 		for _, addr := range st.SentinelAddrs {
 			if strings.TrimSpace(addr) == "" {
@@ -3241,6 +3268,26 @@ func (c *Config) resolveSessionStore(
 					st.PasswordEnv)
 			}
 			st.Password = secret
+		}
+		if st.SentinelPasswordEnv != "" {
+			if !envVarName.MatchString(st.SentinelPasswordEnv) {
+				return fmt.Errorf(
+					"authProvider.sessionStore.sentinelPasswordEnv %q: invalid environment variable name",
+					st.SentinelPasswordEnv)
+			}
+			secret, ok := os.LookupEnv(st.SentinelPasswordEnv)
+			if !ok || secret == "" {
+				return fmt.Errorf(
+					"authProvider.sessionStore: environment variable %s is empty",
+					st.SentinelPasswordEnv)
+			}
+			st.SentinelPassword = secret
+		}
+		if st.TLSCaFile != "" {
+			if _, err := os.Stat(st.TLSCaFile); err != nil {
+				return fmt.Errorf(
+					"authProvider.sessionStore.tlsCaFile: %w", err)
+			}
 		}
 		if st.Prefix == "" {
 			st.Prefix = "cladone:auth:v1:"

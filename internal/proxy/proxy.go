@@ -967,17 +967,22 @@ func openRevocationStore(
 			context.Background(), 5*time.Second)
 		defer cancel()
 		store, err := authn.OpenRedisStore(ctx, authn.RedisConfig{
-			URL:           st.URL,
-			SentinelAddrs: st.SentinelAddrs,
-			MasterName:    st.MasterName,
-			Username:      st.Username,
-			Password:      st.Password,
-			DB:            st.DB,
-			Prefix:        st.Prefix,
-			DialTimeout:   durationMS(st.DialTimeoutMS, 500),
-			ReadTimeout:   durationMS(st.ReadTimeoutMS, 300),
-			WriteTimeout:  durationMS(st.WriteTimeoutMS, 300),
-			PoolSize:      intOrDefault(st.PoolSize, 64),
+			URL:              st.URL,
+			SentinelAddrs:    st.SentinelAddrs,
+			MasterName:       st.MasterName,
+			SentinelUsername: st.SentinelUsername,
+			SentinelPassword: st.SentinelPassword,
+			Username:         st.Username,
+			Password:         st.Password,
+			DB:               st.DB,
+			Prefix:           st.Prefix,
+			DialTimeout:      durationMS(st.DialTimeoutMS, 500),
+			ReadTimeout:      durationMS(st.ReadTimeoutMS, 300),
+			WriteTimeout:     durationMS(st.WriteTimeoutMS, 300),
+			PoolSize:         intOrDefault(st.PoolSize, 64),
+			TLS:              st.TLS,
+			TLSCaFile:        st.TLSCaFile,
+			TLSServerName:    st.TLSServerName,
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("authProvider.sessionStore: %w", err)

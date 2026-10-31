@@ -2,6 +2,10 @@ package authn
 
 import (
 	"context"
+	"crypto/tls"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,5 +175,84 @@ func TestAC_AUTH_18_RedisCheckRevokedCombined(t *testing.T) {
 		ctx, iss, "", "sub-2", time.Now().Add(time.Minute))
 	if err != nil || revoked {
 		t.Fatalf("new token after sub logout = %v, %v", revoked, err)
+	}
+}
+
+func TestRedisOptionsSentinelWiring(t *testing.T) {
+	opts, err := redisOptions(RedisConfig{
+		SentinelAddrs:    []string{"s1:26379", "s2:26379"},
+		MasterName:       "authmaster",
+		SentinelUsername: "sentinel-user",
+		SentinelPassword: "sentinel-secret",
+		Username:         "app",
+		Password:         "acl-secret",
+		Prefix:           "cladone:auth:v1:",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.MasterName != "authmaster" {
+		t.Errorf("master = %q", opts.MasterName)
+	}
+	if len(opts.Addrs) != 2 || opts.Addrs[0] != "s1:26379" {
+		t.Errorf("addrs = %v", opts.Addrs)
+	}
+	if opts.SentinelUsername != "sentinel-user" ||
+		opts.SentinelPassword != "sentinel-secret" {
+		t.Errorf("sentinel auth = %q/%q",
+			opts.SentinelUsername, opts.SentinelPassword)
+	}
+	if opts.Username != "app" || opts.Password != "acl-secret" {
+		t.Errorf("acl = %q/%q", opts.Username, opts.Password)
+	}
+	if opts.TLSConfig != nil {
+		t.Errorf("unexpected TLS config without tls=true")
+	}
+}
+
+func TestRedisOptionsSentinelTLS(t *testing.T) {
+	opts, err := redisOptions(RedisConfig{
+		SentinelAddrs: []string{"s1:26379"},
+		MasterName:    "authmaster",
+		TLS:           true,
+		TLSServerName: "redis.internal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.TLSConfig == nil {
+		t.Fatal("TLS config not set")
+	}
+	if opts.TLSConfig.ServerName != "redis.internal" {
+		t.Errorf("server name = %q", opts.TLSConfig.ServerName)
+	}
+	if opts.TLSConfig.MinVersion != tls.VersionTLS12 {
+		t.Errorf("min version = %x", opts.TLSConfig.MinVersion)
+	}
+}
+
+func TestRedisOptionsURLRejectsSentinelTLS(t *testing.T) {
+	_, err := redisOptions(RedisConfig{
+		URL: "redis://127.0.0.1:6379/0",
+		TLS: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "only valid in sentinel mode") {
+		t.Fatalf("err = %v, want sentinel-mode refusal", err)
+	}
+}
+
+func TestRedisOptionsTLSCaInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(path, []byte("not a pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := redisOptions(RedisConfig{
+		SentinelAddrs: []string{"s1:26379"},
+		MasterName:    "authmaster",
+		TLS:           true,
+		TLSCaFile:     path,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no PEM certificate") {
+		t.Fatalf("err = %v, want invalid CA refusal", err)
 	}
 }

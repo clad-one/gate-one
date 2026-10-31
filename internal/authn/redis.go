@@ -3,8 +3,11 @@ package authn
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,18 +20,27 @@ import (
 // RedisConfig configures the shared revocation store. Sentinel mode is
 // used when MasterName + SentinelAddrs are set; otherwise URL is a
 // redis:// or rediss:// URL.
+//
+// SentinelUsername/SentinelPassword authenticate to the Sentinels
+// themselves (separate from the Redis ACL user). TLS is only valid in
+// Sentinel mode: in URL mode use a rediss:// URL.
 type RedisConfig struct {
-	URL           string
-	SentinelAddrs []string
-	MasterName    string
-	Username      string
-	Password      string
-	DB            int
-	Prefix        string
-	DialTimeout   time.Duration
-	ReadTimeout   time.Duration
-	WriteTimeout  time.Duration
-	PoolSize      int
+	URL              string
+	SentinelAddrs    []string
+	MasterName       string
+	SentinelUsername string
+	SentinelPassword string
+	Username         string
+	Password         string
+	DB               int
+	Prefix           string
+	DialTimeout      time.Duration
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	PoolSize         int
+	TLS              bool
+	TLSCaFile        string
+	TLSServerName    string
 }
 
 // RedisStore is the shared, multi-instance RevocationStore. Every
@@ -44,6 +56,28 @@ type RedisStore struct {
 // OpenRedisStore connects, pings, and initialises the shared store id.
 // A Redis outage at startup is fail-closed: the provider is refused.
 func OpenRedisStore(ctx context.Context, cfg RedisConfig) (*RedisStore, error) {
+	opts, err := redisOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	client := redis.NewUniversalClient(opts)
+	if err := client.Ping(ctx).Err(); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("sessionStore.redis: ping: %w", err)
+	}
+	prefix := authstate.Prefix(cfg.Prefix)
+	s := &RedisStore{client: client, prefix: prefix}
+	if err := s.initStoreID(ctx); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// redisOptions builds the go-redis options for URL or Sentinel mode.
+// It is separate from OpenRedisStore so the wiring (ACL user, sentinel
+// auth, TLS) can be asserted without a live Sentinel.
+func redisOptions(cfg RedisConfig) (*redis.UniversalOptions, error) {
 	opts := &redis.UniversalOptions{
 		Username:     cfg.Username,
 		Password:     cfg.Password,
@@ -60,43 +94,69 @@ func OpenRedisStore(ctx context.Context, cfg RedisConfig) (*RedisStore, error) {
 		}
 		opts.MasterName = cfg.MasterName
 		opts.Addrs = cfg.SentinelAddrs
-	} else {
-		if strings.TrimSpace(cfg.URL) == "" {
-			return nil, fmt.Errorf(
-				"sessionStore.redis: url or masterName/sentinelAddrs required")
+		opts.SentinelUsername = cfg.SentinelUsername
+		opts.SentinelPassword = cfg.SentinelPassword
+		if cfg.TLS {
+			tlsCfg, err := tlsConfig(cfg)
+			if err != nil {
+				return nil, err
+			}
+			opts.TLSConfig = tlsCfg
 		}
-		parsed, err := redis.ParseURL(cfg.URL)
+		return opts, nil
+	}
+	if cfg.TLS || cfg.TLSCaFile != "" || cfg.TLSServerName != "" {
+		return nil, fmt.Errorf(
+			"sessionStore.redis: tls options are only valid in sentinel mode; " +
+				"use a rediss:// url otherwise")
+	}
+	if strings.TrimSpace(cfg.URL) == "" {
+		return nil, fmt.Errorf(
+			"sessionStore.redis: url or masterName/sentinelAddrs required")
+	}
+	parsed, err := redis.ParseURL(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("sessionStore.redis.url: %w", err)
+	}
+	// Explicit fields override the URL.
+	if cfg.Username != "" {
+		parsed.Username = cfg.Username
+	}
+	if cfg.Password != "" {
+		parsed.Password = cfg.Password
+	}
+	if cfg.DB != 0 {
+		parsed.DB = cfg.DB
+	}
+	opts.Addrs = []string{parsed.Addr}
+	opts.Username = parsed.Username
+	opts.Password = parsed.Password
+	opts.DB = parsed.DB
+	opts.TLSConfig = parsed.TLSConfig
+	return opts, nil
+}
+
+// tlsConfig builds the TLS configuration shared by the Sentinel
+// connections and the discovered master/replica connections.
+func tlsConfig(cfg RedisConfig) (*tls.Config, error) {
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: cfg.TLSServerName,
+	}
+	if cfg.TLSCaFile != "" {
+		pem, err := os.ReadFile(cfg.TLSCaFile)
 		if err != nil {
-			return nil, fmt.Errorf("sessionStore.redis.url: %w", err)
+			return nil, fmt.Errorf(
+				"sessionStore.redis.tlsCaFile: %w", err)
 		}
-		// Explicit fields override the URL.
-		if cfg.Username != "" {
-			parsed.Username = cfg.Username
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf(
+				"sessionStore.redis.tlsCaFile: no PEM certificate found")
 		}
-		if cfg.Password != "" {
-			parsed.Password = cfg.Password
-		}
-		if cfg.DB != 0 {
-			parsed.DB = cfg.DB
-		}
-		opts.Addrs = []string{parsed.Addr}
-		opts.Username = parsed.Username
-		opts.Password = parsed.Password
-		opts.DB = parsed.DB
-		opts.TLSConfig = parsed.TLSConfig
+		tlsCfg.RootCAs = pool
 	}
-	client := redis.NewUniversalClient(opts)
-	if err := client.Ping(ctx).Err(); err != nil {
-		_ = client.Close()
-		return nil, fmt.Errorf("sessionStore.redis: ping: %w", err)
-	}
-	prefix := authstate.Prefix(cfg.Prefix)
-	s := &RedisStore{client: client, prefix: prefix}
-	if err := s.initStoreID(ctx); err != nil {
-		_ = client.Close()
-		return nil, err
-	}
-	return s, nil
+	return tlsCfg, nil
 }
 
 func (s *RedisStore) initStoreID(ctx context.Context) error {

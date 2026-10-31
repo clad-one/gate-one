@@ -238,6 +238,26 @@
               "type": "string",
               "description": "Redis Sentinel master name. Requires sentinelAddrs."
             },
+            "sentinelUsername": {
+              "type": "string",
+              "description": "ACL user used to authenticate to the Sentinels themselves (sentinel mode only). Separate from username, which is the Redis data user."
+            },
+            "sentinelPasswordEnv": {
+              "type": "string",
+              "description": "Environment variable holding the Sentinel password (sentinel mode only). Never put the password in this file."
+            },
+            "tls": {
+              "type": "boolean",
+              "description": "Use TLS in sentinel mode (Sentinels and the discovered master). In URL mode use a rediss:// URL instead."
+            },
+            "tlsCaFile": {
+              "type": "string",
+              "description": "PEM CA bundle for the Sentinel TLS connections. Requires tls=true; empty = system roots."
+            },
+            "tlsServerName": {
+              "type": "string",
+              "description": "TLS server name override (useful when the Sentinels are addressed by IP). Requires tls=true."
+            },
             "username": {
               "type": "string",
               "description": "Redis ACL username."

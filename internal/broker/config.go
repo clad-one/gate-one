@@ -174,6 +174,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at least one tenant is required")
 	}
 	if c.Redis != nil {
+		c.Redis.MasterName = strings.TrimSpace(c.Redis.MasterName)
+		c.Redis.URL = strings.TrimSpace(c.Redis.URL)
+		c.Redis.SentinelUsername = strings.TrimSpace(c.Redis.SentinelUsername)
+		c.Redis.SentinelPasswordEnv = strings.TrimSpace(c.Redis.SentinelPasswordEnv)
+		c.Redis.TLSCaFile = strings.TrimSpace(c.Redis.TLSCaFile)
+		c.Redis.TLSServerName = strings.TrimSpace(c.Redis.TLSServerName)
 		if c.Redis.PasswordEnv != "" {
 			secret, ok := os.LookupEnv(c.Redis.PasswordEnv)
 			if !ok || secret == "" {
@@ -188,6 +194,31 @@ func (c *Config) Validate() error {
 		}
 		if c.Redis.MasterName != "" && len(c.Redis.SentinelAddrs) == 0 {
 			return fmt.Errorf("redis: sentinelAddrs required with masterName")
+		}
+		if c.Redis.MasterName == "" && (c.Redis.SentinelUsername != "" ||
+			c.Redis.SentinelPasswordEnv != "" || c.Redis.TLS ||
+			c.Redis.TLSCaFile != "" || c.Redis.TLSServerName != "") {
+			return fmt.Errorf(
+				"redis: sentinelUsername/sentinelPasswordEnv/tls are only " +
+					"valid in sentinel mode (masterName + sentinelAddrs)")
+		}
+		if !c.Redis.TLS && (c.Redis.TLSCaFile != "" || c.Redis.TLSServerName != "") {
+			return fmt.Errorf(
+				"redis: tlsCaFile/tlsServerName require tls=true")
+		}
+		if c.Redis.SentinelPasswordEnv != "" {
+			secret, ok := os.LookupEnv(c.Redis.SentinelPasswordEnv)
+			if !ok || secret == "" {
+				return fmt.Errorf(
+					"redis: environment variable %s is empty",
+					c.Redis.SentinelPasswordEnv)
+			}
+			c.Redis.SentinelPassword = secret
+		}
+		if c.Redis.TLSCaFile != "" {
+			if _, err := os.Stat(c.Redis.TLSCaFile); err != nil {
+				return fmt.Errorf("redis.tlsCaFile: %w", err)
+			}
 		}
 	}
 	if c.SMTP != nil {

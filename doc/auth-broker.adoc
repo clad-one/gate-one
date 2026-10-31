@@ -232,6 +232,29 @@ donc visible à la requête suivante sur toutes les instances. Si Redis
 est indisponible, Gate One fail-closed en `502` sur les routes
 authentifiées.
 
+Pour une instance Redis HA, le bloc `redis` accepte le mode Sentinel,
+avec authentification des sentinels et TLS :
+
+[source,json]
+----
+"redis": {
+  "masterName": "authmaster",
+  "sentinelAddrs": ["redis-sentinel-1:26379", "redis-sentinel-2:26379"],
+  "sentinelUsername": "sentinel-user",
+  "sentinelPasswordEnv": "REDIS_SENTINEL_PASSWORD",
+  "username": "app",
+  "passwordEnv": "REDIS_PASSWORD",
+  "tls": true,
+  "tlsCaFile": "/etc/cladone-auth/redis-ca.pem",
+  "prefix": "cladone:broker:v1:",
+  "authPrefix": "cladone:auth:v1:"
+}
+----
+
+`tls` couvre les connexions aux sentinels et au maître découvert. En
+mode URL, utiliser `rediss://` ; les champs `tls*` et `sentinelUsername`
+sont refusés avec une URL.
+
 Autres limites V1 :
 
 * Google uniquement comme IdP amont ; Entra/Authentik/Keycloak sont des
