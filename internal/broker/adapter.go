@@ -33,6 +33,8 @@ type oidcAdapter struct {
 	now        func() time.Time
 	rand       io.Reader
 	prompt     string
+	endSession string
+	clientID   string
 }
 
 type adapterState struct {
@@ -79,6 +81,10 @@ func newUpstreamAdapter(
 	if len(scopes) == 0 {
 		scopes = []string{"openid", "profile", "email"}
 	}
+	var disc struct {
+		EndSessionEndpoint string `json:"end_session_endpoint"`
+	}
+	_ = provider.Claims(&disc)
 	return &oidcAdapter{
 		issuer:    up.Issuer,
 		idp:       idp,
@@ -100,6 +106,8 @@ func newUpstreamAdapter(
 		now:        now,
 		rand:       rnd,
 		prompt:     strings.TrimSpace(up.Prompt),
+		endSession: disc.EndSessionEndpoint,
+		clientID:   up.ClientID,
 	}, nil
 }
 
@@ -225,6 +233,7 @@ func (a *oidcAdapter) Continue(
 			Email:    email,
 			Groups:   claimStrings(claims["groups"]),
 			Claims:   claims,
+			IDToken:  rawID,
 		},
 	}, nil
 }
@@ -241,6 +250,13 @@ func (a *oidcAdapter) Health(ctx context.Context) error {
 	}
 	return nil
 }
+
+// EndSessionURL is the upstream RP-initiated logout endpoint
+// (empty when the IdP does not advertise one, e.g. Google).
+func (a *oidcAdapter) EndSessionURL() string { return a.endSession }
+
+// ClientID is the upstream client id (needed by some logout endpoints).
+func (a *oidcAdapter) ClientID() string { return a.clientID }
 
 // SetRedirectURL follows a broker public URL change (tests/dynamic
 // ingress).

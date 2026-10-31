@@ -29,6 +29,9 @@ type store interface {
 	PutSession(ctx context.Context, tenant, id, sid, sub string, issuedAt time.Time, ttl time.Duration) error
 	GetSession(ctx context.Context, tenant, id string) (sid, sub string, issuedAt time.Time, err error)
 	DeleteSession(ctx context.Context, tenant, id string) error
+	PutUpstream(ctx context.Context, tenant, id string, u *upstreamSession, ttl time.Duration) error
+	GetUpstream(ctx context.Context, tenant, id string) (*upstreamSession, error)
+	DeleteUpstream(ctx context.Context, tenant, id string) error
 	Revoke(ctx context.Context, issuer, sid, sub string, expires time.Time) error
 	RevokeSubject(ctx context.Context, issuer, sub string, revokedAt, expires time.Time) error
 	IsRevoked(ctx context.Context, issuer, sid, sub string) (bool, error)
@@ -61,6 +64,7 @@ type memoryStore struct {
 	codes      map[string]memEntry
 	refresh    map[string]memEntry
 	sessions   map[string]memEntry
+	upstream   map[string]memEntry
 	revoked    map[string]time.Time
 	subRevoked map[string]subRevocation
 }
@@ -81,6 +85,7 @@ func newMemoryStore() *memoryStore {
 	return &memoryStore{
 		flows: map[string]memEntry{}, codes: map[string]memEntry{},
 		refresh: map[string]memEntry{}, sessions: map[string]memEntry{},
+		upstream:   map[string]memEntry{},
 		revoked:    map[string]time.Time{},
 		subRevoked: map[string]subRevocation{},
 	}
@@ -114,7 +119,9 @@ func (s *memoryStore) take(m map[string]memEntry, key string, out any) error {
 
 func (s *memoryStore) gcLocked() {
 	now := time.Now()
-	for _, m := range []map[string]memEntry{s.flows, s.codes, s.refresh, s.sessions} {
+	for _, m := range []map[string]memEntry{
+		s.flows, s.codes, s.refresh, s.sessions, s.upstream,
+	} {
 		for k, e := range m {
 			if now.After(e.expires) {
 				delete(m, k)
@@ -211,6 +218,38 @@ func (s *memoryStore) GetSession(_ context.Context, tenant, id string) (string, 
 	}
 	return v.SID, v.Sub, v.IssuedAt, nil
 }
+func (s *memoryStore) PutUpstream(
+	_ context.Context, tenant, id string, u *upstreamSession, ttl time.Duration,
+) error {
+	return s.put(s.upstream, tenant+"\x00"+id, u, ttl)
+}
+
+func (s *memoryStore) GetUpstream(
+	_ context.Context, tenant, id string,
+) (*upstreamSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gcLocked()
+	e, ok := s.upstream[tenant+"\x00"+id]
+	if !ok {
+		return nil, nil
+	}
+	var u upstreamSession
+	if err := json.Unmarshal(e.value, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (s *memoryStore) DeleteUpstream(
+	_ context.Context, tenant, id string,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.upstream, tenant+"\x00"+id)
+	return nil
+}
+
 func (s *memoryStore) DeleteSession(_ context.Context, tenant, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -470,6 +509,32 @@ func (s *redisStore) GetSession(ctx context.Context, tenant, id string) (string,
 	}
 	return v.SID, v.Sub, v.IssuedAt, nil
 }
+func (s *redisStore) PutUpstream(
+	ctx context.Context, tenant, id string, u *upstreamSession, ttl time.Duration,
+) error {
+	return s.put(ctx, "upstream", tenant, id, u, ttl)
+}
+
+func (s *redisStore) GetUpstream(
+	ctx context.Context, tenant, id string,
+) (*upstreamSession, error) {
+	var u upstreamSession
+	if err := s.get(ctx, "upstream", tenant, id, &u); err != nil {
+		if errors.Is(err, errStoreNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (s *redisStore) DeleteUpstream(
+	ctx context.Context, tenant, id string,
+) error {
+	return s.client.Del(
+		ctx, s.dataPrefix+"upstream:"+tenant+":"+id).Err()
+}
+
 func (s *redisStore) DeleteSession(ctx context.Context, tenant, id string) error {
 	return s.client.Del(ctx, s.dataPrefix+"session:"+tenant+":"+id).Err()
 }

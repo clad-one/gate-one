@@ -94,6 +94,15 @@ type flow struct {
 // verification, MFA) does not expire one side before the other.
 const flowTTL = 15 * time.Minute
 
+// upstreamSession keeps the upstream IdP facts needed for an
+// RP-initiated logout (id_token_hint, end_session_endpoint).
+type upstreamSession struct {
+	AdapterID  string `json:"adapterId"`
+	IDToken    string `json:"idToken,omitempty"`
+	EndSession string `json:"endSession,omitempty"`
+	ClientID   string `json:"clientId,omitempty"`
+}
+
 type authCode struct {
 	Tenant            string
 	ClientID          string
@@ -774,12 +783,25 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 	if username == "" {
 		username = email
 	}
+	var upstream *upstreamSession
+	if a.IDToken != "" {
+		upstream = &upstreamSession{
+			AdapterID: f.AdapterID,
+			IDToken:   a.IDToken,
+		}
+		if es, ok := adapter.(interface{ EndSessionURL() string }); ok {
+			upstream.EndSession = es.EndSessionURL()
+		}
+		if cid, ok := adapter.(interface{ ClientID() string }); ok {
+			upstream.ClientID = cid.ClientID()
+		}
+	}
 	b.finishLogin(w, r, rt, f, loginIdentity{
 		Sub:      sub,
 		Username: username,
 		Email:    email,
 		Roles:    roles,
-	})
+	}, upstream)
 }
 
 // loginIdentity is the authenticated principal a completed login
@@ -796,7 +818,7 @@ type loginIdentity struct {
 // Shared by the upstream callback and the local password login.
 func (b *Broker) finishLogin(
 	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
-	f *flow, id loginIdentity,
+	f *flow, id loginIdentity, upstream *upstreamSession,
 ) {
 	brokerCode := b.randomHex(24)
 	sid := f.SID
@@ -817,6 +839,16 @@ func (b *Broker) finishLogin(
 	); err != nil {
 		oauthError(w, http.StatusBadGateway, "server_error", "session store unavailable")
 		return
+	}
+	if upstream != nil {
+		if err := b.store.PutUpstream(
+			r.Context(), rt.cfg.ID, browserID, upstream,
+			rt.cfg.sessionTTL(),
+		); err != nil {
+			oauthError(w, http.StatusBadGateway, "server_error",
+				"upstream session store unavailable")
+			return
+		}
 	}
 	b.setBrowserSession(w, rt, browserID)
 	if err := b.store.PutCode(r.Context(), rt.cfg.ID, brokerCode, &authCode{
@@ -1027,23 +1059,61 @@ func (b *Broker) writeTokens(
 }
 
 func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+	// Read the upstream session BEFORE revokeLogoutSession deletes the
+	// broker session: it carries the upstream id_token_hint and
+	// end_session_endpoint.
+	browserID := ""
+	if c, err := r.Cookie(b.cfg.SessionCookieName); err == nil {
+		browserID = c.Value
+	}
+	var upstream *upstreamSession
+	if browserID != "" {
+		upstream, _ = b.store.GetUpstream(r.Context(), rt.cfg.ID, browserID)
+		_ = b.store.DeleteUpstream(r.Context(), rt.cfg.ID, browserID)
+	}
+
 	if err := b.revokeLogoutSession(
 		r.Context(), w, rt, r,
 	); err != nil {
 		oauthError(w, http.StatusBadGateway, "server_error", "logout revocation failed")
 		return
 	}
+
 	redirect := r.URL.Query().Get("post_logout_redirect_uri")
+	if redirect != "" {
+		// Only registered post-logout targets are allowed. Entries
+		// ending in "/*" accept any path under that origin (the Gate
+		// One guard sends its current URL, including the bare origin).
+		if !redirectAllowed(rt.cfg.PostLogoutRedirectURIs, redirect) &&
+			!containsString(rt.cfg.RedirectURIs, redirect) {
+			oauthError(w, http.StatusBadRequest, "invalid_request", "post_logout_redirect_uri is not registered")
+			return
+		}
+	}
+
+	// RP-initiated logout: close the upstream IdP session too (Auth0,
+	// Keycloak, Microsoft…). Google does not advertise an
+	// end_session_endpoint; it falls back to the broker redirect.
+	if upstream != nil && upstream.EndSession != "" {
+		if u, err := url.Parse(upstream.EndSession); err == nil {
+			q := u.Query()
+			if upstream.IDToken != "" {
+				q.Set("id_token_hint", upstream.IDToken)
+			}
+			if upstream.ClientID != "" {
+				q.Set("client_id", upstream.ClientID)
+			}
+			if redirect != "" {
+				q.Set("post_logout_redirect_uri", redirect)
+			}
+			u.RawQuery = q.Encode()
+			http.Redirect(w, r, u.String(), http.StatusFound)
+			return
+		}
+	}
+
 	if redirect == "" {
 		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	// Only registered post-logout targets are allowed. Entries ending
-	// in "/*" accept any path under that origin (the Gate One guard
-	// sends its current URL, including the bare origin "/").
-	if !redirectAllowed(rt.cfg.PostLogoutRedirectURIs, redirect) &&
-		!containsString(rt.cfg.RedirectURIs, redirect) {
-		oauthError(w, http.StatusBadRequest, "invalid_request", "post_logout_redirect_uri is not registered")
 		return
 	}
 	http.Redirect(w, r, redirect, http.StatusFound)

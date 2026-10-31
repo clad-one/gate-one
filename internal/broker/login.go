@@ -104,7 +104,7 @@ func (b *Broker) loginSubmit(
 		Username: username,
 		Email:    user.Email,
 		Roles:    user.Roles,
-	})
+	}, nil)
 }
 
 func chooserBackURL(b *Broker, rt *tenantRuntime, f *flow) string {

@@ -1,0 +1,119 @@
+package broker
+
+import (
+	"context"
+	"crypto/rand"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"testing"
+	"time"
+)
+
+func newLogoutTestBroker(t *testing.T) *Broker {
+	t.Helper()
+	b := &Broker{
+		cfg: &Config{
+			PublicURL:         "https://broker.test",
+			SessionCookieName: "broker_sid",
+		},
+		tenants:  map[string]*tenantRuntime{},
+		store:    newMemoryStore(),
+		accounts: newMemoryAccounts(),
+		now:      time.Now,
+		rand:     rand.Reader,
+	}
+	rt := &tenantRuntime{cfg: Tenant{
+		ID:                     "acme",
+		PostLogoutRedirectURIs: []string{"https://app.test/*"},
+	}}
+	b.tenants["acme"] = rt
+	t.Cleanup(func() { _ = b.Close() })
+	return b
+}
+
+func doLogout(t *testing.T, b *Broker, browserID string) *httptest.ResponseRecorder {
+	t.Helper()
+	target := "https://broker.test/t/acme/logout?post_logout_redirect_uri=" +
+		url.QueryEscape("https://app.test/")
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	if browserID != "" {
+		req.AddCookie(&http.Cookie{Name: "broker_sid", Value: browserID})
+	}
+	rec := httptest.NewRecorder()
+	b.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func TestLogoutUpstreamRPInitiated(t *testing.T) {
+	b := newLogoutTestBroker(t)
+	ctx := context.Background()
+	const bid = "browser-1"
+	if err := b.store.PutUpstream(ctx, "acme", bid, &upstreamSession{
+		AdapterID:  "auth0",
+		IDToken:    "upstream-id-token",
+		EndSession: "https://idp.test/oidc/logout",
+		ClientID:   "upstream-client",
+	}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doLogout(t, b, bid)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("logout = %d: %s", rec.Code, rec.Body.String())
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc.Scheme != "https" || loc.Host != "idp.test" ||
+		loc.Path != "/oidc/logout" {
+		t.Fatalf("upstream logout = %s", loc)
+	}
+	q := loc.Query()
+	if q.Get("id_token_hint") != "upstream-id-token" {
+		t.Fatalf("id_token_hint = %q", q.Get("id_token_hint"))
+	}
+	if q.Get("client_id") != "upstream-client" {
+		t.Fatalf("client_id = %q", q.Get("client_id"))
+	}
+	if q.Get("post_logout_redirect_uri") != "https://app.test/" {
+		t.Fatalf("post_logout_redirect_uri = %q",
+			q.Get("post_logout_redirect_uri"))
+	}
+
+	if up, err := b.store.GetUpstream(ctx, "acme", bid); err != nil || up != nil {
+		t.Fatalf("upstream session not deleted: %+v %v", up, err)
+	}
+}
+
+func TestLogoutWithoutUpstreamEndSessionFallsBack(t *testing.T) {
+	b := newLogoutTestBroker(t)
+	ctx := context.Background()
+	const bid = "browser-2"
+	if err := b.store.PutUpstream(ctx, "acme", bid, &upstreamSession{
+		AdapterID: "google",
+		IDToken:   "google-token",
+	}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doLogout(t, b, bid)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("logout = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "https://app.test/" {
+		t.Fatalf("fallback redirect = %q", got)
+	}
+}
+
+func TestLogoutWithoutUpstreamSession(t *testing.T) {
+	b := newLogoutTestBroker(t)
+	rec := doLogout(t, b, "")
+	if rec.Code != http.StatusFound {
+		t.Fatalf("logout = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "https://app.test/" {
+		t.Fatalf("redirect = %q", got)
+	}
+}

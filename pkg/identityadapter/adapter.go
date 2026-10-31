@@ -87,6 +87,9 @@ type Assertion struct {
 	Groups     []string       `json:"groups,omitempty"`
 	Claims     map[string]any `json:"claims,omitempty"`
 	TenantHint string         `json:"tenantHint,omitempty"`
+	// IDToken is the raw upstream ID token, kept so the broker can
+	// perform an RP-initiated logout at the upstream (id_token_hint).
+	IDToken string `json:"idToken,omitempty"`
 }
 
 // Adapter is the single contract implemented by every identity
