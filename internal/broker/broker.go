@@ -23,11 +23,13 @@ import (
 
 // Broker is a multi-tenant OIDC issuer federating an upstream IdP.
 type Broker struct {
-	cfg     *Config
-	tenants map[string]*tenantRuntime
-	store   store
-	now     func() time.Time
-	rand    io.Reader
+	cfg      *Config
+	tenants  map[string]*tenantRuntime
+	store    store
+	accounts accountsStore
+	mailer   Mailer
+	now      func() time.Time
+	rand     io.Reader
 }
 
 type tenantRuntime struct {
@@ -103,6 +105,15 @@ func WithClock(now func() time.Time) Option {
 	}
 }
 
+// WithMailer replaces the SMTP mailer (tests, alternative relay).
+func WithMailer(m Mailer) Option {
+	return func(b *Broker) {
+		if m != nil {
+			b.mailer = m
+		}
+	}
+}
+
 // WithRand replaces crypto/rand.Reader.
 func WithRand(r io.Reader) Option {
 	return func(b *Broker) {
@@ -135,6 +146,17 @@ func New(ctx context.Context, cfg *Config, opts ...Option) (*Broker, error) {
 		st = rs
 	}
 	b.store = st
+	if rs, ok := st.(*redisStore); ok && cfg.Redis != nil {
+		b.accounts = &redisAccounts{
+			client: rs.client,
+			prefix: cfg.Redis.Prefix + "accounts:",
+		}
+	} else {
+		b.accounts = newMemoryAccounts()
+	}
+	if cfg.SMTP != nil {
+		b.mailer = newSMTPMailer(*cfg.SMTP)
+	}
 	ok := false
 	defer func() {
 		if !ok {
@@ -237,6 +259,9 @@ func RevokeWithConfig(
 
 // Close releases the Redis client (no-op for memory).
 func (b *Broker) Close() error {
+	if b.accounts != nil {
+		_ = b.accounts.Close()
+	}
 	if b.store != nil {
 		return b.store.Close()
 	}
@@ -432,6 +457,10 @@ func (b *Broker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		b.token(w, r, rt)
 	case "logout":
 		b.logout(w, r, rt)
+	case "register":
+		b.register(w, r, rt)
+	case "verify-email":
+		b.verifyEmail(w, r, rt)
 	default:
 		http.NotFound(w, r)
 	}

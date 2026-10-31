@@ -116,3 +116,35 @@ func TestAC_AUTH_13_BrokerPostLogoutWildcard(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalAccountsConfigValidation(t *testing.T) {
+	t.Setenv("TEST_REG_SECRET", "s3cret")
+	base := func() *Config {
+		return &Config{
+			PublicURL: "https://broker.test",
+			Tenants: []Tenant{{
+				ID:                    "acme",
+				ClientID:              "gate-one",
+				RedirectURIs:          []string{"https://login.test/callback"},
+				Google:                GoogleConfig{ClientID: "google-client"},
+				LocalAccounts:         true,
+				AppOrigins:            []string{"https://app.test"},
+				RegistrationSecretEnv: "TEST_REG_SECRET",
+			}},
+		}
+	}
+
+	cfg := base()
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("localAccounts without smtp accepted")
+	}
+
+	cfg = base()
+	cfg.SMTP = &SMTPConfig{Host: "smtp.test", From: "a@b.test"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid localAccounts config rejected: %v", err)
+	}
+	if cfg.Tenants[0].RegistrationSecret != "s3cret" {
+		t.Fatal("registration secret not resolved")
+	}
+}

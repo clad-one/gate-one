@@ -30,6 +30,22 @@ type Config struct {
 	// the revocation keyspace read by Gate One. Absent = memory
 	// (single instance, tests).
 	Redis *RedisConfig `json:"redis,omitempty"`
+
+	// SMTP sends the account-lifecycle emails (verification). Required
+	// only when a tenant enables localAccounts.
+	SMTP *SMTPConfig `json:"smtp,omitempty"`
+}
+
+// SMTPConfig is the outbound mail relay used for verification emails.
+// The password is read from PasswordEnv at load and never serialized.
+type SMTPConfig struct {
+	Host        string `json:"host"`
+	Port        int    `json:"port,omitempty"` // default 587 (STARTTLS)
+	Username    string `json:"username,omitempty"`
+	UsernameEnv string `json:"usernameEnv,omitempty"`
+	PasswordEnv string `json:"passwordEnv,omitempty"`
+	Password    string `json:"-"`
+	From        string `json:"from"`
 }
 
 // Tenant is one issuer: its own key, client, upstream IdP and policy.
@@ -74,6 +90,16 @@ type Tenant struct {
 	// SessionTTLSeconds is the broker SSO cookie/session lifetime.
 	// Default 43200 (12h).
 	SessionTTLSeconds int `json:"sessionTtlSeconds,omitempty"`
+
+	// LocalAccounts enables the account lifecycle endpoints
+	// (register + verify-email) for this tenant.
+	LocalAccounts bool `json:"localAccounts,omitempty"`
+	// AppOrigins is the allowlist of application origins accepted as
+	// a verification continueUrl (e.g. https://vers.cladone.com).
+	AppOrigins []string `json:"appOrigins,omitempty"`
+	// RegistrationSecretEnv gates POST /register (server-to-server).
+	RegistrationSecretEnv string `json:"registrationSecretEnv,omitempty"`
+	RegistrationSecret    string `json:"-"`
 }
 
 // GoogleConfig configures the upstream OIDC client.
@@ -152,6 +178,34 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("redis: sentinelAddrs required with masterName")
 		}
 	}
+	if c.SMTP != nil {
+		c.SMTP.Host = strings.TrimSpace(c.SMTP.Host)
+		c.SMTP.From = strings.TrimSpace(c.SMTP.From)
+		if c.SMTP.Port == 0 {
+			c.SMTP.Port = 587
+		}
+		if c.SMTP.UsernameEnv != "" {
+			name, ok := os.LookupEnv(c.SMTP.UsernameEnv)
+			if !ok || name == "" {
+				return fmt.Errorf(
+					"smtp: environment variable %s is empty",
+					c.SMTP.UsernameEnv)
+			}
+			c.SMTP.Username = name
+		}
+		if c.SMTP.PasswordEnv != "" {
+			secret, ok := os.LookupEnv(c.SMTP.PasswordEnv)
+			if !ok || secret == "" {
+				return fmt.Errorf(
+					"smtp: environment variable %s is empty",
+					c.SMTP.PasswordEnv)
+			}
+			c.SMTP.Password = secret
+		}
+		if c.SMTP.Host == "" || c.SMTP.From == "" {
+			return fmt.Errorf("smtp: host and from are required")
+		}
+	}
 	seen := map[string]bool{}
 	for i := range c.Tenants {
 		t := &c.Tenants[i]
@@ -220,6 +274,39 @@ func (c *Config) Validate() error {
 		}
 		if t.Google.ClientID == "" {
 			return fmt.Errorf("tenants[%s]: google.clientId is required", t.ID)
+		}
+		if t.LocalAccounts {
+			if c.SMTP == nil {
+				return fmt.Errorf(
+					"tenants[%s]: localAccounts requires the smtp block", t.ID)
+			}
+			if len(t.AppOrigins) == 0 {
+				return fmt.Errorf(
+					"tenants[%s]: localAccounts requires appOrigins", t.ID)
+			}
+			for j, origin := range t.AppOrigins {
+				origin = strings.TrimRight(strings.TrimSpace(origin), "/")
+				u, err := url.Parse(origin)
+				if err != nil || u.Host == "" ||
+					(u.Scheme != "http" && u.Scheme != "https") {
+					return fmt.Errorf(
+						"tenants[%s]: appOrigins[%d] %q: absolute http(s) URL required",
+						t.ID, j, origin)
+				}
+				t.AppOrigins[j] = origin
+			}
+			if t.RegistrationSecretEnv == "" {
+				return fmt.Errorf(
+					"tenants[%s]: localAccounts requires registrationSecretEnv",
+					t.ID)
+			}
+			secret, ok := os.LookupEnv(t.RegistrationSecretEnv)
+			if !ok || secret == "" {
+				return fmt.Errorf(
+					"tenants[%s]: environment variable %s is empty",
+					t.ID, t.RegistrationSecretEnv)
+			}
+			t.RegistrationSecret = secret
 		}
 		if t.Google.ClientSecretEnv != "" {
 			secret, ok := os.LookupEnv(t.Google.ClientSecretEnv)
