@@ -64,8 +64,14 @@ type Tenant struct {
 	// Audiences allowed for access tokens. Empty = the tenant id.
 	Audiences []string `json:"audiences,omitempty"`
 
-	// Google is the upstream OIDC provider.
+	// Google is the legacy single-upstream block. It is normalized
+	// into Upstreams["google"] when Upstreams is absent.
 	Google GoogleConfig `json:"google"`
+
+	// Upstreams maps an IdP key (google, microsoft, …) to its OIDC
+	// configuration. The key is the value of the `idp` authorize
+	// parameter and the label on the chooser page.
+	Upstreams map[string]GoogleConfig `json:"upstreams,omitempty"`
 
 	// KeyFile holds the active Ed25519 private key (base64 raw seed).
 	// KeyFiles publishes several keys (oldest first, newest active) so
@@ -115,6 +121,12 @@ type GoogleConfig struct {
 	Prompt       string   `json:"prompt,omitempty"`
 	HostedDomain string   `json:"hostedDomain,omitempty"`
 	Scopes       []string `json:"scopes,omitempty"`
+	// DisplayName is shown on the IdP chooser (default: the idp key).
+	DisplayName string `json:"displayName,omitempty"`
+	// Optional upstreams are skipped (not shown, not validated) when
+	// their clientIdEnv/clientSecretEnv is empty. Useful to ship a
+	// provider before its credentials exist.
+	Optional bool `json:"optional,omitempty"`
 }
 
 // Load reads and validates a broker configuration.
@@ -260,20 +272,88 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("tenants[%s]: empty keyFiles entry", t.ID)
 			}
 		}
-		if t.Google.Issuer == "" {
-			t.Google.Issuer = "https://accounts.google.com"
-		}
-		if t.Google.ClientIDEnv != "" {
-			id, ok := os.LookupEnv(t.Google.ClientIDEnv)
-			if !ok || id == "" {
-				return fmt.Errorf(
-					"tenants[%s]: environment variable %s is empty",
-					t.ID, t.Google.ClientIDEnv)
+		// Normalize the legacy google block into Upstreams.
+		if len(t.Upstreams) == 0 {
+			t.Upstreams = map[string]GoogleConfig{}
+			if t.Google.ClientID != "" || t.Google.ClientIDEnv != "" {
+				t.Upstreams["google"] = t.Google
 			}
-			t.Google.ClientID = id
+		} else if t.Google.ClientID != "" || t.Google.ClientIDEnv != "" {
+			if _, ok := t.Upstreams["google"]; !ok {
+				t.Upstreams["google"] = t.Google
+			}
 		}
-		if t.Google.ClientID == "" {
-			return fmt.Errorf("tenants[%s]: google.clientId is required", t.ID)
+		for id, up := range t.Upstreams {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				return fmt.Errorf("tenants[%s]: empty upstream id", t.ID)
+			}
+			if up.Issuer == "" {
+				if id == "google" {
+					up.Issuer = "https://accounts.google.com"
+				} else {
+					return fmt.Errorf(
+						"tenants[%s]: upstreams[%s].issuer is required",
+						t.ID, id)
+				}
+			}
+			if up.ClientIDEnv != "" {
+				v, ok := os.LookupEnv(up.ClientIDEnv)
+				if !ok || v == "" {
+					if up.Optional {
+						delete(t.Upstreams, id)
+						continue
+					}
+					return fmt.Errorf(
+						"tenants[%s]: environment variable %s is empty",
+						t.ID, up.ClientIDEnv)
+				}
+				up.ClientID = v
+			}
+			if up.ClientID == "" {
+				if up.Optional {
+					delete(t.Upstreams, id)
+					continue
+				}
+				return fmt.Errorf(
+					"tenants[%s]: upstreams[%s].clientId is required",
+					t.ID, id)
+			}
+			if up.ClientSecretEnv != "" {
+				v, ok := os.LookupEnv(up.ClientSecretEnv)
+				if !ok || v == "" {
+					if up.Optional {
+						delete(t.Upstreams, id)
+						continue
+					}
+					return fmt.Errorf(
+						"tenants[%s]: environment variable %s is empty",
+						t.ID, up.ClientSecretEnv)
+				}
+				up.ClientSecret = v
+			}
+			if len(up.Scopes) == 0 {
+				up.Scopes = []string{"openid", "profile", "email"}
+			}
+			if up.DisplayName == "" {
+				switch id {
+				case "google":
+					up.DisplayName = "Google"
+				case "microsoft":
+					up.DisplayName = "Microsoft"
+				default:
+					up.DisplayName = id
+				}
+			}
+			t.Upstreams[id] = up
+		}
+		if len(t.Upstreams) == 0 && !t.LocalAccounts {
+			return fmt.Errorf(
+				"tenants[%s]: at least one upstream or localAccounts is required",
+				t.ID)
+		}
+		if g, ok := t.Upstreams["google"]; ok {
+			t.Google = g // legacy accessor (tests / old callers)
 		}
 		if t.LocalAccounts {
 			if c.SMTP == nil {
@@ -307,18 +387,6 @@ func (c *Config) Validate() error {
 					t.ID, t.RegistrationSecretEnv)
 			}
 			t.RegistrationSecret = secret
-		}
-		if t.Google.ClientSecretEnv != "" {
-			secret, ok := os.LookupEnv(t.Google.ClientSecretEnv)
-			if !ok || secret == "" {
-				return fmt.Errorf(
-					"tenants[%s]: environment variable %s is empty",
-					t.ID, t.Google.ClientSecretEnv)
-			}
-			t.Google.ClientSecret = secret
-		}
-		if len(t.Google.Scopes) == 0 {
-			t.Google.Scopes = []string{"openid", "profile", "email"}
 		}
 		if t.AccessTokenTTL <= 0 {
 			t.AccessTokenTTL = 600 // 10 minutes

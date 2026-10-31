@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -43,7 +44,7 @@ func (b *Broker) loginPage(
 		return
 	}
 	writeLoginPage(w, http.StatusOK, b.issuer(rt)+"/login",
-		f.CSRF, flowID, "")
+		f.CSRF, flowID, chooserBackURL(b, rt, f), "")
 }
 
 func (b *Broker) loginSubmit(
@@ -67,12 +68,13 @@ func (b *Broker) loginSubmit(
 	}
 
 	action := b.issuer(rt) + "/login"
+	back := chooserBackURL(b, rt, f)
 	csrfOK := subtle.ConstantTimeCompare(
 		[]byte(r.Form.Get("csrf")), []byte(f.CSRF)) == 1
 	if !csrfOK {
 		_ = b.store.PutFlow(r.Context(), rt.cfg.ID, flowID, f, 10*time.Minute)
 		writeLoginPage(w, http.StatusBadRequest, action,
-			f.CSRF, flowID, "Session invalide. Réessayez.")
+			f.CSRF, flowID, back, "Session invalide. Réessayez.")
 		return
 	}
 
@@ -88,7 +90,7 @@ func (b *Broker) loginSubmit(
 		// whether only the email is unverified.
 		_ = b.store.PutFlow(r.Context(), rt.cfg.ID, flowID, f, 10*time.Minute)
 		writeLoginPage(w, http.StatusUnauthorized, action,
-			f.CSRF, flowID,
+			f.CSRF, flowID, back,
 			"Identifiants invalides ou adresse e-mail non vérifiée.")
 		return
 	}
@@ -105,12 +107,30 @@ func (b *Broker) loginSubmit(
 	})
 }
 
+func chooserBackURL(b *Broker, rt *tenantRuntime, f *flow) string {
+	if f == nil || f.AuthorizeQuery == "" {
+		return ""
+	}
+	v, err := url.ParseQuery(f.AuthorizeQuery)
+	if err != nil {
+		return ""
+	}
+	v.Del("idp")
+	return b.issuer(rt) + "/authorize?" + v.Encode()
+}
+
 func writeLoginPage(
-	w http.ResponseWriter, code int, action, csrf, flow, errMsg string,
+	w http.ResponseWriter, code int, action, csrf, flow, backURL, errMsg string,
 ) {
 	var errHTML string
 	if errMsg != "" {
 		errHTML = fmt.Sprintf(`<p class="err">%s</p>`, html.EscapeString(errMsg))
+	}
+	var backHTML string
+	if backURL != "" {
+		backHTML = fmt.Sprintf(`<p class="back"><a href="%s">`+
+			`← Choisir une autre méthode</a></p>`,
+			html.EscapeString(backURL))
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -131,12 +151,18 @@ input{width:100%%;box-sizing:border-box;padding:.55rem .7rem;border:1px solid #c
 button{width:100%%;margin-top:1.2rem;padding:.65rem 1rem;border:0;border-radius:8px;background:#2563eb;color:#fff;font:inherit;font-weight:600;cursor:pointer}
 button:hover{background:#1d4ed8}
 p.err{margin:0 0 .5rem;padding:.5rem .7rem;border-radius:8px;background:#fdecec;color:#a11;font-size:.9rem}
+p.note{margin:0 0 1rem;color:#555;font-size:.9rem}
+p.back{margin:0 0 1rem;font-size:.9rem}
+p.back a{color:#2563eb;text-decoration:none}
 @media (prefers-color-scheme:dark){body{background:#16181d;color:#eef0f3}main{background:#20242e}label{color:#c7ccd6}input{background:#161a21;border-color:#3a4150;color:#eef0f3}p.err{background:#3a1f22;color:#ffb4b4}}
 </style>
 </head>
 <body>
 <main>
-<h1>Connexion</h1>
+<h1>Connexion — compte local</h1>
+<p class="note">Ce formulaire est réservé aux comptes locaux.
+Pour Google ou Microsoft, revenez au choix de la méthode.</p>
+%s
 %s
 <form method="post" action="%s">
 <input type="hidden" name="flow" value="%s">
@@ -151,6 +177,7 @@ p.err{margin:0 0 .5rem;padding:.5rem .7rem;border-radius:8px;background:#fdecec;
 </body>
 </html>`,
 		errHTML,
+		backHTML,
 		html.EscapeString(action),
 		html.EscapeString(flow),
 		html.EscapeString(csrf))

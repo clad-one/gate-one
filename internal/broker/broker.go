@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,9 +34,32 @@ type Broker struct {
 }
 
 type tenantRuntime struct {
-	cfg     Tenant
-	adapter identityadapter.Adapter
-	keys    []*signingKey
+	cfg          Tenant
+	adapter      identityadapter.Adapter // legacy default (google)
+	adapters     map[string]identityadapter.Adapter
+	adapterOrder []string
+	keys         []*signingKey
+}
+
+// loginMethods is the ordered list shown on the IdP chooser: local
+// first, then the configured upstreams.
+func (rt *tenantRuntime) loginMethods() []string {
+	out := make([]string, 0, len(rt.adapterOrder)+1)
+	if rt.cfg.LocalAccounts {
+		out = append(out, "local")
+	}
+	out = append(out, rt.adapterOrder...)
+	return out
+}
+
+func (rt *tenantRuntime) adapterFor(idp string) identityadapter.Adapter {
+	if rt.adapters != nil {
+		return rt.adapters[idp]
+	}
+	if idp == "" || idp == "google" {
+		return rt.adapter
+	}
+	return nil
 }
 
 func (rt *tenantRuntime) activeKey() *signingKey {
@@ -59,6 +83,8 @@ type flow struct {
 	Scope             string
 	CodeChallenge     string
 	CodeChallengeMeth string
+	AdapterID         string
+	AuthorizeQuery    string
 	CSRF              string
 	Expires           time.Time
 }
@@ -169,11 +195,18 @@ func New(ctx context.Context, cfg *Config, opts ...Option) (*Broker, error) {
 	}
 	for i := range cfg.Tenants {
 		t := cfg.Tenants[i]
-		adapter, err := newOIDCAdapter(
-			ctx, t, cfg.PublicURL, nil, b.now, b.rand)
-		if err != nil {
-			return nil, err
+		adapters := make(map[string]identityadapter.Adapter, len(t.Upstreams))
+		order := make([]string, 0, len(t.Upstreams))
+		for id, up := range t.Upstreams {
+			a, err := newUpstreamAdapter(
+				ctx, t.ID, id, up, cfg.PublicURL, nil, b.now, b.rand)
+			if err != nil {
+				return nil, err
+			}
+			adapters[id] = a
+			order = append(order, id)
 		}
+		sort.Strings(order)
 		var keyFiles []string
 		if len(t.KeyFiles) > 0 {
 			keyFiles = append(keyFiles, t.KeyFiles...)
@@ -195,9 +228,13 @@ func New(ctx context.Context, cfg *Config, opts ...Option) (*Broker, error) {
 			keys = append(keys, key)
 		}
 		rt := &tenantRuntime{
-			cfg:     t,
-			adapter: adapter,
-			keys:    keys,
+			cfg:          t,
+			adapters:     adapters,
+			adapterOrder: order,
+			keys:         keys,
+		}
+		if g, ok := adapters["google"]; ok {
+			rt.adapter = g
 		}
 		b.tenants[t.ID] = rt
 	}
@@ -278,8 +315,16 @@ func (b *Broker) Handler() http.Handler { return http.HandlerFunc(b.serveHTTP) }
 func (b *Broker) SetPublicURL(raw string) {
 	b.cfg.PublicURL = strings.TrimRight(strings.TrimSpace(raw), "/")
 	for _, rt := range b.tenants {
-		if u, ok := rt.adapter.(interface{ SetRedirectURL(string) }); ok {
-			u.SetRedirectURL(b.cfg.PublicURL)
+		if len(rt.adapters) == 0 && rt.adapter != nil {
+			if u, ok := rt.adapter.(interface{ SetRedirectURL(string) }); ok {
+				u.SetRedirectURL(b.cfg.PublicURL)
+			}
+			continue
+		}
+		for _, a := range rt.adapters {
+			if u, ok := a.(interface{ SetRedirectURL(string) }); ok {
+				u.SetRedirectURL(b.cfg.PublicURL)
+			}
 		}
 	}
 }
@@ -548,8 +593,18 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		nonce = b.randomHex(16)
 	}
 	flowID := b.randomHex(24)
+	idp := strings.TrimSpace(q.Get("idp"))
+	methods := rt.loginMethods()
+	if idp == "" {
+		if len(methods) == 1 {
+			idp = methods[0]
+		} else {
+			b.writeChooser(w, r, rt, methods)
+			return
+		}
+	}
 
-	if q.Get("idp") == "local" {
+	if idp == "local" {
 		if !rt.cfg.LocalAccounts {
 			oauthError(w, http.StatusBadRequest, "invalid_request",
 				"local login is not enabled for this tenant")
@@ -569,6 +624,7 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 			Scope:             scope,
 			CodeChallenge:     challenge,
 			CodeChallengeMeth: method,
+			AuthorizeQuery:    r.URL.RawQuery,
 			CSRF:              csrf,
 			Expires:           b.now().Add(10 * time.Minute),
 		}, 10*time.Minute); err != nil {
@@ -580,7 +636,13 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		return
 	}
 
-	step, err := rt.adapter.Start(r.Context(), identityadapter.Request{
+	adapter := rt.adapterFor(idp)
+	if adapter == nil {
+		oauthError(w, http.StatusBadRequest, "invalid_request",
+			"unknown or disabled idp")
+		return
+	}
+	step, err := adapter.Start(r.Context(), identityadapter.Request{
 		Tenant:     rt.cfg.ID,
 		Method:     r.Method,
 		URL:        r.URL.String(),
@@ -610,6 +672,7 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		Sub:               sharedSub,
 		SessionIssuedAt:   sharedIssuedAt,
 		AdapterState:      step.State,
+		AdapterID:         idp,
 		Scope:             scope,
 		CodeChallenge:     challenge,
 		CodeChallengeMeth: method,
@@ -643,7 +706,13 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 		oauthError(w, http.StatusBadRequest, "invalid_request", "missing code")
 		return
 	}
-	step, err := rt.adapter.Continue(
+	adapter := rt.adapterFor(f.AdapterID)
+	if adapter == nil {
+		oauthError(w, http.StatusBadRequest, "invalid_request",
+			"unknown upstream")
+		return
+	}
+	step, err := adapter.Continue(
 		r.Context(),
 		identityadapter.Request{
 			Tenant:     rt.cfg.ID,

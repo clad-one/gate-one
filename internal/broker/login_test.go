@@ -233,3 +233,44 @@ func TestLocalLoginUnknownFlow(t *testing.T) {
 		t.Fatalf("unknown flow = %d, want 400", rec.Code)
 	}
 }
+
+func TestIdPChooser(t *testing.T) {
+	b, rt := newLoginTestBroker(t)
+	rt.cfg.Upstreams = map[string]GoogleConfig{
+		"google":    {DisplayName: "Google"},
+		"microsoft": {DisplayName: "Microsoft"},
+	}
+	rt.adapterOrder = []string{"google", "microsoft"}
+
+	rec := httptest.NewRecorder()
+	b.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, authorizeURL("challenge", ""), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chooser = %d: %s", rec.Code, rec.Body.String())
+	}
+	page := rec.Body.String()
+	for _, want := range []string{
+		"Choisissez votre méthode",
+		"Compte local (e-mail / mot de passe)",
+		"Google",
+		"Microsoft",
+		"idp=local", "idp=google", "idp=microsoft",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("chooser missing %q:\n%s", want, page)
+		}
+	}
+}
+
+func TestIdPUnknownRejected(t *testing.T) {
+	b, rt := newLoginTestBroker(t)
+	rt.cfg.Upstreams = map[string]GoogleConfig{"google": {DisplayName: "Google"}}
+	rt.adapterOrder = []string{"google"}
+
+	rec := httptest.NewRecorder()
+	b.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, authorizeURL("challenge", "unknown"), nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown idp = %d, want 400", rec.Code)
+	}
+}
