@@ -635,6 +635,7 @@ func (o *OIDC) writeTxExpired(w http.ResponseWriter) {
 func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	tx, ok := o.tx.read(r)
 	if !ok {
+		log.Printf("OIDC: login transaction expired/missing host=%s", r.Host)
 		o.writeTxExpired(w)
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -620,6 +621,9 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		}
 	}
 
+	log.Printf("broker: authorize tenant=%s idp=%s client=%s",
+		rt.cfg.ID, idp, clientID)
+
 	if idp == "local" {
 		if !rt.cfg.LocalAccounts {
 			oauthError(w, http.StatusBadRequest, "invalid_request",
@@ -710,6 +714,8 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 		return
 	}
 	if f == nil || b.now().After(f.Expires) {
+		log.Printf("broker: callback expired/unknown state tenant=%s state=%q",
+			rt.cfg.ID, state)
 		writeRestartPage(w, rt,
 			"La session de connexion a expiré ou a déjà été utilisée.")
 		return
@@ -785,6 +791,9 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 	if username == "" {
 		username = email
 	}
+	log.Printf("broker: login tenant=%s adapter=%s email=%s",
+		rt.cfg.ID, f.AdapterID, email)
+
 	var upstream *upstreamSession
 	if a.IDToken != "" {
 		upstream = &upstreamSession{
@@ -1074,6 +1083,10 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntim
 		_ = b.store.DeleteUpstream(r.Context(), rt.cfg.ID, browserID)
 	}
 
+	log.Printf("broker: logout tenant=%s browser=%t upstream=%t end_session=%t",
+		rt.cfg.ID, browserID != "", upstream != nil,
+		upstream != nil && upstream.EndSession != "")
+
 	if err := b.revokeLogoutSession(
 		r.Context(), w, rt, r,
 	); err != nil {
@@ -1159,9 +1172,11 @@ func (b *Broker) logoutDone(
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	if target != "" &&
+	ok := target != "" &&
 		(redirectAllowed(rt.cfg.PostLogoutRedirectURIs, target) ||
-			containsString(rt.cfg.RedirectURIs, target)) {
+			containsString(rt.cfg.RedirectURIs, target))
+	log.Printf("broker: logout/done tenant=%s target_ok=%t", rt.cfg.ID, ok)
+	if ok {
 		http.Redirect(w, r, target, http.StatusFound)
 		return
 	}
