@@ -299,10 +299,7 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 			revocationTTL, discovery.RefreshTokenTTLSeconds)
 	}
 
-	txSecret := make([]byte, 32)
-	if _, err := io.ReadFull(rnd, txSecret); err != nil {
-		return nil, fmt.Errorf("authProvider.type oidc: state key: %w", err)
-	}
+	txSecret := deriveTxSecret(sessionKey)
 
 	roleClaims := cfg.RoleClaims
 	if len(roleClaims) == 0 {
@@ -1011,6 +1008,17 @@ type oidcTx struct {
 	Verifier string `json:"verifier"`
 	ReturnTo string `json:"returnTo"`
 	Expires  int64  `json:"exp"`
+}
+
+// deriveTxSecret binds the OIDC transaction cookie to the shared
+// session key. A random per-process key breaks the callback whenever
+// two Gate One replicas sit behind a load balancer (the login sets the
+// cookie on one instance, the callback lands on the other).
+func deriveTxSecret(sessionKey []byte) []byte {
+	h := sha256.New()
+	h.Write(sessionKey)
+	h.Write([]byte("|cladone-oidc-tx-v1"))
+	return h.Sum(nil)
 }
 
 type txCodec struct {

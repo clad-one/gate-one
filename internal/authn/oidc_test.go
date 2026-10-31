@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -708,5 +709,20 @@ func TestAC_AUTH_25_RevocationTTLFromDiscovery(t *testing.T) {
 	o := newTestOIDC(t, m, &now)
 	if o.revocationTTL != 2*time.Hour {
 		t.Fatalf("revocationTTL = %s, want 2h from discovery", o.revocationTTL)
+	}
+}
+
+func TestTxSecretDerivedFromSessionKey(t *testing.T) {
+	a := deriveTxSecret([]byte("shared-session-key"))
+	b := deriveTxSecret([]byte("shared-session-key"))
+	c := deriveTxSecret([]byte("other-session-key"))
+	if len(a) != sha256.Size {
+		t.Fatalf("tx secret length = %d", len(a))
+	}
+	if !bytes.Equal(a, b) {
+		t.Fatal("same session key produced different tx secrets")
+	}
+	if bytes.Equal(a, c) {
+		t.Fatal("different session keys produced the same tx secret")
 	}
 }
