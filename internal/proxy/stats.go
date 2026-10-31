@@ -18,10 +18,11 @@ type routeStats struct {
 }
 
 var (
-	statsMu         sync.Mutex
-	statsByRoute    = map[string]*routeStats{}
-	statAuthBridge  int64 // fresh calls toward auth-bridge
-	statAuthCacheHi int64 // identity cache hits
+	statsMu             sync.Mutex
+	statsByRoute        = map[string]*routeStats{}
+	statAuthBridge      int64 // fresh calls toward auth-bridge
+	statAuthCacheHi     int64 // identity cache hits
+	statLandingFallback int64 // incomplete login landing pages
 )
 
 func statRecord(routeKey string, status int) {
@@ -77,8 +78,9 @@ func serveStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"authBridgeCalls": atomic.LoadInt64(&statAuthBridge),
-		"authCacheHits":   atomic.LoadInt64(&statAuthCacheHi),
-		"routes":          routes,
+		"authBridgeCalls":  atomic.LoadInt64(&statAuthBridge),
+		"authCacheHits":    atomic.LoadInt64(&statAuthCacheHi),
+		"landingFallbacks": atomic.LoadInt64(&statLandingFallback),
+		"routes":           routes,
 	})
 }

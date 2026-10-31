@@ -207,11 +207,19 @@ restarts; the revocation is checked before the gateway identity cache.
 bbolt is single-writer (one Gate One instance); for HA and immediate
 revocation use `sessionStore.type: "redis"` (see above).
 
-A bare visit to the login host root (`https://login.example.com/`) is a
-dead end by default. Set `defaultAppUrl` to send it to the application,
-**preserving the query string** — required for email-verification links
-that land there (Firebase `?mode=verifyEmail&oobCode=…`, Keycloak
-account links):
+The login host root (`https://login.example.com/`) is the generic
+landing point for out-of-band links (email verification, account
+actions). It is **IdP-blind**: the application to return to must be
+carried by the link, never guessed.
+
+- `returnTo` (custom/OIDC) or `continueUrl` (Firebase) present and on
+  an allowed host (a configured route host, the login host, or a
+  subdomain of the cookie domain) → `302` to that application, the
+  rest of the query preserved (`mode`, `oobCode`, `lang`…);
+- an action payload (`mode`, `oobCode`, `key`, `code`, `state`, `token`…)
+  without a return target → readable `400` page naming the missing
+  adapter configuration (no silent fallback);
+- a bare visit → `302` to `defaultAppUrl` (operational fallback).
 
 ```json
 {
@@ -219,6 +227,9 @@ account links):
   "authProvider": { "...": "..." }
 }
 ```
+
+`defaultAppUrl` is a safety net, not a per-application router: it is
+used only when the link carries no return target (or an invalid one).
 
 `gate-one init --oidc --issuer ... --client-id ...` writes this block and
 prints the URIs to register. auth-bridge stays fully supported

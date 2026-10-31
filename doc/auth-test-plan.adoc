@@ -111,9 +111,17 @@ Health :
 | `403`
 | Page/JSON `forbidden` ; pas de redirection login automatique ; action « se déconnecter et changer de compte » sur la page (provider interactif)
 
-| Racine de l'hôte de login (`https://login.<domaine>/`)
+| Racine de l'hôte de login avec `returnTo`/`continueUrl` autorisé
 | `302`
-| Redirection vers `defaultAppUrl` (query conservée : `mode=verifyEmail&oobCode=…`, liens de vérification) ; sans `defaultAppUrl`, `404`
+| Redirection vers l'app, query conservée (`mode`, `oobCode`, `lang`…), paramètres de routage retirés
+
+| Racine avec charge d'action (`mode`, `oobCode`, `key`, `code`, `state`, `token`) sans retour
+| `400`
+| Page « Lien incomplet » : cause, paramètres reçus (noms seuls), bouton `defaultAppUrl`, référence de corrélation
+
+| Racine nue (`https://login.<domaine>/`)
+| `302`
+| Redirection vers `defaultAppUrl` (secours d'exploitation)
 
 | JWKS inaccessible, timeout, TLS, réponse malformée
 | `ErrProviderUnavailable`

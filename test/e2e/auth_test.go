@@ -7,6 +7,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -326,33 +327,117 @@ func TestE2E_ReadyzOnLoginHost(t *testing.T) {
 	}
 }
 
-// TestE2E_LoginHostRootRedirectsToApp: an email-verification link that
-// lands on the login host root (Firebase `?mode=verifyEmail&oobCode=…`,
-// Keycloak account link) must reach the app, query preserved — not a
-// 404 dead end.
-func TestE2E_LoginHostRootRedirectsToApp(t *testing.T) {
+// TestE2E_LoginHostLanding covers the generic, IdP-blind landing point
+// of the login host root: a link-carried return target wins, an
+// incomplete action link gets a readable diagnostic page (not a silent
+// fallback), and a bare visit uses defaultAppUrl.
+func TestE2E_LoginHostLanding(t *testing.T) {
 	s := NewStack(t)
-	req, err := http.NewRequest(http.MethodGet,
-		"https://login.acme.test/?mode=verifyEmail&oobCode=abc123&lang=fr",
-		nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := s.noRedirect.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("login root = %d, want 302", resp.StatusCode)
-	}
-	want := "https://app.acme.test/?mode=verifyEmail&oobCode=abc123&lang=fr"
-	if got := resp.Header.Get("Location"); got != want {
-		t.Fatalf("redirect = %q, want %q", got, want)
+
+	browserGet := func(raw string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, raw, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Accept", "text/html")
+		resp, err := s.noRedirect.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
 	}
 
-	// A real login path is untouched.
-	login, err := s.noRedirect.Get("https://login.acme.test/login?returnTo=https%3A%2F%2Fapp.acme.test%2F")
+	// 1. returnTo + action payload: redirect to the app, payload
+	// preserved, routing params stripped.
+	resp := browserGet("https://login.acme.test/?returnTo=" +
+		"https%3A%2F%2Fapp.acme.test%2F&mode=verifyEmail&oobCode=abc123&lang=fr")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("returnTo landing = %d, want 302", resp.StatusCode)
+	}
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc.Scheme != "https" || loc.Host != "app.acme.test" || loc.Path != "/" {
+		t.Fatalf("redirect target = %s", loc)
+	}
+	q := loc.Query()
+	if q.Get("mode") != "verifyEmail" || q.Get("oobCode") != "abc123" ||
+		q.Get("lang") != "fr" {
+		t.Fatalf("action payload lost: %v", q)
+	}
+	if q.Has("returnTo") || q.Has("continueUrl") {
+		t.Fatalf("routing parameter forwarded: %v", q)
+	}
+
+	// 2. continueUrl (Firebase style) is accepted too.
+	resp = browserGet("https://login.acme.test/?continueUrl=" +
+		"https%3A%2F%2Fapp.acme.test%2F&mode=verifyEmail&oobCode=def456")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("continueUrl landing = %d, want 302", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Location"); !strings.HasPrefix(
+		got, "https://app.acme.test/?") {
+		t.Fatalf("continueUrl redirect = %q", got)
+	}
+
+	// 3. Action payload without any return target: readable 400 page
+	// naming the missing adapter configuration.
+	resp = browserGet("https://login.acme.test/?mode=verifyEmail&oobCode=abc123")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("incomplete landing = %d, want 400", resp.StatusCode)
+	}
+	page := string(body)
+	for _, want := range []string{
+		"Lien incomplet", "application de retour absente",
+		"continueUrl", "returnTo", "Référence",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("fallback page missing %q:\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "abc123") {
+		t.Fatal("fallback page leaked the oobCode value")
+	}
+
+	// 4. returnTo outside the allowed hosts is refused.
+	resp = browserGet("https://login.acme.test/?returnTo=" +
+		"https%3A%2F%2Fevil.example%2F&mode=verifyEmail")
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("open redirect accepted: %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "hôte non autorisé") {
+		t.Fatalf("unexpected page: %s", body)
+	}
+
+	// 5. A subdomain of the cookie domain is an allowed app host.
+	resp = browserGet("https://login.acme.test/?returnTo=" +
+		"https%3A%2F%2Fsub.app.acme.test%2F")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("subdomain landing = %d, want 302", resp.StatusCode)
+	}
+
+	// 6. Bare root: operational fallback to defaultAppUrl.
+	resp = browserGet("https://login.acme.test/")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("bare root = %d, want 302", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Location"); got != "https://app.acme.test/" {
+		t.Fatalf("bare root redirect = %q", got)
+	}
+
+	// 7. A real login path is untouched.
+	login, err := s.noRedirect.Get(
+		"https://login.acme.test/login?returnTo=https%3A%2F%2Fapp.acme.test%2F")
 	if err != nil {
 		t.Fatal(err)
 	}
