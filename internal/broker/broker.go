@@ -299,7 +299,9 @@ func RevokeWithConfig(
 		return fmt.Errorf("broker revoke: sid or sub is required")
 	}
 	if ttl <= 0 {
-		ttl = 24 * time.Hour
+		// The refresh token is the longest replayable credential:
+		// default to its TTL (never shorter than the session).
+		ttl = found.revocationTTL()
 	}
 	st, err := newRedisStore(ctx, *cfg.Redis)
 	if err != nil {

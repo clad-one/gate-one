@@ -279,8 +279,11 @@ make build-auth
 ./bin/cladone-auth keygen -out keys/acme-2026.key
 
 # Révocation immédiate d'une session ou d'un utilisateur (Redis requis).
+# Sans -ttl, la durée est celle du refresh token du tenant (jamais
+# moins que la session) : une révocation plus courte laisserait un
+# refresh token encore valide recréer une session après le logout.
 ./bin/cladone-auth revoke -config cladone-auth.json \
-  -tenant acme -sid <sid> -ttl 24h
+  -tenant acme -sid <sid>
 ----
 
 `keyFiles` est ordonné de l'ancienne à la plus récente : la dernière clé

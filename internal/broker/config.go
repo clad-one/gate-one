@@ -447,6 +447,38 @@ func (t *Tenant) sessionTTL() time.Duration {
 	return time.Duration(t.SessionTTLSeconds) * time.Second
 }
 
+// revocationTTL is the lifetime of a revocation written without an
+// explicit TTL (CLI `revoke`): the refresh token TTL is the source of
+// truth — it is the longest replayable credential. A revocation that
+// expires before the refresh token would let a refresh mint a new
+// session after the logout. Never shorter than the session TTL.
+func (t *Tenant) revocationTTL() time.Duration {
+	ttl := time.Duration(t.RefreshTokenTTL) * time.Second
+	if s := t.sessionTTL(); s > ttl {
+		ttl = s
+	}
+	if ttl <= 0 {
+		ttl = 30 * 24 * time.Hour
+	}
+	return ttl
+}
+
+// TenantRevocationTTL returns the revocation lifetime for a tenant:
+// the refresh token TTL (never shorter than the session TTL).
+func TenantRevocationTTL(
+	cfg *Config, tenantID string,
+) (time.Duration, error) {
+	if cfg == nil {
+		return 0, fmt.Errorf("broker: nil config")
+	}
+	for i := range cfg.Tenants {
+		if cfg.Tenants[i].ID == tenantID {
+			return cfg.Tenants[i].revocationTTL(), nil
+		}
+	}
+	return 0, fmt.Errorf("broker: unknown tenant %q", tenantID)
+}
+
 // logoutRevocationTTL must cover refresh tokens: a logout that revokes
 // only the access-token lifetime would let a refresh mint a new token.
 func (t *Tenant) logoutRevocationTTL() time.Duration {

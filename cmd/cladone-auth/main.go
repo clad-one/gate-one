@@ -135,7 +135,9 @@ func runRevoke(args []string) int {
 	tenant := fs.String("tenant", "", "tenant id")
 	sid := fs.String("sid", "", "session id to revoke")
 	sub := fs.String("sub", "", "user subject to revoke")
-	ttl := fs.Duration("ttl", 24*time.Hour, "revocation lifetime")
+	ttl := fs.Duration("ttl", 0,
+		"revocation lifetime (0 = tenant refresh-token TTL, "+
+			"never shorter than the session)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -148,6 +150,21 @@ func runRevoke(args []string) int {
 		fmt.Fprintln(os.Stderr, "revoke:", err)
 		return 1
 	}
+	autoTTL, err := broker.TenantRevocationTTL(cfg, *tenant)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "revoke:", err)
+		return 1
+	}
+	if *ttl > 0 && *ttl < autoTTL {
+		fmt.Fprintf(os.Stderr,
+			"warning: -ttl %s is shorter than the tenant revocation TTL %s "+
+				"(refresh token): old refresh tokens may become valid again\n",
+			*ttl, autoTTL)
+	}
+	effective := *ttl
+	if effective <= 0 {
+		effective = autoTTL
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := broker.RevokeWithConfig(
@@ -157,6 +174,6 @@ func runRevoke(args []string) int {
 		return 1
 	}
 	fmt.Printf("revoked tenant=%s sid=%q sub=%q ttl=%s\n",
-		*tenant, *sid, *sub, *ttl)
+		*tenant, *sid, *sub, effective)
 	return 0
 }
