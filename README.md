@@ -501,7 +501,9 @@ release.sh          local release artifacts (never pushes)
 
 - personal use, evaluation, testing and internal development: **free**;
 - **commercial production use requires a paid licence**;
-- no competing service / paid SaaS hosting without written permission.
+- no competing service / paid SaaS hosting without written permission;
+- **extension plugins** (non-auth, non-broker) may use their own licence,
+  including closed source/commercial — see `PLUGIN-LICENSING.md`.
 
 The gateway stays **fully functional** without a licence: it only shows an
 "eval / personal" notice in the user badge (no kill switch, no phone-home).

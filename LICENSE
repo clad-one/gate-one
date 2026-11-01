@@ -29,3 +29,22 @@ Toute copie ou travail dérivé du Logiciel doit inclure la présente licence da
 5. EXCLUSION DE GARANTIE
 
 LE LOGICIEL EST FOURNI "EN L'ÉTAT", SANS GARANTIE D'AUCUNE SORTE, EXPRESSE OU IMPLICITE. EN AUCUN CAS LES AUTEURS NE POURRONT ÊTRE TENUS RESPONSABLES DE QUELQUE RÉCLAMATION OU DOMMAGE QUE CE SOIT LIÉ À L'UTILISATION DU LOGICIEL.
+
+6. EXCEPTION POUR LES PLUGINS ET EXTENSIONS
+
+6.1 Les plugins et extensions qui ne mettent pas en œuvre l'authentification ou l'autorisation et qui ne s'exécutent pas dans le broker d'authentification (ci-après « Plugins d'Extension ») peuvent être distribués sous la licence de leur choix, y compris propriétaire, commerciale ou closed source.
+
+6.2 Cette exception ne s'applique pas :
+• aux plugins, adaptateurs ou modules qui mettent en œuvre l'authentification ou l'autorisation (y compris les adaptateurs d'IdP du broker) ;
+• à tout composant qui incorpore, copie ou dérive du code du Logiciel.
+
+6.3 Les Plugins d'Extension doivent :
+• interagir avec le Logiciel uniquement via l'API de plugins documentée et le manifeste signé ;
+• ne pas imposer au Logiciel ou à ses utilisateurs des conditions incompatibles avec la présente Licence (notamment ne pas exiger que le Logiciel soit distribué sous la licence du plugin, ni en revendiquer la propriété) ;
+• conserver les notices du Logiciel et ne pas utiliser ses marques sans autorisation.
+
+6.4 Le Logiciel reste régi par la présente Licence ; l'exception ne constitue pas une renonciation aux droits du Concédant Initial sur le Logiciel.
+
+7. RECOUVREMENT DES SOMMES DUES
+
+En cas d'utilisation du Logiciel sans licence commerciale valide, si le litige n'est pas résolu à l'amiable, l'ensemble des frais d'exécution, des frais d'huissier et des honoraires (y compris les honoraires d'avocat) engagés pour le recouvrement forcé des sommes dues seront intégralement à la charge du débiteur défaillant, sans préjudice de tous autres droits et recours du Concédant Initial.
