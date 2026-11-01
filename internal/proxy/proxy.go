@@ -1530,6 +1530,34 @@ func isBrowserRequest(r *http.Request) bool {
 		strings.Contains(sec, "document")
 }
 
+// isDocumentNavigation reports whether the request is a real browser
+// navigation (top-level page, iframe/frame) rather than a fetch/XHR.
+//
+// A page route serves both documents and its own API calls
+// (`POST /api/...`). An unauthenticated fetch must NOT receive the 302
+// to the login host: the browser follows it cross-origin, the CORS
+// check fails, and the application sees an opaque
+// "TypeError: Failed to fetch" — while the guard (which only
+// intercepts 401) never gets a chance to show its banner. Fetch/XHR
+// get the same 401 JSON as API routes instead.
+//
+// Modern browsers send Sec-Fetch-Dest; when it is absent (curl, old
+// clients) the historical 302 is kept unless the caller explicitly
+// asks for JSON or marks the request as XHR.
+func isDocumentNavigation(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Dest") {
+	case "document", "iframe", "frame":
+		return true
+	case "":
+		return !strings.Contains(r.Header.Get("Accept"), "application/json") &&
+			r.Header.Get("X-Requested-With") != "XMLHttpRequest"
+	default:
+		// "empty" (fetch/XHR), "image", "script", "style"…: never a
+		// document navigation.
+		return false
+	}
+}
+
 // GatewayForbiddenHeader is the response header stamped on the
 // gateway's OWN identity 403 (rights refusal — auth.identity not
 // satisfied). The injected guard banner reads it to tell a gateway
@@ -2287,9 +2315,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			//
-			// Page route
+			// Page route: redirect real navigations. A fetch/XHR under
+			// the same page route gets the API 401 below, so the guard
+			// can intercept it instead of following a cross-origin
+			// redirect (CORS "Failed to fetch").
 			//
-			if cr.pageRoute {
+			if cr.pageRoute && isDocumentNavigation(r) {
 
 				host := r.Host
 
