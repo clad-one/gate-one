@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cladone.com/schemas/usage-event.schema.json",
+  "title": "Cladone Gate One usage event",
+  "description": "Flat usage record emitted to out-of-process extension plugins. No tokens, cookies, raw query strings, email or username: the user is represented by an opaque subjectId (HMAC).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "type", "ts", "instanceId", "epoch"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": ["request", "auth", "error", "billing", "audit"]
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "instanceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "epoch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "tenant": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "subjectId": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[A-Za-z0-9_-]+$",
+      "description": "Opaque deployment-scoped user identifier: versioned HMAC. Never an email or a raw IdP sub."
+    },
+    "route": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "Normalized route pattern, never the raw URL/query."
+    },
+    "method": {
+      "type": "string",
+      "maxLength": 16
+    },
+    "status": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 599
+    },
+    "durationMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "authResult": {
+      "type": "string",
+      "enum": ["ok", "anonymous", "denied", "unavailable"]
+    },
+    "mcpTool": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "units": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unitType": {
+      "type": "string",
+      "enum": ["request", "token", "byte", "mcp_call"]
+    },
+    "requestId": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "maxLength": 128
+    }
+  }
+}

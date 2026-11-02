@@ -16,6 +16,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"cladone/gate-one/pkg/usage"
 )
 
 // Manifest is the canonical plugin manifest. The signature covers the
@@ -33,7 +35,28 @@ type Manifest struct {
 	Dependencies   []Dependency `json:"dependencies,omitempty"`
 	Capabilities   []string     `json:"capabilities,omitempty"`
 	LicenseFeature string       `json:"licenseFeature,omitempty"`
-	Signature      Signature    `json:"signature"`
+	// Events is the usage-event subscription of an extension plugin
+	// (kind "extension", capability "events"). It is part of the signed
+	// manifest.
+	Events    *EventSubscription `json:"events,omitempty"`
+	Signature Signature          `json:"signature"`
+}
+
+// EventSubscription declares which usage events a plugin consumes.
+type EventSubscription struct {
+	Types       []string      `json:"types"`
+	Filters     *EventFilters `json:"filters,omitempty"`
+	MaxLagBytes int64         `json:"maxLagBytes,omitempty"`
+	OnMaxLag    string        `json:"onMaxLag,omitempty"` // block | drop
+}
+
+// EventFilters narrows the subscription; empty fields mean "all".
+type EventFilters struct {
+	Routes        []string `json:"routes,omitempty"`
+	Tenants       []string `json:"tenants,omitempty"`
+	Methods       []string `json:"methods,omitempty"`
+	StatusClasses []string `json:"statusClasses,omitempty"`
+	SampleRate    float64  `json:"sampleRate,omitempty"`
 }
 
 type Artifact struct {
@@ -112,6 +135,9 @@ func (m *Manifest) Verify(trust TrustStore, artifact []byte) error {
 	if m.Kind == "auth" && !trust.AllowAuth {
 		return ErrAuthKindDenied
 	}
+	if err := m.validateEvents(); err != nil {
+		return err
+	}
 	if !nameAllowed(trust.AllowedNames, m.Name) {
 		return fmt.Errorf("%w: %s", ErrUntrustedKey, m.Name)
 	}
@@ -151,6 +177,69 @@ func (m *Manifest) Verify(trust TrustStore, artifact []byte) error {
 		return ErrBadSignature
 	}
 	return nil
+}
+
+// validateEvents enforces the extension/event subscription invariants.
+func (m *Manifest) validateEvents() error {
+	knownCaps := map[string]bool{
+		"events": true, "handler": true, "inject": true,
+		"assets": true, "guard": true, "auth": true,
+	}
+	for _, c := range m.Capabilities {
+		if !knownCaps[c] {
+			return fmt.Errorf("%w: unknown capability %q", ErrManifestInvalid, c)
+		}
+	}
+	if m.Kind == "extension" && containsString(m.Capabilities, "auth") {
+		return fmt.Errorf("%w: extension cannot declare the auth capability",
+			ErrManifestInvalid)
+	}
+	if m.Events == nil {
+		return nil
+	}
+	if m.Kind != "extension" {
+		return fmt.Errorf("%w: events require kind=extension",
+			ErrManifestInvalid)
+	}
+	if !containsString(m.Capabilities, "events") {
+		return fmt.Errorf("%w: events require the events capability",
+			ErrManifestInvalid)
+	}
+	if len(m.Events.Types) == 0 {
+		return fmt.Errorf("%w: events.types is required", ErrManifestInvalid)
+	}
+	for _, typ := range m.Events.Types {
+		if !usage.ValidEventType(usage.EventType(typ)) {
+			return fmt.Errorf("%w: unknown event type %q",
+				ErrManifestInvalid, typ)
+		}
+	}
+	switch m.Events.OnMaxLag {
+	case "", "block", "drop":
+	default:
+		return fmt.Errorf("%w: events.onMaxLag must be block or drop",
+			ErrManifestInvalid)
+	}
+	if m.Events.MaxLagBytes < 0 {
+		return fmt.Errorf("%w: events.maxLagBytes must be >= 0",
+			ErrManifestInvalid)
+	}
+	if f := m.Events.Filters; f != nil {
+		if f.SampleRate < 0 || f.SampleRate > 1 {
+			return fmt.Errorf("%w: events.filters.sampleRate must be 0..1",
+				ErrManifestInvalid)
+		}
+	}
+	return nil
+}
+
+func containsString(items []string, want string) bool {
+	for _, s := range items {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // SigningPayload is exported for the signing CLI/tests; it must match
