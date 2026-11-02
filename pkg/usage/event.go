@@ -7,8 +7,10 @@ package usage
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -162,4 +164,13 @@ func (e *Event) Validate() error {
 		return fmt.Errorf("usage: unknown unitType %q", e.UnitType)
 	}
 	return nil
+}
+
+// NewRequestID returns an opaque correlation id for one request.
+func NewRequestID() string {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("req-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }

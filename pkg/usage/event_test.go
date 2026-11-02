@@ -126,3 +126,10 @@ func TestDurabilityAndUnits(t *testing.T) {
 		t.Error("unknown unit accepted")
 	}
 }
+
+func TestNewRequestID(t *testing.T) {
+	a, b := NewRequestID(), NewRequestID()
+	if a == "" || b == "" || a == b {
+		t.Fatalf("request ids: %q / %q", a, b)
+	}
+}
