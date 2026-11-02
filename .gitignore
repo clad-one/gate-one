@@ -9,6 +9,7 @@ dist/
 /gate-one-state.db
 /gate-one-state.db.lock
 /fake-google
+/plugin-audit-echo
 
 # Playwright
 test/e2e/browser/node_modules/
