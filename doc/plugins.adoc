@@ -1,0 +1,232 @@
+= Gate One plugins and usage events
+
+Status: the event contract, signed extension manifest, per-type WAL,
+out-of-process host and reference plugin (`cmd/plugin-audit-echo`) are
+implemented. The Gate One configuration block and the proxy emitter are
+the remaining P1 work; this document describes the model they must
+follow.
+
+== 1. Scope and taxonomy
+
+Gate One distinguishes five plugin families. Only the last four are
+extensions; the first one is broker-only.
+
+[cols="1,1,1,1,1",options="header"]
+|===
+| Type | Runs in | Transport | Decides auth? | Licence
+| Auth adapter | broker | out-of-process HTTP/JSON (gRPC later) | yes (broker) | Gate One licence
+| Route handler / aggregator | Gate One | sidecar route or out-of-process | no (after auth) | extension licence
+| Injection / userscript / UI | Gate One | signed inject bundle, loaded at startup | no | extension licence
+| Event consumer | Gate One | out-of-process HTTP/JSON | no | extension licence
+| WASM transform | Gate One | wazero (later) | no | extension licence
+|===
+
+There is **no public compile-time plugin API**. Hot-path transforms
+(CSP, guard, rewriting) stay in the core. Go `plugin` (`.so`) is not
+used: ABI fragility, no Windows, identical toolchain requirement.
+
+Auth adapters stay in the broker and remain under the Gate One licence.
+The extension-plugin exception (section 6 of `LICENSE`) covers non-auth,
+non-broker extensions and allows closed-source/commercial plugins.
+
+== 2. AC-AUTH-07 invariants
+
+A plugin never decides whether a request is authenticated.
+
+. **No pre-auth hook**: the plugin is called after `checkAuth` /
+  `checkMCPAuth`, exactly like a backend.
+. **No self-registered route**: a plugin is attached to an existing
+  compiled route; matching and `needsAuthentication` stay in the core.
+. **Immutable identity**: the plugin receives a DTO (user/roles/scopes/
+  claims), never a mutable `*http.Request`; reserved headers
+  (`Authorization`, `Cookie`, `X-User-*`, `X-Gate-One-*`,
+  `X-Forwarded-*`) are stripped before any outbound call.
+. **Auth configuration is out of scope**: `auth`, `securityHeaders`,
+  `license`, `rateLimit`, `quota` cannot be changed by a plugin.
+. **Out-of-process trust boundary**: no Traefik exposure, internal
+  socket/network only, signed assertion on every call, separate UID,
+  no secrets in the environment, egress allow-list.
+. **Invariant tests**: anonymous request on a protected route → plugin
+  never called; invalid token → idem; missing scope → 403, plugin not
+  called; identity unchanged; plugin route/auth override → refused by
+  `-check`.
+
+`internal/authn` must not import the plugin host or the plugin API; the
+auth path never scans `plugins.d`.
+
+== 3. Event contract
+
+`pkg/usage` defines the flat, versioned record:
+
+[source,json]
+----
+{
+  "schemaVersion": 1,
+  "type": "request|auth|error|billing|audit",
+  "ts": "2026-11-02T12:00:00Z",
+  "instanceId": "gw-1",
+  "epoch": "2026-11-02T11:00:00Z",
+  "tenant": "acme",
+  "subjectId": "v1....",
+  "route": "/api/process_stream",
+  "method": "POST",
+  "status": 200,
+  "durationMs": 12,
+  "bytes": 42,
+  "authResult": "ok",
+  "units": 1,
+  "unitType": "request",
+  "requestId": "...",
+  "idempotencyKey": "..."
+}
+----
+
+Rules:
+
+* no token, cookie, raw query string, email or username;
+* `route` is the normalized pattern, never the raw URL;
+* the user is represented by `subjectId`.
+
+`subjectId = "v1." + base64url(HMAC-SHA256(secret, issuer "\x00" sub))`.
+The secret is per deployment, shared by every Gate One instance, and
+held **only by the producer**. A plugin never receives it. Without
+multi-IdP account linking, the ID is per `(issuer, sub)`; with a
+canonical broker account it becomes per person (`v2`).
+
+The application may receive the ID as a backend header:
+
+[source,http]
+----
+X-Gate-One-Subject: v1.<base64url>
+----
+
+It is added after auth, never a client-supplied header, and is not an
+auth token.
+
+== 4. Event types and subscriptions
+
+[cols="1,2,1,1",options="header"]
+|===
+| Type | Produced when | Default durability | Volume
+| `request` | after the response, if subscribed | best effort (no WAL) | high
+| `auth` | login, logout, callback, backchannel, revocation | zero loss | low
+| `error` | 401/403/502/5xx, provider unavailable | window | medium
+| `billing` | billable unit (later) | zero loss | low
+| `audit` | login/logout/revocation/admin/reload/plugin/403 | zero loss or window | low
+|===
+
+Events are produced **only for subscribed types**. The manifest declares
+the subscription:
+
+[source,json]
+----
+"events": {
+  "types": ["audit", "error"],
+  "filters": {
+    "routes": ["/api/*", "/mcp/*"],
+    "tenants": ["acme"],
+    "methods": ["POST"],
+    "statusClasses": ["2xx", "5xx"],
+    "sampleRate": 1.0
+  },
+  "maxLagBytes": 5000000,
+  "onMaxLag": "block"
+}
+----
+
+`onMaxLag` is `block` (default) or `drop`.
+
+== 5. WAL and durability
+
+* one WAL per **(node, event type)**;
+* one cursor per **(type, subscriber)**;
+* node budget (50 MB to start) split into per-type shares; the sum of
+  shares must not exceed the budget;
+* admission reserves space **before** auth/backend; if a required
+  durable type is full → **503** on the affected routes/tenants, with
+  `Retry-After` and a distinct `usage_unavailable` body. `healthz`,
+  `readyz`, the auth probe and usage endpoints are exempt;
+* `zero_loss`: append + fsync **before** the response; fsync failure →
+  503;
+* `window_ms`: group commit every N milliseconds; a crash may lose the
+  current window;
+* `best_effort`: bounded ring, drops counted, no WAL;
+* acknowledgement is transactional: plugin processes → commits its
+  state → acks the offset; the core truncates up to the minimum cursor;
+* a new subscriber starts at the tail (no historical replay);
+* a subscriber beyond `maxLagBytes`:
+  - `block`: 503 remains for that type until it catches up;
+  - `drop`: its cursor moves to the lag limit, older events become
+    evictable, the subscriber is marked degraded and resumes at the
+    tail; the gap is visible in offsets/epoch;
+* multi-node: WAL and cursors per node, `instanceId` and `epoch` in
+  every event, persistent volume, drain + ack before SIGTERM/rolling;
+* the core keeps only what must be consumed; long-term retention is a
+  plugin policy (regulatory or customer DPA).
+
+== 6. Manifest and signed dependencies
+
+`pkg/pluginmanifest` verifies:
+
+* Ed25519 signature over the canonical manifest (signature zeroed) plus
+  the artifact digest;
+* artifact digest and optional size;
+* declared dependencies (`name`, `version`, `digest`, `signer`) against
+  the local trust store;
+* revocation by digest;
+* host API compatibility (`hostAPI` constraint);
+* `kind` (`extension` or `auth`; `auth` requires `AllowAuth`);
+* extension capabilities and the event subscription (types, filters,
+  `maxLagBytes`, `onMaxLag`).
+
+For a local sidecar, the loader verifies the manifest and the artifact
+before starting/connecting. For a remote service the host verifies the
+manifest and the image/attestation (cosign/SLSA) and authenticates the
+channel; it cannot inspect the remote process at runtime.
+
+Every host → plugin call carries a short-lived signed assertion:
+
+[source,http]
+----
+X-Gate-One-Assertion: base64url(payload).base64url(HMAC-SHA256)
+----
+
+The payload binds the audience (plugin name), an expiry and the body
+size. `pluginhost.VerifyAssertion` is the reference implementation.
+
+== 7. Reference plugin
+
+`cmd/plugin-audit-echo` is the reference event consumer:
+
+[source,bash]
+----
+export GATE_ONE_PLUGIN_SECRET=...
+go run ./cmd/plugin-audit-echo -addr :9100 -name com.cladone.audit
+----
+
+It exposes `/health` and `/events`, verifies the assertion, decodes the
+batch (`[{offset,event}]`) and logs the events. It has no dependency on
+Gate One internals.
+
+== 8. Licensing
+
+* The core is source-available (BSL-CUSTOM, `LICENSE`; French reference
+  in `LICENSE.fr.md`).
+* Extension plugins (non-auth, non-broker) may use any licence,
+  including closed source/commercial, provided they respect the
+  documented API/manifest and do not impose incompatible terms on Gate
+  One (section 6 of `LICENSE`; see `PLUGIN-LICENSING.md`).
+* Auth/authz plugins, broker IdP adapters and derived copies remain
+  under the Gate One licence.
+* A commercial plugin can declare `licenseFeature`; the host refuses to
+  load it without that feature.
+
+== 9. What is not a plugin
+
+* an authentication provider inside Gate One (`authProvider.type:
+  "plugin"` is rejected);
+* a mutable request/identity hook before auth;
+* a self-registered route;
+* a replacement for `securityHeaders`, `license`, `rateLimit` or
+  `quota`;
+* a compile-time Go module distributed as a third-party plugin.
