@@ -5,33 +5,51 @@
   "description": "Flat usage record emitted to out-of-process extension plugins. No tokens, cookies, raw query strings, email or username: the user is represented by an opaque subjectId (HMAC).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "type", "ts", "instanceId", "epoch"],
+  "required": [
+    "schemaVersion",
+    "type",
+    "ts",
+    "instanceId",
+    "epoch"
+  ],
   "properties": {
     "schemaVersion": {
       "type": "integer",
-      "const": 1
+      "const": 1,
+      "description": "Event schema version. Always 1 for this contract."
     },
     "type": {
       "type": "string",
-      "enum": ["request", "auth", "error", "billing", "audit"]
+      "enum": [
+        "request",
+        "auth",
+        "error",
+        "billing",
+        "audit"
+      ],
+      "description": "Event family. Only subscribed types are produced."
     },
     "ts": {
       "type": "string",
-      "format": "date-time"
+      "format": "date-time",
+      "description": "Event time, RFC 3339 UTC."
     },
     "instanceId": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 256
+      "maxLength": 256,
+      "description": "Stable Gate One node identifier (one WAL per node and type)."
     },
     "epoch": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 128
+      "maxLength": 128,
+      "description": "Producer epoch, changed on restart/migration so consumers can detect a gap."
     },
     "tenant": {
       "type": "string",
-      "maxLength": 128
+      "maxLength": 128,
+      "description": "Auth provider id or logical tenant; empty for shared/public routes."
     },
     "subjectId": {
       "type": "string",
@@ -45,24 +63,35 @@
     },
     "method": {
       "type": "string",
-      "maxLength": 16
+      "maxLength": 16,
+      "description": "HTTP method for request/error events."
     },
     "status": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 599
+      "maximum": 599,
+      "description": "HTTP status for request/error events."
     },
     "durationMs": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Backend or auth duration in milliseconds."
     },
     "bytes": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Response/request size in bytes, as observed by the gateway."
     },
     "authResult": {
       "type": "string",
-      "enum": ["ok", "anonymous", "denied", "unavailable", "failed"]
+      "enum": [
+        "ok",
+        "anonymous",
+        "denied",
+        "unavailable",
+        "failed"
+      ],
+      "description": "Authentication outcome for the request or auth action."
     },
     "action": {
       "type": "string",
@@ -76,23 +105,33 @@
     },
     "mcpTool": {
       "type": "string",
-      "maxLength": 256
+      "maxLength": 256,
+      "description": "MCP tool or operation name, when the event comes from an MCP route."
     },
     "units": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Billable/metered units for billing events."
     },
     "unitType": {
       "type": "string",
-      "enum": ["request", "token", "byte", "mcp_call"]
+      "enum": [
+        "request",
+        "token",
+        "byte",
+        "mcp_call"
+      ],
+      "description": "Unit kind for billing events."
     },
     "requestId": {
       "type": "string",
-      "maxLength": 128
+      "maxLength": 128,
+      "description": "Gateway request id, for correlation with logs and traces."
     },
     "idempotencyKey": {
       "type": "string",
-      "maxLength": 128
+      "maxLength": 128,
+      "description": "Caller-provided idempotency key, copied only for billing."
     }
   }
 }
