@@ -1,50 +1,95 @@
+SOURCE-AVAILABLE USE AND CONTRIBUTION LICENSE (BSL-CUSTOM)
 
-LICENCE D'UTILISATION ET DE CONTRIBUTION SOURCE-DISPONIBLE (BSL-CUSTOM)
+Version 1.0 — Copyright © [2026] [Benoit Rolland - Cladone-IT]. All rights reserved.
 
-Version 1.0 — Droits d'Auteur © [2026] [Benoit Rolland - Cladone-IT]. Tous droits réservés.
+This English version is the authoritative text. A French translation is
+provided in `LICENSE.fr.md` for reference only; in case of conflict, this
+English version prevails.
 
-1. PERMISSIONS ET ACCÈS AU CODE
+1. PERMISSIONS AND ACCESS TO THE CODE
 
-L'accès au code source du présent logiciel (le « Logiciel ») est fourni gratuitement à des fins d'étude, de test, de développement interne et d'usage personnel. Vous êtes autorisé à copier, modifier et créer des travaux dérivés (y compris sous forme de "fork") du Logiciel, sous réserve du respect strict des conditions de la présente Licence.
+Access to the source code of this software (the "Software") is provided
+free of charge for study, testing, internal development and personal use.
+You are authorized to copy, modify and create derivative works (including
+forks) of the Software, subject to strict compliance with the terms of this
+License.
 
-L'USAGE PERSONNEL ET L'ÉVALUATION SONT GRATUITS. L'USAGE COMMERCIAL EN PRODUCTION NÉCESSITE UNE LICENCE COMMERCIALE PAYANTE (voir §3).
+PERSONAL USE AND EVALUATION ARE FREE. COMMERCIAL PRODUCTION USE REQUIRES A
+PAID COMMERCIAL LICENSE (see §3).
 
-2. CONDITION CRUCIALE DE CESSION DE DROITS SUR LES TRAVAUX DÉRIVÉS
+2. CRITICAL CONDITION — ASSIGNMENT OF RIGHTS IN DERIVATIVE WORKS
 
-Le Logiciel est fourni selon un principe de réciprocité commerciale asymétrique. En modifiant le Logiciel, en créant un travail dérivé ou en publiant un "fork" (ci-après dénommé « le Contributeur »), vous acceptez de manière irrévocable les conditions suivantes :
-• Octroi de Licence à l'Auteur Initial : Le Contributeur accorde par la présente au titulaire initial des droits d'auteur (le « Concédant Initial ») une licence mondiale, non exclusive, perpétuelle, irrévocable, transférable, sous-licenciable et libre de redevance (royalty-free).
-• Étendue des Droits : Cette licence autorise le Concédant Initial à copier, modifier, intégrer, distribuer, vendre et exploiter commercialement, sous quelque forme que ce soit (y compris dans des produits propriétaires, fermés, ou des services Cloud/SaaS), tout ou partie des modifications, améliorations ou travaux dérivés créés par le Contributeur.
-• Automatisme : Cet octroi de licence est automatique et prend effet dès la création ou la distribution du travail dérivé par le Contributeur, sans qu'aucune signature de contrat supplémentaire (type CLA) ne soit nécessaire.
+The Software is provided under a principle of asymmetric commercial
+reciprocity. By modifying the Software, creating a derivative work or
+publishing a fork (the "Contributor"), you irrevocably accept the following
+terms:
+• License Grant to the Initial Author: the Contributor grants the initial
+  copyright holder (the "Initial Licensor") a worldwide, non-exclusive,
+  perpetual, irrevocable, transferable, sublicensable and royalty-free
+  license.
+• Scope: this license authorizes the Initial Licensor to copy, modify,
+  integrate, distribute, sell and commercially exploit, in any form
+  (including proprietary or closed products, or Cloud/SaaS services), all
+  or part of the modifications, improvements or derivative works created by
+  the Contributor.
+• Automatic effect: this license grant is automatic and takes effect upon
+  creation or distribution of the derivative work by the Contributor,
+  without any additional contract (such as a CLA).
 
-3. RESTRICTIONS COMMERCIALES POUR LES TIERS
+3. COMMERCIAL RESTRICTIONS FOR THIRD PARTIES
 
-3.1 Usage commercial en production. Toute exploitation du Logiciel (ou d'un travail dérivé) en production à des fins commerciales — y compris en interne au sein d'une organisation, pour servir des utilisateurs ou des activités professionnelles — nécessite une licence commerciale payante, accordée par écrit par le Concédant Initial. L'étude, le test, l'évaluation et le développement interne (hors production) restent gratuits.
+3.1 Commercial production use. Any use of the Software (or a derivative
+work) in production for commercial purposes — including internally within
+an organization, to serve users or professional activities — requires a
+paid commercial license granted in writing by the Initial Licensor. Study,
+testing, evaluation and internal development (non-production) remain free.
 
-3.2 Interdictions. Il est strictement interdit à tout tiers ou Contributeur d'utiliser le Logiciel ou ses travaux dérivés pour fournir un service concurrent direct du Concédant Initial, ou pour héberger le logiciel en tant que service payant (SaaS/Cloud), sauf autorisation écrite préalable et expresse du Concédant Initial.
+3.2 Prohibitions. Any third party or Contributor is strictly prohibited
+from using the Software or its derivative works to provide a service
+directly competing with the Initial Licensor, or to host the software as a
+paid service (SaaS/Cloud), without the prior express written permission of
+the Initial Licensor.
 
-4. CONSERVATION DES NOTICES
+4. PRESERVATION OF NOTICES
 
-Toute copie ou travail dérivé du Logiciel doit inclure la présente licence dans son intégralité, ainsi que les mentions de copyright originales de l'auteur initial.
+Any copy or derivative work of the Software must include this License in
+its entirety, as well as the original copyright notices of the initial
+author.
 
-5. EXCLUSION DE GARANTIE
+5. DISCLAIMER OF WARRANTY
 
-LE LOGICIEL EST FOURNI "EN L'ÉTAT", SANS GARANTIE D'AUCUNE SORTE, EXPRESSE OU IMPLICITE. EN AUCUN CAS LES AUTEURS NE POURRONT ÊTRE TENUS RESPONSABLES DE QUELQUE RÉCLAMATION OU DOMMAGE QUE CE SOIT LIÉ À L'UTILISATION DU LOGICIEL.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM OR DAMAGE
+WHATSOEVER ARISING FROM THE USE OF THE SOFTWARE.
 
-6. EXCEPTION POUR LES PLUGINS ET EXTENSIONS
+6. EXCEPTION FOR PLUGINS AND EXTENSIONS
 
-6.1 Les plugins et extensions qui ne mettent pas en œuvre l'authentification ou l'autorisation et qui ne s'exécutent pas dans le broker d'authentification (ci-après « Plugins d'Extension ») peuvent être distribués sous la licence de leur choix, y compris propriétaire, commerciale ou closed source.
+6.1 Plugins and extensions that do not implement authentication or
+authorization and do not run in the authentication broker (the "Extension
+Plugins") may be distributed under the license of their choice, including
+proprietary, commercial or closed source.
 
-6.2 Cette exception ne s'applique pas :
-• aux plugins, adaptateurs ou modules qui mettent en œuvre l'authentification ou l'autorisation (y compris les adaptateurs d'IdP du broker) ;
-• à tout composant qui incorpore, copie ou dérive du code du Logiciel.
+6.2 This exception does not apply to:
+• plugins, adapters or modules that implement authentication or
+  authorization (including broker IdP adapters);
+• any component that embeds, copies or derives from the Software.
 
-6.3 Les Plugins d'Extension doivent :
-• interagir avec le Logiciel uniquement via l'API de plugins documentée et le manifeste signé ;
-• ne pas imposer au Logiciel ou à ses utilisateurs des conditions incompatibles avec la présente Licence (notamment ne pas exiger que le Logiciel soit distribué sous la licence du plugin, ni en revendiquer la propriété) ;
-• conserver les notices du Logiciel et ne pas utiliser ses marques sans autorisation.
+6.3 Extension Plugins must:
+• interact with the Software only through the documented plugin API and the
+  signed manifest;
+• not impose on the Software or its users any terms incompatible with this
+  License (in particular, not require the Software to be distributed under
+  the plugin's license, nor claim ownership of the Software);
+• preserve the Software's notices and not use its trademarks without
+  permission.
 
-6.4 Le Logiciel reste régi par la présente Licence ; l'exception ne constitue pas une renonciation aux droits du Concédant Initial sur le Logiciel.
+6.4 The Software remains governed by this License; the exception does not
+waive the Initial Licensor's rights in the Software.
 
-7. RECOUVREMENT DES SOMMES DUES
+7. RECOVERY OF AMOUNTS DUE
 
-En cas d'utilisation du Logiciel sans licence commerciale valide, si le litige n'est pas résolu à l'amiable, l'ensemble des frais d'exécution, des frais d'huissier et des honoraires (y compris les honoraires d'avocat) engagés pour le recouvrement forcé des sommes dues seront intégralement à la charge du débiteur défaillant, sans préjudice de tous autres droits et recours du Concédant Initial.
+In the event of use of the Software without a valid commercial license, if
+the dispute is not resolved amicably, all enforcement costs, bailiff fees
+and legal fees (including attorney fees) incurred for the forced recovery
+of amounts due shall be borne entirely by the defaulting debtor, without
+prejudice to any other rights and remedies of the Initial Licensor.

@@ -2,8 +2,9 @@
 
 Gate One itself is distributed under the source-available licence in
 [`LICENSE`](LICENSE) (BSL-CUSTOM). This document summarises the
-**plugin exception** added as section 6 of that licence. The French
-text of `LICENSE` is authoritative; this page is a practical summary.
+**plugin exception** added as section 6 of that licence. The English
+text of `LICENSE` is authoritative; a French translation is provided in
+`LICENSE.fr.md` for reference only. This page is a practical summary.
 
 ## Who can choose their own licence
 

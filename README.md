@@ -497,7 +497,8 @@ release.sh          local release artifacts (never pushes)
 
 ## License
 
-**Source-available** (not open source), BSL-custom — see `LICENSE`.
+**Source-available** (not open source), BSL-custom — see `LICENSE`
+(English authoritative; French translation: `LICENSE.fr.md`).
 
 - personal use, evaluation, testing and internal development: **free**;
 - **commercial production use requires a paid licence**;
