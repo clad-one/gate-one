@@ -43,6 +43,7 @@ func statRecord(routeKey string, status int) {
 type statsWriter struct {
 	http.ResponseWriter
 	status int
+	bytes  int64
 }
 
 func (w *statsWriter) WriteHeader(code int) {
@@ -56,7 +57,9 @@ func (w *statsWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	return w.ResponseWriter.Write(b)
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += int64(n)
+	return n, err
 }
 
 // serveStats answers /__gate-one/stats.

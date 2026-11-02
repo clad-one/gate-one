@@ -6,6 +6,7 @@ import (
 	mcpserver "cladone/gate-one/internal/mcp"
 	"cladone/gate-one/internal/pwa"
 	"cladone/gate-one/internal/tokenbroker"
+	"cladone/gate-one/pkg/usage"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -131,6 +132,10 @@ type Gateway struct {
 	// tokenBroker is non-nil only when at least one route uses
 	// upstream.delegated.
 	tokenBroker *tokenbroker.Client
+
+	// usage is the optional usage-event bus (WAL + out-of-process
+	// extension plugins). nil = no events produced.
+	usage *usageRuntime
 
 	// inflight tracks requests for graceful Close on reload/shutdown.
 	inflight  sync.WaitGroup
@@ -277,6 +282,11 @@ func (g *Gateway) Close() error {
 		if len(g.providers) == 0 && g.auth != nil {
 			if c, ok := g.auth.(interface{ Close() error }); ok {
 				first = c.Close()
+			}
+		}
+		if g.usage != nil {
+			if err := g.usage.close(); err != nil && first == nil {
+				first = err
 			}
 		}
 	})
@@ -745,6 +755,14 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 	gw.routes = routes
 	gw.config = cfg
 	gw.tokenBroker = broker
+
+	if cfg.Usage != nil {
+		ur, err := newUsageRuntime(cfg.Usage, cfg.License)
+		if err != nil {
+			return nil, err
+		}
+		gw.usage = ur
+	}
 
 	return gw, nil
 }
@@ -2040,8 +2058,13 @@ func (g *Gateway) unitForMetadataPath(
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	g.inflight.Add(1)
 	defer g.inflight.Done()
+	requestID := ""
+	if g.usage != nil {
+		requestID = usage.NewRequestID()
+	}
 
 	// Platform hardening on EVERY response (proxied or generated).
 	w = newSecurityWriter(w, g.config.SecurityHeaders)
@@ -2212,6 +2235,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"X-Roles",
 			strings.Join(ctx.Roles, ","),
 		)
+		if g.usage != nil {
+			g.usage.setSubjectHeader(r, ctx, g.providerFor(cr))
+		}
 
 		if cr.mcpUpstream != nil {
 			cr.mcpUpstream.ServeHTTP(w, r)
@@ -2271,12 +2297,29 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Usage bus: reserve durable event space BEFORE auth/backend so a
+	// full share is answered with a 503 instead of losing an event.
+	var usageAdm *usageAdmission
+	if g.usage != nil {
+		var full usage.EventType
+		usageAdm, full = g.usage.admit(route, ctx, g.providerFor(cr))
+		if full != "" {
+			writeUsageUnavailable(w, r, cr.pageRoute, full)
+			return
+		}
+	}
+
 	// Statistics: the response's FINAL status is counted per route
 	// (302 auth, 401, 403, 429, 200 proxified…).
 	sw := &statsWriter{ResponseWriter: w}
 	w = sw
 	defer func() {
 		statRecord(routeKey(route.Host, route.Path), sw.status)
+		if g.usage != nil && usageAdm != nil {
+			g.usage.emit(
+				usageAdm, route, ctx, g.providerFor(cr),
+				sw.status, time.Since(start), sw.bytes, requestID)
+		}
 	}()
 
 	//
@@ -2401,6 +2444,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Set("X-Username", ctx.Username)
 	r.Header.Set("X-Email", ctx.Email)
 	r.Header.Set("X-Roles", strings.Join(ctx.Roles, ","))
+	if g.usage != nil {
+		g.usage.setSubjectHeader(r, ctx, g.providerFor(cr))
+	}
 
 	// X-Forwarded-*: Traefik already provides them in production;
 	// setting them here guarantees identical behavior on direct

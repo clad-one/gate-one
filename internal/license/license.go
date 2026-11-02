@@ -256,3 +256,20 @@ func decodeKey(s string) (ed25519.PublicKey, error) {
 	}
 	return nil, errors.New("license: bad public key")
 }
+
+// HasFeature reports whether a registered licence grants feature. An
+// empty feature means "no licence requirement" and is always allowed.
+func HasFeature(st Status, feature string) bool {
+	if feature == "" {
+		return true
+	}
+	if st.State != "registered" {
+		return false
+	}
+	for _, f := range st.Features {
+		if f == feature {
+			return true
+		}
+	}
+	return false
+}

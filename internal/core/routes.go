@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"cladone/gate-one/internal/license"
+	"cladone/gate-one/pkg/usage"
 )
 
 type Match struct {
@@ -1310,7 +1311,62 @@ type Config struct {
 	// an edge proxy that already sets them can opt out).
 	SecurityHeaders *SecurityHeadersPolicy `json:"securityHeaders,omitempty"`
 
+	// Usage enables the out-of-process usage-event bus (WAL + extension
+	// plugins). Absent = no events are produced.
+	Usage *UsageConfig `json:"usage,omitempty"`
+
 	Routes []Route `json:"routes"`
+}
+
+// UsageConfig configures the usage-event bus. Presence of the block
+// enables it.
+type UsageConfig struct {
+	// Dir is the WAL directory (one subdirectory per event type).
+	Dir string `json:"dir,omitempty"`
+	// NodeID identifies this instance in every event (default: hostname).
+	NodeID string `json:"nodeId,omitempty"`
+	// SubjectSecretEnv holds the HMAC key deriving the opaque subjectId.
+	SubjectSecretEnv string `json:"subjectSecretEnv,omitempty"`
+	// PluginSecretEnv holds the HMAC key signing host->plugin assertions.
+	PluginSecretEnv string `json:"pluginSecretEnv,omitempty"`
+	// BudgetBytes is the node WAL budget (default 50 MiB).
+	BudgetBytes int64 `json:"budgetBytes,omitempty"`
+	// Types maps a durable event type to its WAL share/fsync policy.
+	Types map[string]UsageTypeConfig `json:"types,omitempty"`
+	// Plugins are the out-of-process event consumers.
+	Plugins []UsagePluginConfig `json:"plugins,omitempty"`
+
+	// SubjectSecret/PluginSecret are resolved from the environment.
+	SubjectSecret []byte `json:"-"`
+	PluginSecret  []byte `json:"-"`
+}
+
+// UsageTypeConfig is the WAL policy of one event type.
+type UsageTypeConfig struct {
+	ShareBytes   int64  `json:"shareBytes,omitempty"`
+	Fsync        string `json:"fsync,omitempty"` // none | window_ms | always
+	WindowMS     int    `json:"windowMs,omitempty"`
+	SegmentBytes int64  `json:"segmentBytes,omitempty"`
+}
+
+// UsagePluginConfig is one out-of-process consumer.
+type UsagePluginConfig struct {
+	Name           string        `json:"name"`
+	URL            string        `json:"url"`
+	Types          []string      `json:"types"`
+	Filters        *UsageFilters `json:"filters,omitempty"`
+	MaxLagBytes    int64         `json:"maxLagBytes,omitempty"`
+	OnMaxLag       string        `json:"onMaxLag,omitempty"` // block | drop
+	LicenseFeature string        `json:"licenseFeature,omitempty"`
+}
+
+// UsageFilters narrows a plugin subscription. Empty = all.
+type UsageFilters struct {
+	Routes        []string `json:"routes,omitempty"`
+	Tenants       []string `json:"tenants,omitempty"`
+	Methods       []string `json:"methods,omitempty"`
+	StatusClasses []string `json:"statusClasses,omitempty"`
+	SampleRate    float64  `json:"sampleRate,omitempty"`
 }
 
 // MCPDefaults: optional defaults for MCP access units.
@@ -1790,6 +1846,11 @@ func LoadWithOptions(path string, opts LoadOptions) (*Config, error) {
 	if err := cfg.resolveAuthProvider(opts.AuthBridgeURL); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
+
+	// Usage bus: WAL directory, HMAC secrets and plugin subscriptions.
+	if err := cfg.resolveUsage(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
 	// The bbolt state file is relative to the config file, not to the
 	// process working directory (predictable in Docker and systemd).
 	for _, ap := range cfg.AuthProviders {
@@ -2239,6 +2300,149 @@ func (c *Config) validateAuthProviders() error {
 				}
 				stores[path] = id
 			}
+		}
+	}
+	return nil
+}
+
+// resolveUsage validates the usage-event bus configuration and resolves
+// its environment secrets. Presence of the block enables the bus.
+func (c *Config) resolveUsage(baseDir string) error {
+	u := c.Usage
+	if u == nil {
+		return nil
+	}
+	u.Dir = strings.TrimSpace(u.Dir)
+	if u.Dir == "" {
+		u.Dir = "./gate-one-usage"
+	}
+	if !filepath.IsAbs(u.Dir) {
+		u.Dir = filepath.Join(baseDir, u.Dir)
+	}
+	u.NodeID = strings.TrimSpace(u.NodeID)
+	if u.NodeID == "" {
+		if h, err := os.Hostname(); err == nil {
+			u.NodeID = h
+		}
+	}
+	if u.NodeID == "" {
+		u.NodeID = "gate-one"
+	}
+	if u.BudgetBytes <= 0 {
+		u.BudgetBytes = 50 << 20
+	}
+	for _, env := range []struct {
+		name string
+		dst  *[]byte
+	}{
+		{u.SubjectSecretEnv, &u.SubjectSecret},
+		{u.PluginSecretEnv, &u.PluginSecret},
+	} {
+		if env.name == "" || !envVarName.MatchString(env.name) {
+			return fmt.Errorf(
+				"usage: subjectSecretEnv and pluginSecretEnv are required")
+		}
+		v, ok := os.LookupEnv(env.name)
+		if !ok || v == "" {
+			return fmt.Errorf(
+				"usage: environment variable %s is empty", env.name)
+		}
+		*env.dst = []byte(v)
+	}
+	if len(u.Types) == 0 {
+		return fmt.Errorf("usage: at least one event type is required")
+	}
+	var sum int64
+	for name, tc := range u.Types {
+		typ := usage.EventType(name)
+		if !usage.ValidEventType(typ) {
+			return fmt.Errorf("usage.types: unknown event type %q", name)
+		}
+		if tc.ShareBytes <= 0 {
+			return fmt.Errorf(
+				"usage.types[%s]: shareBytes must be > 0", name)
+		}
+		switch tc.Fsync {
+		case "":
+			tc.Fsync = "none"
+		case "none", "always":
+		case "window_ms":
+			if tc.WindowMS <= 0 {
+				tc.WindowMS = 100
+			}
+		default:
+			return fmt.Errorf(
+				"usage.types[%s]: fsync must be none, window_ms or always",
+				name)
+		}
+		if (typ == usage.TypeRequest || typ == usage.TypeError) &&
+			tc.Fsync == "always" {
+			return fmt.Errorf(
+				"usage.types[%s]: zero_loss (always) is not supported "+
+					"for request/error by the proxy emitter", name)
+		}
+		if tc.SegmentBytes < 0 {
+			return fmt.Errorf(
+				"usage.types[%s]: segmentBytes must be >= 0", name)
+		}
+		u.Types[name] = tc
+		sum += tc.ShareBytes
+	}
+	if sum > u.BudgetBytes {
+		return fmt.Errorf(
+			"usage: sum of type shares (%d) exceeds budgetBytes (%d)",
+			sum, u.BudgetBytes)
+	}
+	if len(u.Plugins) == 0 {
+		return fmt.Errorf("usage: at least one plugin is required")
+	}
+	seen := map[string]bool{}
+	for i := range u.Plugins {
+		p := &u.Plugins[i]
+		p.Name = strings.TrimSpace(p.Name)
+		p.URL = strings.TrimSpace(p.URL)
+		if p.Name == "" || p.URL == "" {
+			return fmt.Errorf("usage.plugins[%d]: name and url are required", i)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("usage.plugins: duplicate name %q", p.Name)
+		}
+		seen[p.Name] = true
+		parsed, err := url.Parse(p.URL)
+		if err != nil || parsed.Host == "" ||
+			(parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf(
+				"usage.plugins[%s]: url must be absolute http(s)", p.Name)
+		}
+		if len(p.Types) == 0 {
+			return fmt.Errorf(
+				"usage.plugins[%s]: at least one event type is required",
+				p.Name)
+		}
+		for _, t := range p.Types {
+			if _, ok := u.Types[t]; !ok {
+				return fmt.Errorf(
+					"usage.plugins[%s]: type %q is not configured in usage.types",
+					p.Name, t)
+			}
+		}
+		switch p.OnMaxLag {
+		case "":
+			p.OnMaxLag = "block"
+		case "block", "drop":
+		default:
+			return fmt.Errorf(
+				"usage.plugins[%s]: onMaxLag must be block or drop", p.Name)
+		}
+		if p.MaxLagBytes < 0 {
+			return fmt.Errorf(
+				"usage.plugins[%s]: maxLagBytes must be >= 0", p.Name)
+		}
+		if p.Filters != nil &&
+			(p.Filters.SampleRate < 0 || p.Filters.SampleRate > 1) {
+			return fmt.Errorf(
+				"usage.plugins[%s]: filters.sampleRate must be 0..1",
+				p.Name)
 		}
 	}
 	return nil

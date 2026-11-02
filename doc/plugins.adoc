@@ -1,10 +1,11 @@
 = Gate One plugins and usage events
 
 Status: the event contract, signed extension manifest, per-type WAL,
-out-of-process host and reference plugin (`cmd/plugin-audit-echo`) are
-implemented. The Gate One configuration block and the proxy emitter are
-the remaining P1 work; this document describes the model they must
-follow.
+out-of-process host, reference plugin (`cmd/plugin-audit-echo`), the
+`usage` configuration block and the proxy emitter (request/error events,
+targeted 503 admission, `X-Gate-One-Subject`) are implemented.
+Auth/audit event emission from the login/logout handlers, signed
+manifest discovery (`plugins.d`) and the product documentation remain.
 
 == 1. Scope and taxonomy
 
@@ -183,6 +184,11 @@ For a local sidecar, the loader verifies the manifest and the artifact
 before starting/connecting. For a remote service the host verifies the
 manifest and the image/attestation (cosign/SLSA) and authenticates the
 channel; it cannot inspect the remote process at runtime.
+
+The current `usage.plugins` block is operator-managed (name, URL,
+types, filters, licence feature). Signed-manifest discovery
+(`plugins.d/*.json`) is the next step; `pkg/pluginmanifest` already
+implements the verification and is covered by tests.
 
 Every host → plugin call carries a short-lived signed assertion:
 

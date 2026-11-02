@@ -412,6 +412,118 @@
       "description": "Named groups of MCP services exposed with their own access rights (resource/scope/identity) and per-member tool filters. A member endpoint is set.host + set.endpoint + member.path.",
       "additionalProperties": { "$ref": "#/definitions/mcpSet" }
     },
+    "usage": {
+      "type": "object",
+      "description": "Out-of-process usage-event bus (WAL + extension plugins). Presence enables it. Events are produced only for the subscribed types; a full durable share is answered with a targeted 503 (health/readyz/auth-probe exempt).",
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "type": "string",
+          "description": "WAL directory (one subdirectory per event type). Relative paths are resolved from the config file. Default ./gate-one-usage."
+        },
+        "nodeId": {
+          "type": "string",
+          "description": "Instance identifier written in every event. Default: hostname."
+        },
+        "subjectSecretEnv": {
+          "type": "string",
+          "description": "Environment variable holding the HMAC key deriving the opaque subjectId. Required."
+        },
+        "pluginSecretEnv": {
+          "type": "string",
+          "description": "Environment variable holding the HMAC key signing host->plugin assertions. Required."
+        },
+        "budgetBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Node WAL budget in bytes, split across the type shares. Default 52428800 (50 MiB)."
+        },
+        "types": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Durable event type -> WAL policy. A plugin can only subscribe to a configured type.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["shareBytes"],
+            "properties": {
+              "shareBytes": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum size of this type's WAL on this node."
+              },
+              "fsync": {
+                "type": "string",
+                "enum": ["none", "window_ms", "always"],
+                "description": "Durability: none, group commit every windowMs, or fsync before the response (zero_loss). always is refused for request/error (the proxy emitter cannot fsync before a streaming response)."
+              },
+              "windowMs": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Group-commit interval for fsync=window_ms. Default 100."
+              },
+              "segmentBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Append-file rotation size. 0 = share/4 capped at 8 MiB."
+              }
+            }
+          }
+        },
+        "plugins": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Out-of-process event consumers (HTTP/JSON).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "url", "types"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Unique plugin name (assertion audience)."
+              },
+              "url": {
+                "type": "string",
+                "description": "Absolute http(s) base URL. /health and /events are appended."
+              },
+              "types": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "enum": ["request", "auth", "error", "billing", "audit"] },
+                "description": "Subscribed event types; each must be configured in usage.types."
+              },
+              "filters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "routes": { "type": "array", "items": { "type": "string" } },
+                  "tenants": { "type": "array", "items": { "type": "string" } },
+                  "methods": { "type": "array", "items": { "type": "string" } },
+                  "statusClasses": { "type": "array", "items": { "type": "string" } },
+                  "sampleRate": { "type": "number", "minimum": 0, "maximum": 1 }
+                }
+              },
+              "maxLagBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Allowed subscriber lag. Beyond it, onMaxLag applies."
+              },
+              "onMaxLag": {
+                "type": "string",
+                "enum": ["block", "drop"],
+                "description": "block (default): 503 until catch-up; drop: move the cursor to the lag limit and let eviction proceed."
+              },
+              "licenseFeature": {
+                "type": "string",
+                "description": "Required signed-licence feature; the plugin is refused without it."
+              }
+            }
+          }
+        }
+      }
+    },
     "routes": {
       "type": "array",
       "items": { "$ref": "#/definitions/route" }
