@@ -74,6 +74,8 @@ type Event struct {
 	Bytes          int64     `json:"bytes,omitempty"`
 	AuthResult     string    `json:"authResult,omitempty"`
 	MCPTool        string    `json:"mcpTool,omitempty"`
+	Action         string    `json:"action,omitempty"`
+	SessionID      string    `json:"sessionId,omitempty"`
 	Units          int64     `json:"units,omitempty"`
 	UnitType       UnitType  `json:"unitType,omitempty"`
 	RequestID      string    `json:"requestId,omitempty"`

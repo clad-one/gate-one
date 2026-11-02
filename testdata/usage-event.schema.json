@@ -62,7 +62,17 @@
     },
     "authResult": {
       "type": "string",
-      "enum": ["ok", "anonymous", "denied", "unavailable"]
+      "enum": ["ok", "anonymous", "denied", "unavailable", "failed"]
+    },
+    "action": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Auth action: login, login_failed, logout, backchannel_logout, revocation."
+    },
+    "sessionId": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Opaque RP session id for auth events."
     },
     "mcpTool": {
       "type": "string",

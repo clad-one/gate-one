@@ -438,6 +438,10 @@
           "minimum": 1,
           "description": "Node WAL budget in bytes, split across the type shares. Default 52428800 (50 MiB)."
         },
+        "trustStore": {
+          "type": "string",
+          "description": "Path of the signed plugin trust store (JSON: keys, allowedNames, allowedDependencies, revokedDigests, allowAuth, coreVersion). Required when a plugin declares a signed manifest. Relative paths are resolved from the config file."
+        },
         "types": {
           "type": "object",
           "minProperties": 1,
@@ -477,7 +481,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "url", "types"],
+            "required": ["name", "url"],
             "properties": {
               "name": {
                 "type": "string",
@@ -488,11 +492,18 @@
                 "type": "string",
                 "description": "Absolute http(s) base URL. /health and /events are appended."
               },
+              "manifest": {
+                "type": "string",
+                "description": "Path of the signed plugin manifest. When set, the manifest is authoritative for the event subscription and the licence feature; artifact is required and usage.trustStore must be configured."
+              },
+              "artifact": {
+                "type": "string",
+                "description": "Path of the signed plugin artefact (binary/container). Required with manifest; its digest is verified against the manifest."
+              },
               "types": {
                 "type": "array",
-                "minItems": 1,
                 "items": { "type": "string", "enum": ["request", "auth", "error", "billing", "audit"] },
-                "description": "Subscribed event types; each must be configured in usage.types."
+                "description": "Subscribed event types when no signed manifest is used; each must be configured in usage.types."
               },
               "filters": {
                 "type": "object",

@@ -112,3 +112,24 @@ type LoginHandler interface {
 	// ServeLogin handles /login, /logout, /auth/popup-done, /health.
 	ServeLogin(w http.ResponseWriter, r *http.Request)
 }
+
+// AuthEvent is a security-relevant authentication lifecycle event
+// emitted by a login handler. It carries the identity needed for an
+// audit record; the usage sink must pseudonymize the user and must not
+// persist the email/username.
+type AuthEvent struct {
+	Action    string // login | login_failed | logout | backchannel_logout
+	Result    string // ok | failed | denied | no_session
+	Provider  string
+	Issuer    string
+	UserID    string
+	Username  string
+	Email     string
+	SessionID string
+	At        time.Time
+}
+
+// EventSink receives auth lifecycle events. An error from the sink is
+// only honoured by a successful login (fail-closed: no session without
+// an audit record); logout/backchannel paths log and continue.
+type EventSink func(AuthEvent) error

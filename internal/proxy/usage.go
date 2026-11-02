@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"time"
 
+	"cladone/gate-one/internal/authn"
 	"cladone/gate-one/internal/core"
 	"cladone/gate-one/internal/license"
 	"cladone/gate-one/internal/pluginhost"
 	"cladone/gate-one/internal/usagewal"
+	"cladone/gate-one/pkg/pluginmanifest"
 	"cladone/gate-one/pkg/usage"
 )
 
@@ -94,33 +97,92 @@ func newUsageRuntime(
 		types:         hasType,
 	}
 	for _, pc := range cfg.Plugins {
-		var pts []usage.EventType
-		for _, name := range pc.Types {
-			pts = append(pts, usage.EventType(name))
+		name := pc.Name
+		types := pc.Types
+		filters := pc.Filters
+		maxLag := pc.MaxLagBytes
+		onMaxLag := pc.OnMaxLag
+		feature := pc.LicenseFeature
+		if pc.Manifest != "" {
+			raw, err := os.ReadFile(pc.Manifest)
+			if err != nil {
+				_ = u.close()
+				return nil, fmt.Errorf("usage: %s: manifest: %w",
+					pc.Name, err)
+			}
+			m, err := pluginmanifest.Parse(raw)
+			if err != nil {
+				_ = u.close()
+				return nil, fmt.Errorf("usage: %s: %w", pc.Name, err)
+			}
+			artifact, err := os.ReadFile(pc.Artifact)
+			if err != nil {
+				_ = u.close()
+				return nil, fmt.Errorf("usage: %s: artifact: %w",
+					pc.Name, err)
+			}
+			if err := m.Verify(cfg.Trust, artifact); err != nil {
+				_ = u.close()
+				return nil, fmt.Errorf("usage: %s: %w", pc.Name, err)
+			}
+			if name != "" && name != m.Name {
+				_ = u.close()
+				return nil, fmt.Errorf(
+					"usage: plugin name %q != manifest name %q",
+					name, m.Name)
+			}
+			name = m.Name
+			if m.Events == nil {
+				_ = u.close()
+				return nil, fmt.Errorf(
+					"usage: %s: manifest has no events subscription",
+					name)
+			}
+			types = append([]string(nil), m.Events.Types...)
+			filters = coreFilters(m.Events.Filters)
+			maxLag = m.Events.MaxLagBytes
+			onMaxLag = m.Events.OnMaxLag
+			feature = m.LicenseFeature
 		}
-		var filters *pluginhost.Filters
-		if pc.Filters != nil {
-			filters = &pluginhost.Filters{
-				Routes:        pc.Filters.Routes,
-				Tenants:       pc.Filters.Tenants,
-				Methods:       pc.Filters.Methods,
-				StatusClasses: pc.Filters.StatusClasses,
+		var pts []usage.EventType
+		for _, t := range types {
+			typ := usage.EventType(t)
+			if !u.types[typ] {
+				_ = u.close()
+				return nil, fmt.Errorf(
+					"usage: %s: type %q is not configured in usage.types",
+					name, t)
+			}
+			pts = append(pts, typ)
+		}
+		if len(pts) == 0 {
+			_ = u.close()
+			return nil, fmt.Errorf(
+				"usage: %s: at least one event type is required", name)
+		}
+		var hostFilters *pluginhost.Filters
+		if filters != nil {
+			hostFilters = &pluginhost.Filters{
+				Routes:        filters.Routes,
+				Tenants:       filters.Tenants,
+				Methods:       filters.Methods,
+				StatusClasses: filters.StatusClasses,
 			}
 		}
 		if err := host.Register(pluginhost.Plugin{
-			Name:           pc.Name,
+			Name:           name,
 			URL:            pc.URL,
 			Types:          pts,
-			Filters:        filters,
-			MaxLagBytes:    pc.MaxLagBytes,
-			OnMaxLag:       pc.OnMaxLag,
-			LicenseFeature: pc.LicenseFeature,
+			Filters:        hostFilters,
+			MaxLagBytes:    maxLag,
+			OnMaxLag:       onMaxLag,
+			LicenseFeature: feature,
 		}); err != nil {
 			_ = u.close()
 			return nil, fmt.Errorf("usage: %w", err)
 		}
 		for _, typ := range pts {
-			u.subs = append(u.subs, usageSub{typ: typ, filters: pc.Filters})
+			u.subs = append(u.subs, usageSub{typ: typ, filters: filters})
 		}
 	}
 	return u, nil
@@ -259,6 +321,86 @@ func (u *usageRuntime) emit(
 			log.Printf("usage: append %s: %v", typ, err)
 			u.store.Release(tk)
 		}
+	}
+}
+
+// authEvent appends an authentication lifecycle event. A successful
+// login calls this before creating the session (fail-closed); logout
+// and backchannel paths log and continue.
+func (u *usageRuntime) authEvent(
+	providerID, issuer string, ev authn.AuthEvent,
+) error {
+	if u == nil {
+		return nil
+	}
+	if !u.types[usage.TypeAuth] {
+		return nil
+	}
+	if !u.match(usage.TypeAuth, providerID, "", "", 0) {
+		return nil
+	}
+	tk, err := u.store.Reserve(usage.TypeAuth, usageMaxRecordBytes)
+	if err != nil {
+		return err
+	}
+	status := http.StatusOK
+	switch ev.Result {
+	case "failed":
+		status = http.StatusUnauthorized
+	case "denied":
+		status = http.StatusForbidden
+	}
+	result := ev.Result
+	if result == "no_session" {
+		result = "ok"
+	}
+	ts := ev.At
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	out := usage.Event{
+		SchemaVersion: usage.SchemaVersion,
+		Type:          usage.TypeAuth,
+		Timestamp:     ts.UTC(),
+		InstanceID:    u.nodeID,
+		Epoch:         u.epoch,
+		Tenant:        providerID,
+		SubjectID:     u.subjectID(issuer, ev.UserID),
+		Action:        ev.Action,
+		SessionID:     ev.SessionID,
+		Status:        status,
+		AuthResult:    result,
+	}
+	if _, err := u.store.Append(tk, &out); err != nil {
+		u.store.Release(tk)
+		return err
+	}
+	return nil
+}
+
+func (g *Gateway) authEventSink(
+	providerID, issuer string,
+) authn.EventSink {
+	return func(ev authn.AuthEvent) error {
+		if g.usage == nil {
+			return nil
+		}
+		return g.usage.authEvent(providerID, issuer, ev)
+	}
+}
+
+func coreFilters(
+	f *pluginmanifest.EventFilters,
+) *core.UsageFilters {
+	if f == nil {
+		return nil
+	}
+	return &core.UsageFilters{
+		Routes:        f.Routes,
+		Tenants:       f.Tenants,
+		Methods:       f.Methods,
+		StatusClasses: f.StatusClasses,
+		SampleRate:    f.SampleRate,
 	}
 }
 

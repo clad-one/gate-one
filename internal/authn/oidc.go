@@ -87,6 +87,10 @@ type OIDCConfig struct {
 	// else 30 days; never shorter than the session TTL.
 	RevocationTTL time.Duration
 
+	// EventSink receives login/logout/backchannel lifecycle events.
+	// nil = no audit events.
+	EventSink EventSink
+
 	// test seams
 	Now        func() time.Time
 	Rand       io.Reader
@@ -119,6 +123,8 @@ type OIDC struct {
 	store              RevocationStore
 	legacyCookies      bool
 	backchannelForward string
+	providerID         string
+	eventSink          EventSink
 
 	session *sessionCodec
 	tx      *txCodec
@@ -366,6 +372,8 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 		legacyCookies: cfg.LegacyTokenCookies,
 		backchannelForward: strings.TrimSpace(
 			cfg.BackchannelForwardURL),
+		providerID: cfg.ProviderID,
+		eventSink:  cfg.EventSink,
 		session: newSessionCodec(
 			sessionCookie, domain, u.Scheme == "https",
 			sessionKey, ttl, now, storeID),
@@ -632,10 +640,31 @@ func (o *OIDC) writeTxExpired(w http.ResponseWriter) {
 </main></body></html>`, html.EscapeString(login))
 }
 
+func (o *OIDC) emitAuth(ev AuthEvent) error {
+	if o.eventSink == nil {
+		return nil
+	}
+	if ev.At.IsZero() {
+		ev.At = o.now()
+	}
+	if ev.Provider == "" {
+		ev.Provider = o.providerID
+	}
+	if ev.Issuer == "" {
+		ev.Issuer = o.issuer
+	}
+	return o.eventSink(ev)
+}
+
+func (o *OIDC) auditFailure(result string) {
+	_ = o.emitAuth(AuthEvent{Action: "login_failed", Result: result})
+}
+
 func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	tx, ok := o.tx.read(r)
 	if !ok {
 		log.Printf("OIDC: login transaction expired/missing host=%s", r.Host)
+		o.auditFailure("failed")
 		o.writeTxExpired(w)
 		return
 	}
@@ -644,17 +673,24 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if e := r.URL.Query().Get("error"); e != "" {
 		desc := r.URL.Query().Get("error_description")
 		log.Printf("OIDC callback error: %s (%s)", e, desc)
+		result := "failed"
+		if e == "access_denied" {
+			result = "denied"
+		}
+		o.auditFailure(result)
 		http.Error(w, "authentication refused: "+e, http.StatusUnauthorized)
 		return
 	}
 	state := r.URL.Query().Get("state")
 	if subtle.ConstantTimeCompare(
 		[]byte(tx.State), []byte(state)) != 1 {
+		o.auditFailure("failed")
 		http.Error(w, "invalid login state", http.StatusBadRequest)
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
+		o.auditFailure("failed")
 		http.Error(w, "missing authorization code", http.StatusBadRequest)
 		return
 	}
@@ -666,12 +702,14 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 		exctx, code, oauth2.VerifierOption(tx.Verifier))
 	if err != nil {
 		log.Printf("OIDC token exchange failed: %v", err)
+		o.auditFailure("failed")
 		http.Error(w, "authentication failed", http.StatusBadGateway)
 		return
 	}
 	rawID, ok := token.Extra("id_token").(string)
 	if !ok || rawID == "" {
 		log.Printf("OIDC token exchange returned no id_token")
+		o.auditFailure("failed")
 		http.Error(w, "authentication failed", http.StatusBadGateway)
 		return
 	}
@@ -680,12 +718,14 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	idToken, err := o.verifier.Verify(vctx, rawID)
 	if err != nil {
 		log.Printf("OIDC id_token verification failed: %v", err)
+		o.auditFailure("failed")
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
 	if subtle.ConstantTimeCompare(
 		[]byte(idToken.Nonce), []byte(tx.Nonce)) != 1 {
 		log.Printf("OIDC nonce mismatch")
+		o.auditFailure("failed")
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
@@ -693,6 +733,7 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	var claims map[string]any
 	if err := idToken.Claims(&claims); err != nil {
 		log.Printf("OIDC claims: %v", err)
+		o.auditFailure("failed")
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
@@ -719,6 +760,20 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 			id.SessionID = stringClaim(accessClaims, "sid")
 		}
 	}
+	// Audit before creating the session: a successful login must not
+	// exist without its event (fail-closed on a full/stalled WAL).
+	if err := o.emitAuth(AuthEvent{
+		Action: "login", Result: "ok",
+		Provider: o.providerID, Issuer: o.issuer,
+		UserID: id.UserID, Username: id.Username, Email: id.Email,
+		SessionID: id.SessionID,
+	}); err != nil {
+		log.Printf("OIDC login audit failed: %v", err)
+		http.Error(w, "usage storage unavailable",
+			http.StatusServiceUnavailable)
+		return
+	}
+
 	// The RP session lifetime is our own (SessionTTL, default 1h),
 	// independent of the ID token's short exp: otherwise a 5-minute
 	// Keycloak ID token would force a full re-login every 5 minutes.
@@ -744,6 +799,17 @@ func (o *OIDC) handleLogout(w http.ResponseWriter, r *http.Request) {
 			log.Printf("OIDC logout revocation failed: %v", err)
 		}
 	}
+
+	result := "ok"
+	if !ok {
+		result = "no_session"
+	}
+	_ = o.emitAuth(AuthEvent{
+		Action: "logout", Result: result,
+		Provider: o.providerID, Issuer: o.issuer,
+		UserID: id.UserID, Username: id.Username, Email: id.Email,
+		SessionID: id.SessionID,
+	})
 
 	returnTo := o.origins.safeReturnTo(
 		r.URL.Query().Get("returnTo"))
@@ -911,6 +977,11 @@ func (o *OIDC) handleBackchannelLogout(
 	log.Printf(
 		"BACKCHANNEL LOGOUT issuer=%s sid=%q sub=%q",
 		o.issuer, sid, sub)
+	_ = o.emitAuth(AuthEvent{
+		Action: "backchannel_logout", Result: "ok",
+		Provider: o.providerID, Issuer: o.issuer,
+		UserID: sub, SessionID: sid, At: now,
+	})
 	w.WriteHeader(http.StatusOK)
 }
 

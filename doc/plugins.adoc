@@ -1,11 +1,12 @@
 = Gate One plugins and usage events
 
-Status: the event contract, signed extension manifest, per-type WAL,
-out-of-process host, reference plugin (`cmd/plugin-audit-echo`), the
-`usage` configuration block and the proxy emitter (request/error events,
-targeted 503 admission, `X-Gate-One-Subject`) are implemented.
-Auth/audit event emission from the login/logout handlers, signed
-manifest discovery (`plugins.d`) and the product documentation remain.
+Status: the event contract, signed extension manifest (per-plugin
+`manifest`/`artifact` + trust store), per-type WAL, out-of-process host,
+reference plugin (`cmd/plugin-audit-echo`), the `usage` configuration
+block, the proxy emitter (request/error events, targeted 503 admission,
+`X-Gate-One-Subject`) and OIDC auth events (login/logout/backchannel,
+fail-closed login) are implemented. A `plugins.d` directory scan, admin
+`audit` events, multi-node e2e and the product documentation remain.
 
 == 1. Scope and taxonomy
 
@@ -75,6 +76,8 @@ auth path never scans `plugins.d`.
   "durationMs": 12,
   "bytes": 42,
   "authResult": "ok",
+  "action": "login",
+  "sessionId": "...",
   "units": 1,
   "unitType": "request",
   "requestId": "...",
@@ -185,10 +188,12 @@ before starting/connecting. For a remote service the host verifies the
 manifest and the image/attestation (cosign/SLSA) and authenticates the
 channel; it cannot inspect the remote process at runtime.
 
-The current `usage.plugins` block is operator-managed (name, URL,
-types, filters, licence feature). Signed-manifest discovery
-(`plugins.d/*.json`) is the next step; `pkg/pluginmanifest` already
-implements the verification and is covered by tests.
+A plugin may reference a signed manifest (`manifest` + `artifact`) and
+`usage.trustStore`; the runtime verifies the signature, artefact digest,
+dependencies, revocation and host API, then uses the manifest's event
+subscription and licence feature. A `plugins.d/*.json` directory scan is
+a future convenience; the per-plugin reference is the current,
+operator-managed form.
 
 Every host → plugin call carries a short-lived signed assertion:
 

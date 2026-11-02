@@ -839,6 +839,7 @@ func buildAuthProvider(
 		defer cancel()
 		p, err := authn.NewOIDC(ctx, authn.OIDCConfig{
 			ProviderID:            ap.ID,
+			EventSink:             gw.authEventSink(ap.ID, ap.Issuer),
 			Issuer:                ap.Issuer,
 			ClientID:              ap.ClientID,
 			ClientSecret:          ap.ClientSecret,
@@ -2299,6 +2300,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Usage bus: reserve durable event space BEFORE auth/backend so a
 	// full share is answered with a 503 instead of losing an event.
+	// The auth provider returns a nil context on failure; keep the base
+	// context for the deferred event.
+	usageBaseCtx := ctx
 	var usageAdm *usageAdmission
 	if g.usage != nil {
 		var full usage.EventType
@@ -2316,8 +2320,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		statRecord(routeKey(route.Host, route.Path), sw.status)
 		if g.usage != nil && usageAdm != nil {
+			eventCtx := ctx
+			if eventCtx == nil {
+				eventCtx = usageBaseCtx
+			}
 			g.usage.emit(
-				usageAdm, route, ctx, g.providerFor(cr),
+				usageAdm, route, eventCtx, g.providerFor(cr),
 				sw.status, time.Since(start), sw.bytes, requestID)
 		}
 	}()

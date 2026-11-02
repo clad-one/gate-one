@@ -1,6 +1,12 @@
 package core
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -120,5 +126,79 @@ func TestUsageConfigMissingSecret(t *testing.T) {
 	))
 	if err == nil || !strings.Contains(err.Error(), "TEST_SUBJECT_SECRET") {
 		t.Fatalf("err = %v, want missing secret", err)
+	}
+}
+
+func TestUsageConfigSignedManifest(t *testing.T) {
+	t.Setenv("TEST_SUBJECT_SECRET", "s")
+	t.Setenv("TEST_PLUGIN_SECRET", "p")
+	dir := t.TempDir()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustPath := filepath.Join(dir, "trust.json")
+	trust := `{"keys":{"k1":"` +
+		base64.RawURLEncoding.EncodeToString(pub) +
+		`"},"allowedNames":["com.cladone.*"],"coreVersion":"1.5.0"}`
+	if err := os.WriteFile(trustPath, []byte(trust), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(dir, "audit.json")
+	artifactPath := filepath.Join(dir, "audit")
+	if err := os.WriteFile(manifestPath, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := fmt.Sprintf(`{
+		"authProvider": {
+			"type": "dev",
+			"loginBaseUrl": "http://login.dev.test:3000",
+			"cookieDomain": "dev.test"
+		},
+		"usage": {
+			"dir": "u",
+			"subjectSecretEnv": "TEST_SUBJECT_SECRET",
+			"pluginSecretEnv": "TEST_PLUGIN_SECRET",
+			"trustStore": %q,
+			"types": {"auth": {"shareBytes": 1000}},
+			"plugins": [{
+				"name": "com.cladone.audit",
+				"url": "http://127.0.0.1:9100",
+				"manifest": %q,
+				"artifact": %q
+			}]
+		},
+		"routes": [{
+			"host": "app.dev.test", "path": "/*", "frontend": true,
+			"backend": "http://127.0.0.1:1", "auth": {}
+		}]
+	}`, trustPath, manifestPath, artifactPath)
+	cfg, err := loadAuthTest(t, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Usage.Trust.Keys) != 1 {
+		t.Fatalf("trust keys = %d", len(cfg.Usage.Trust.Keys))
+	}
+	if !filepath.IsAbs(cfg.Usage.Plugins[0].Manifest) ||
+		!filepath.IsAbs(cfg.Usage.Plugins[0].Artifact) {
+		t.Fatal("manifest/artifact paths not resolved")
+	}
+}
+
+func TestUsageConfigManifestRequiresTrustStore(t *testing.T) {
+	t.Setenv("TEST_SUBJECT_SECRET", "s")
+	t.Setenv("TEST_PLUGIN_SECRET", "p")
+	raw := usageConfigJSON(
+		"u",
+		`{"auth": {"shareBytes": 1000}}`,
+		`[{"name": "com.cladone.audit", "url": "http://127.0.0.1:9100", "manifest": "/tmp/m.json", "artifact": "/tmp/a"}]`,
+	)
+	_, err := loadAuthTest(t, raw)
+	if err == nil || !strings.Contains(err.Error(), "trustStore") {
+		t.Fatalf("err = %v, want trustStore", err)
 	}
 }

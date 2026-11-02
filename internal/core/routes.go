@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"cladone/gate-one/internal/license"
+	"cladone/gate-one/pkg/pluginmanifest"
 	"cladone/gate-one/pkg/usage"
 )
 
@@ -1333,9 +1334,14 @@ type UsageConfig struct {
 	BudgetBytes int64 `json:"budgetBytes,omitempty"`
 	// Types maps a durable event type to its WAL share/fsync policy.
 	Types map[string]UsageTypeConfig `json:"types,omitempty"`
+	// TrustStore is the path of the signed plugin trust store (required
+	// when a plugin declares a signed manifest).
+	TrustStore string `json:"trustStore,omitempty"`
 	// Plugins are the out-of-process event consumers.
 	Plugins []UsagePluginConfig `json:"plugins,omitempty"`
 
+	// Trust is the parsed trust store.
+	Trust pluginmanifest.TrustStore `json:"-"`
 	// SubjectSecret/PluginSecret are resolved from the environment.
 	SubjectSecret []byte `json:"-"`
 	PluginSecret  []byte `json:"-"`
@@ -1351,13 +1357,20 @@ type UsageTypeConfig struct {
 
 // UsagePluginConfig is one out-of-process consumer.
 type UsagePluginConfig struct {
-	Name           string        `json:"name"`
-	URL            string        `json:"url"`
-	Types          []string      `json:"types"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	// Types/Filters/MaxLagBytes/OnMaxLag/LicenseFeature are used when
+	// Manifest is empty. With a signed manifest, the manifest is
+	// authoritative for the subscription.
+	Types          []string      `json:"types,omitempty"`
 	Filters        *UsageFilters `json:"filters,omitempty"`
 	MaxLagBytes    int64         `json:"maxLagBytes,omitempty"`
 	OnMaxLag       string        `json:"onMaxLag,omitempty"` // block | drop
 	LicenseFeature string        `json:"licenseFeature,omitempty"`
+	// Manifest/Artifact are the signed plugin manifest and its artefact
+	// (binary/container), relative to the config file.
+	Manifest string `json:"manifest,omitempty"`
+	Artifact string `json:"artifact,omitempty"`
 }
 
 // UsageFilters narrows a plugin subscription. Empty = all.
@@ -2393,6 +2406,21 @@ func (c *Config) resolveUsage(baseDir string) error {
 			"usage: sum of type shares (%d) exceeds budgetBytes (%d)",
 			sum, u.BudgetBytes)
 	}
+	if u.TrustStore != "" {
+		trustPath := u.TrustStore
+		if !filepath.IsAbs(trustPath) {
+			trustPath = filepath.Join(baseDir, trustPath)
+		}
+		raw, err := os.ReadFile(trustPath)
+		if err != nil {
+			return fmt.Errorf("usage.trustStore: %w", err)
+		}
+		ts, err := pluginmanifest.LoadTrustStore(raw)
+		if err != nil {
+			return fmt.Errorf("usage.trustStore: %w", err)
+		}
+		u.Trust = ts
+	}
 	if len(u.Plugins) == 0 {
 		return fmt.Errorf("usage: at least one plugin is required")
 	}
@@ -2414,16 +2442,45 @@ func (c *Config) resolveUsage(baseDir string) error {
 			return fmt.Errorf(
 				"usage.plugins[%s]: url must be absolute http(s)", p.Name)
 		}
-		if len(p.Types) == 0 {
-			return fmt.Errorf(
-				"usage.plugins[%s]: at least one event type is required",
-				p.Name)
-		}
-		for _, t := range p.Types {
-			if _, ok := u.Types[t]; !ok {
+		if p.Manifest != "" {
+			if u.TrustStore == "" {
 				return fmt.Errorf(
-					"usage.plugins[%s]: type %q is not configured in usage.types",
-					p.Name, t)
+					"usage.plugins[%s]: a signed manifest requires usage.trustStore",
+					p.Name)
+			}
+			if p.Artifact == "" {
+				return fmt.Errorf(
+					"usage.plugins[%s]: artifact is required with manifest",
+					p.Name)
+			}
+			for _, f := range []struct {
+				field string
+				path  *string
+			}{
+				{"manifest", &p.Manifest},
+				{"artifact", &p.Artifact},
+			} {
+				if !filepath.IsAbs(*f.path) {
+					*f.path = filepath.Join(baseDir, *f.path)
+				}
+				if _, err := os.Stat(*f.path); err != nil {
+					return fmt.Errorf(
+						"usage.plugins[%s].%s: %w",
+						p.Name, f.field, err)
+				}
+			}
+		} else {
+			if len(p.Types) == 0 {
+				return fmt.Errorf(
+					"usage.plugins[%s]: at least one event type is required",
+					p.Name)
+			}
+			for _, t := range p.Types {
+				if _, ok := u.Types[t]; !ok {
+					return fmt.Errorf(
+						"usage.plugins[%s]: type %q is not configured in usage.types",
+						p.Name, t)
+				}
 			}
 		}
 		switch p.OnMaxLag {
