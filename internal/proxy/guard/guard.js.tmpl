@@ -19,8 +19,8 @@
   // (precedence: the markup wins).
   var UIGATE = %[3]s;
   // User badge (route userBadge config): visible handle at the top
-  // edge; hover = compact, click the handle = extended, triple click =
-  // hide for 2 s (escape hatch for covered UI).
+  // edge; hover = compact, click anywhere on the badge = toggle the
+  // full view, double click = hide for 2 s (escape hatch for covered UI).
   var USERBADGE = %[4]s;
   // Client-side rewrite (route upstream.rewriteBody): origin hosts +
   // public target + prefix exceptions, or null. Drives the
@@ -627,15 +627,15 @@
     }
   }
 
-  // badgeTripleClick: three quick clicks on the badge chrome hide it
+  // badgeDoubleClick: two quick clicks on the badge chrome hide it
   // for two seconds. The user can then reach controls the badge
   // covers, even while the pointer stays near the top edge.
-  function badgeTripleClick() {
+  function badgeDoubleClick() {
     var now = Date.now();
     if (now - badgeLastClick > 600) badgeClickCount = 0;
     badgeLastClick = now;
     badgeClickCount++;
-    return badgeClickCount >= 3;
+    return badgeClickCount >= 2;
   }
 
   function snoozeBadge() {
@@ -1392,25 +1392,24 @@
     // click outside → fold back. The logout button does not toggle:
     // it navigates (its own onclick).
     if (authed && badgeEl) {
+      // Any interaction with the badge ends the transient "just
+      // logged in" reveal. Otherwise a click that collapses the
+      // badge could leave it visible for the rest of the 2 s timer,
+      // which looked like a blink.
+      badgeEl.classList.remove("cladone-userbadge-reveal");
       if (badgeEl.contains(t)) {
         // Interactive children keep their native action.
         if (t.closest("a,button,input,select,textarea,label")) {
           return;
         }
-        // Triple click anywhere on the non-interactive badge chrome
-        // temporarily hides it, even if the pointer stays near the
-        // top edge. This is the escape hatch for covered UI.
-        var triple = badgeTripleClick();
-        if (triple) {
+        // A simple click anywhere on the non-interactive badge
+        // chrome toggles the full view. A double click hides the badge
+        // for two seconds even if the pointer stays near the top edge
+        // (escape hatch for covered UI).
+        var dbl = badgeDoubleClick();
+        badgeEl.classList.toggle("cladone-userbadge-open");
+        if (dbl) {
           snoozeBadge();
-          return;
-        }
-        // Only the handle toggles the FULL view. A click on the
-        // body (e.g. the empty space right of the logout button or
-        // the scope chips) must not toggle: repeated toggles looked
-        // like a two-second blink. Use the handle or click outside.
-        if (t.closest(".cladone-userbadge-tab")) {
-          badgeEl.classList.toggle("cladone-userbadge-open");
         }
         return;
       }
