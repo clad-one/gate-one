@@ -15,3 +15,10 @@ dist/
 test/e2e/browser/node_modules/
 test/e2e/browser/test-results/
 test/e2e/browser/playwright-report/
+
+# Private release signing material
+/release/*.key
+/release/*.password
+/release/*.sig
+/release/*.bundle
+/release/*.pem

@@ -446,18 +446,37 @@ tool names:
   session DELETE). Tool filtering is applied to JSON and SSE
   `tools/list` responses.
 
-## Preparing a release (local only)
+## Preparing a release
+
+The release pipeline lives in this repository. It builds signed
+artifacts for linux/darwin/arm64+amd64 and windows/amd64, attaches the
+published schemas, examples and docs, generates an SPDX SBOM per target
+and signs `SHA256SUMS` with cosign.
 
 ```bash
-./release.sh                 # version from ./VERSION
-VERSION=1.0.0 ./release.sh   # override
+./release.sh --dry-run
+
+COSIGN_KEY=~/.config/gate-one/release/cosign.key \
+COSIGN_PASSWORD="$(cat ~/.config/gate-one/release/cosign.password)" \
+COSIGN_PUB=release/cosign.pub \
+./release.sh
 ```
 
-Builds static binaries for linux/darwin/arm64+amd64 and windows/amd64
-into `dist/`, with a tarball per platform (binary + schemas + examples +
-README/LICENSE), `SHA256SUMS` and `RELEASE_NOTES.md`. The script never
-pushes, tags or uploads anything — this repository intentionally has no
-remote.
+The source tag must be `vX.Y.Z`. When the product repository is present
+(`GATE_ONE_PRODUCT`, default `../gate-one-product`), its tag must be
+`vX.Y.Z` or `vX.Y.Z-docs.N` for a documentation-only release; the
+product site archive is included. Without the product repository, the
+release still builds the binaries with the source schemas/examples but
+omits the site archive and the product-only schemas.
+
+Artifacts land in `dist/`:
+`gate-one_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows), the site
+archive, SBOMs, `RELEASE_MANIFEST.json`, `SHA256SUMS`,
+`SHA256SUMS.bundle` and `cosign.pub`. The script never pushes, tags or
+uploads anything.
+
+The verification key is committed as `release/cosign.pub`; the private
+key stays outside the repository.
 
 ## Releasing to the infrastructure repository
 
@@ -492,7 +511,8 @@ test/ui/            guard-script harness (jsdom)
 sw-sim/             service-worker simulator
 testdata/           reference production config; testdata/auth/ broker example
 doc/                auth broker, auth providers, test plan
-release.sh          local release artifacts (never pushes)
+release.sh          signed release artifacts (never pushes)
+release/            public verification key for the release signature
 ```
 
 ## License
