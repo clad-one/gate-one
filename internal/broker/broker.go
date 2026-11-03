@@ -116,6 +116,8 @@ type authCode struct {
 	Username          string
 	Email             string
 	Roles             []string
+	Scopes            []string
+	Claims            map[string]any
 	SID               string
 	IssuedAt          time.Time
 	Expires           time.Time
@@ -128,6 +130,8 @@ type refreshGrant struct {
 	Username string
 	Email    string
 	Roles    []string
+	Scopes   []string
+	Claims   map[string]any
 	SID      string
 	IssuedAt time.Time
 	Scope    string
@@ -788,7 +792,21 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 		oauthError(w, http.StatusBadGateway, "upstream_error", "upstream subject is empty")
 		return
 	}
-	roles := rt.rolesFor(email, claims)
+	issuer := claimString(claims, "iss")
+	if issuer == "" {
+		issuer = rt.upstreamIssuer(f.AdapterID)
+	}
+	user, err := b.upsertFederatedUser(
+		r.Context(), rt, issuer, sub, email, a.Username, claims)
+	if err != nil {
+		oauthError(w, http.StatusBadGateway, "server_error", "user store unavailable")
+		return
+	}
+	if user.Disabled {
+		oauthError(w, http.StatusForbidden, "access_denied", "user is disabled")
+		return
+	}
+	rights := rt.effectiveRights(user, claims)
 	username := a.Username
 	if username == "" {
 		username = email
@@ -813,7 +831,9 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 		Sub:      sub,
 		Username: username,
 		Email:    email,
-		Roles:    roles,
+		Roles:    rights.Roles,
+		Scopes:   rights.Scopes,
+		Claims:   rights.Claims,
 	}, upstream)
 }
 
@@ -824,6 +844,8 @@ type loginIdentity struct {
 	Username string
 	Email    string
 	Roles    []string
+	Scopes   []string
+	Claims   map[string]any
 }
 
 // finishLogin stores the broker SSO session, sets the cookie, issues a
@@ -876,6 +898,8 @@ func (b *Broker) finishLogin(
 		Username:          id.Username,
 		Email:             id.Email,
 		Roles:             id.Roles,
+		Scopes:            id.Scopes,
+		Claims:            id.Claims,
 		SID:               sid,
 		IssuedAt:          b.now(),
 		Expires:           b.now().Add(5 * time.Minute),
@@ -963,8 +987,9 @@ func (b *Broker) tokenCode(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "session revoked")
 		return
 	}
-	b.writeTokens(r.Context(), w, rt, c.Subject, c.Username, c.Email, c.Roles, c.SID,
-		c.Scope, rt.defaultAudience(), c.Nonce, c.ClientID, true, true)
+	b.writeTokens(r.Context(), w, rt, c.Subject, c.Username, c.Email, c.Roles,
+		c.Scopes, c.Claims, c.SID, c.Scope, rt.defaultAudience(), c.Nonce,
+		c.ClientID, true, true)
 }
 
 func (b *Broker) tokenClientCredentials(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
@@ -987,7 +1012,7 @@ func (b *Broker) tokenClientCredentials(w http.ResponseWriter, r *http.Request, 
 		scope = "mcp-tools"
 	}
 	b.writeTokens(r.Context(), w, rt, clientID, clientID, "", rt.cfg.DefaultRoles,
-		"", scope, aud, "", clientID, false, false)
+		nil, nil, "", scope, aud, "", clientID, false, false)
 }
 
 func (b *Broker) tokenRefresh(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
@@ -1010,16 +1035,18 @@ func (b *Broker) tokenRefresh(w http.ResponseWriter, r *http.Request, rt *tenant
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "session revoked")
 		return
 	}
-	b.writeTokens(r.Context(), w, rt, g.Subject, g.Username, g.Email, g.Roles, g.SID,
-		g.Scope, g.Audience, "", g.ClientID, false, true)
+	b.writeTokens(r.Context(), w, rt, g.Subject, g.Username, g.Email, g.Roles,
+		g.Scopes, g.Claims, g.SID, g.Scope, g.Audience, "", g.ClientID, false, true)
 }
 
 func (b *Broker) writeTokens(
 	ctx context.Context, w http.ResponseWriter, rt *tenantRuntime,
-	sub, username, email string, roles []string, sid, scope, aud,
-	nonce, clientID string, withID, withRefresh bool,
+	sub, username, email string, roles, scopes []string,
+	extraClaims map[string]any, sid, scope, aud, nonce, clientID string,
+	withID, withRefresh bool,
 ) {
 	now := b.now()
+	scope = mergeScopes(scope, scopes)
 	access := map[string]any{
 		"iss": b.issuer(rt), "sub": sub, "aud": aud,
 		"exp": now.Add(rt.cfg.accessTTL()).Unix(),
@@ -1027,6 +1054,7 @@ func (b *Broker) writeTokens(
 		"tenant": rt.cfg.ID, "roles": roles, "scope": scope,
 		"sid": sid, "email": email, "preferred_username": username,
 	}
+	mergeExtraClaims(access, extraClaims)
 	accessToken, err := rt.activeKey().sign(access)
 	if err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", "signing failed")
@@ -1042,9 +1070,10 @@ func (b *Broker) writeTokens(
 			"iss": b.issuer(rt), "sub": sub, "aud": clientID,
 			"exp": now.Add(rt.cfg.idTTL()).Unix(),
 			"iat": now.Unix(), "nonce": nonce,
-			"tenant": rt.cfg.ID, "roles": roles, "sid": sid,
+			"tenant": rt.cfg.ID, "roles": roles, "scope": scope, "sid": sid,
 			"email": email, "preferred_username": username,
 		}
+		mergeExtraClaims(id, extraClaims)
 		raw, err := rt.activeKey().sign(id)
 		if err != nil {
 			oauthError(w, http.StatusInternalServerError, "server_error", "signing failed")
@@ -1057,7 +1086,8 @@ func (b *Broker) writeTokens(
 		if err := b.store.PutRefresh(ctx, rt.cfg.ID, refreshToken, &refreshGrant{
 			Tenant: rt.cfg.ID, ClientID: clientID,
 			Subject: sub, Username: username, Email: email,
-			Roles: roles, SID: sid, Scope: scope, Audience: aud,
+			Roles: roles, Scopes: scopes, Claims: extraClaims,
+			SID: sid, Scope: scope, Audience: aud,
 			IssuedAt: now,
 			Expires:  now.Add(time.Duration(rt.cfg.RefreshTokenTTL) * time.Second),
 		}, time.Duration(rt.cfg.RefreshTokenTTL)*time.Second); err != nil {
@@ -1220,33 +1250,6 @@ func (rt *tenantRuntime) domainAllowed(email string, claims map[string]any) bool
 	return false
 }
 
-func (rt *tenantRuntime) rolesFor(email string, claims map[string]any) []string {
-	set := map[string]bool{}
-	for _, r := range rt.cfg.DefaultRoles {
-		if r != "" {
-			set[r] = true
-		}
-	}
-	for _, e := range rt.cfg.AdminEmails {
-		if strings.EqualFold(e, email) {
-			set["admin"] = true
-		}
-	}
-	for _, group := range claimStrings(claims["groups"]) {
-		for _, r := range rt.cfg.GroupRoles[group] {
-			if r != "" {
-				set[r] = true
-			}
-		}
-	}
-	out := make([]string, 0, len(set))
-	for r := range set {
-		out = append(out, r)
-	}
-	sortStrings(out)
-	return out
-}
-
 func (b *Broker) randomHex(n int) string {
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(b.rand, buf); err != nil {
@@ -1341,10 +1344,51 @@ func claimStrings(v any) []string {
 	}
 }
 
-func sortStrings(v []string) {
-	for i := 1; i < len(v); i++ {
-		for j := i; j > 0 && v[j] < v[j-1]; j-- {
-			v[j], v[j-1] = v[j-1], v[j]
+// upsertFederatedUser resolves the single external identity link
+// (issuer, subject). The user record is a broker-side authorization
+// profile; it never contains an upstream credential. The IdP remains
+// the only source of authentication for this user.
+func (b *Broker) upsertFederatedUser(
+	ctx context.Context, rt *tenantRuntime,
+	issuer, subject, email, name string, claims map[string]any,
+) (*User, error) {
+	verified := true
+	if v, ok := claims["email_verified"].(bool); ok {
+		verified = v
+	}
+	u, err := b.accounts.GetUserByIdentity(ctx, rt.cfg.ID, issuer, subject)
+	switch {
+	case err == nil:
+		if u.Kind != "" && u.Kind != "federated" {
+			return nil, fmt.Errorf("broker: identity collision with a non-federated user")
 		}
+		u.Kind = "federated"
+		u.Email = email
+		u.Name = name
+		u.EmailVerified = verified
+		if err := b.accounts.PutUser(ctx, u); err != nil {
+			return nil, err
+		}
+		return u, nil
+	case errors.Is(err, errAccountNotFound):
+		u = &User{
+			ID:            b.randomHex(16),
+			Tenant:        rt.cfg.ID,
+			Kind:          "federated",
+			Email:         email,
+			Name:          name,
+			EmailVerified: verified,
+			Issuer:        issuer,
+			Subject:       subject,
+			CreatedAt:     b.now(),
+		}
+		if err := b.accounts.PutUser(ctx, u); err != nil {
+			return nil, err
+		}
+		log.Printf("broker: provisioned federated user tenant=%s issuer=%s sub=%s",
+			rt.cfg.ID, issuer, subject)
+		return u, nil
+	default:
+		return nil, err
 	}
 }

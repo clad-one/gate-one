@@ -6,6 +6,7 @@ dist/
 
 # Build artifacts and local state
 /gate-one
+/cladone-auth
 /gate-one-state.db
 /gate-one-state.db.lock
 /fake-google

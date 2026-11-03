@@ -84,8 +84,9 @@ func (b *Broker) loginSubmit(
 	if err == nil {
 		user, err = b.accounts.GetUserByEmail(r.Context(), rt.cfg.ID, email)
 	}
-	if err != nil || user == nil || !user.EmailVerified ||
-		!verifyPassword(user.PasswordHash, password) {
+	if err != nil || user == nil || user.Disabled ||
+		(user.Kind != "" && user.Kind != "local") ||
+		!user.EmailVerified || !verifyPassword(user.PasswordHash, password) {
 		// Generic message: never reveal whether the account exists or
 		// whether only the email is unverified.
 		_ = b.store.PutFlow(r.Context(), rt.cfg.ID, flowID, f, 10*time.Minute)
@@ -99,11 +100,14 @@ func (b *Broker) loginSubmit(
 	if username == "" {
 		username = user.Email
 	}
+	rights := rt.effectiveRights(user, nil)
 	b.finishLogin(w, r, rt, f, loginIdentity{
 		Sub:      user.ID,
 		Username: username,
 		Email:    user.Email,
-		Roles:    user.Roles,
+		Roles:    rights.Roles,
+		Scopes:   rights.Scopes,
+		Claims:   rights.Claims,
 	}, nil)
 }
 

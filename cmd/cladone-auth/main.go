@@ -31,8 +31,10 @@ func main() {
 			os.Exit(runKeygen(os.Args[2:]))
 		case "revoke":
 			os.Exit(runRevoke(os.Args[2:]))
+		case "user":
+			os.Exit(runUser(os.Args[2:]))
 		case "help", "-h", "--help":
-			fmt.Println("usage: cladone-auth [keygen|revoke] [-config ...]")
+			fmt.Println("usage: cladone-auth [keygen|revoke|user] [-config ...]")
 			return
 		}
 	}

@@ -129,7 +129,97 @@ POST /t/{tenant}/token
 GET  /t/{tenant}/logout
 ----
 
-== 4. Configuration Gate One
+== 4. Droits, mappings et utilisateurs
+
+Le broker a deux sources de droits :
+
+* les **mappings** de claims de l’IdP, recalculés à chaque login fédéré ;
+* les **grants** stockés sur l’utilisateur broker, pour les comptes locaux
+  comme fédérés.
+
+Les droits effectifs sont l’union :
+
+----
+défauts du tenant
++ adminEmails
++ mappings des claims (fédéré)
++ rôles/scopes/claims de l’utilisateur
+----
+
+=== Mappings
+
+[source,json]
+----
+"mappings": [
+  {
+    "claim": "groups",
+    "values": ["admins"],
+    "roles": ["admin"]
+  },
+  {
+    "claim": "realm_access.roles",
+    "values": ["offline_access"],
+    "roles": ["user"]
+  },
+  {
+    "claim": "department",
+    "scopes": ["read:things"],
+    "claims": { "department": "support" }
+  }
+]
+----
+
+`claim` est un chemin pointé dans les claims du token. `values` vide =
+présence du claim. Les claims réservés (`sub`, `iss`, `aud`, `roles`,
+`scope`, etc.) ne peuvent pas être écrasés. Le bloc legacy `groupRoles`
+reste supporté pour le seul claim `groups`.
+
+=== Utilisateurs locaux et fédérés
+
+Un utilisateur a **un seul lien externe** `(issuer, subject)` pour les
+comptes fédérés. Au premier login fédéré, le broker crée un utilisateur
+JIT sans droits ; l’admin peut ensuite lui assigner rôles/scopes/claims.
+Un compte local possède un mot de passe et les mêmes champs de droits.
+
+Le broker ne recrée jamais le compte IdP. Il stocke seulement le profil
+d’autorisation broker et son lien d’identité.
+
+Le CLI fonctionne sur la même configuration et le même store Redis :
+
+[source,bash]
+----
+# compte local
+cladone-auth user create -config cladone-auth.json -tenant mycompany \
+  -kind local -email alice@mycompany.example.com \
+  -password 'mot-de-passe-long' -roles support \
+  -scopes read:things -claims '{"department":"support"}'
+
+# compte fédéré (JIT ou pré-provisionné)
+cladone-auth user create -config cladone-auth.json -tenant mycompany \
+  -kind federated -issuer https://accounts.google.com -sub 'google-sub-1' \
+  -email alice@mycompany.example.com -roles support
+
+# lister / inspecter
+cladone-auth user list -config cladone-auth.json -tenant mycompany
+cladone-auth user show -config cladone-auth.json -tenant mycompany \
+  -issuer https://accounts.google.com -sub 'google-sub-1'
+
+# remplacer les grants (utilisateur fédéré : lookup par identité)
+cladone-auth user set -config cladone-auth.json -tenant mycompany \
+  -issuer https://accounts.google.com -sub 'google-sub-1' \
+  -roles support,auditor -scopes read:things \
+  -claims '{"department":"support"}'
+
+# relier un utilisateur fédéré à un nouveau subject (changement Auth0)
+cladone-auth user set -config cladone-auth.json -tenant mycompany \
+  -id <user-id> -new-issuer https://tenant.eu.auth0.com/ -new-sub 'auth0|...'
+----
+
+`user set` remplace les listes de rôles/scopes et l’objet claims fournis.
+Les changements prennent effet au prochain login ; pour les invalider
+immédiatement, utiliser `cladone-auth revoke` sur le `sub`/`sid` concerné.
+
+== 5. Configuration Gate One
 
 [source,json]
 ----
@@ -194,7 +284,7 @@ Pour une API machine non-MCP :
 }
 ----
 
-== 5. Politique
+== 6. Politique
 
 * `tenant` : identifiant du tenant, dans l'ID token et l'access token.
 * `roles` : `defaultRoles` + `adminEmails` + `groupRoles`.
@@ -207,7 +297,7 @@ Pour une API machine non-MCP :
 Le broker ne décide pas de l'accès aux routes Gate One. Il authentifie et
 asserte une identité ; Gate One applique `auth.when` / `auth.identity`.
 
-== 6. Mode dégradé
+== 7. Mode dégradé
 
 Gate One construit chaque provider indépendamment :
 
@@ -219,7 +309,7 @@ Gate One construit chaque provider indépendamment :
 
 Le broker doit être supervisé par tenant : `/health` et les logs.
 
-== 7. Redis, révocation et limites V1
+== 8. Redis, révocation et limites V1
 
 Le broker utilise Redis si le bloc `redis` est présent. En production
 multi-instance, Redis est requis : flows, codes et refresh tokens doivent
@@ -267,7 +357,7 @@ Autres limites V1 :
 * Pas de mTLS/API key côté Gate One : le broker authentifie le client et
   émet un JWT (V1.1).
 
-== 8. Lancement et rotation
+== 9. Lancement et rotation
 
 [source,bash]
 ----
@@ -291,7 +381,7 @@ signe, toutes les clés publiées restent dans JWKS pendant le
 chevauchement. `keyFile` reste accepté pour une clé unique ; les deux
 sont mutuellement exclusifs.
 
-== 9. Tests
+== 10. Tests
 
 Voir `doc/auth-test-plan.adoc`. Les tests d'acceptation :
 

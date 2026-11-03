@@ -109,6 +109,7 @@ func (b *Broker) register(
 		user = &localUser{
 			ID:           b.randomHex(16),
 			Tenant:       rt.cfg.ID,
+			Kind:         "local",
 			Email:        email,
 			Name:         strings.TrimSpace(req.Name),
 			PasswordHash: hash,

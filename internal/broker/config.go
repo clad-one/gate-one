@@ -87,8 +87,14 @@ type Tenant struct {
 	AllowedDomains []string `json:"allowedDomains,omitempty"`
 	// AdminEmails receive the "admin" role.
 	AdminEmails []string `json:"adminEmails,omitempty"`
-	// GroupRoles maps an upstream group/claim value to broker roles.
+	// GroupRoles maps an upstream group/claim value to broker roles
+	// (legacy, groups claim only). Prefer Mappings.
 	GroupRoles map[string][]string `json:"groupRoles,omitempty"`
+
+	// Mappings translates upstream claims into broker roles/scopes/
+	// claims. It is evaluated on every federated login; the results are
+	// not persisted on the user.
+	Mappings []MappingRule `json:"mappings,omitempty"`
 
 	AccessTokenTTL  int `json:"accessTokenTtlSeconds,omitempty"`
 	IDTokenTTL      int `json:"idTokenTtlSeconds,omitempty"`
@@ -418,6 +424,9 @@ func (c *Config) Validate() error {
 					t.ID, t.RegistrationSecretEnv)
 			}
 			t.RegistrationSecret = secret
+		}
+		if err := validateMappingRules(t.Mappings); err != nil {
+			return fmt.Errorf("tenants[%s]: %w", t.ID, err)
 		}
 		if t.AccessTokenTTL <= 0 {
 			t.AccessTokenTTL = 600 // 10 minutes

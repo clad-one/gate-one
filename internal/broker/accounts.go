@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/mail"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,17 +21,63 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// localUser is a broker-owned account (local email/password identity).
-// Federated identities are linked separately in a later slice.
-type localUser struct {
-	ID            string    `json:"id"`
-	Tenant        string    `json:"tenant"`
-	Email         string    `json:"email"`
-	Name          string    `json:"name,omitempty"`
-	PasswordHash  string    `json:"passwordHash"`
-	EmailVerified bool      `json:"emailVerified"`
-	Roles         []string  `json:"roles,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+// User is a broker-owned authorization profile. A local user has a
+// password; a federated user has exactly one external identity link
+// (issuer, subject). Roles/scopes/claims are always managed on this
+// object, for both kinds.
+type User struct {
+	ID            string         `json:"id"`
+	Tenant        string         `json:"tenant"`
+	Kind          string         `json:"kind,omitempty"` // local | federated
+	Email         string         `json:"email"`
+	Name          string         `json:"name,omitempty"`
+	PasswordHash  string         `json:"passwordHash,omitempty"`
+	EmailVerified bool           `json:"emailVerified,omitempty"`
+	Issuer        string         `json:"issuer,omitempty"`
+	Subject       string         `json:"subject,omitempty"`
+	Roles         []string       `json:"roles,omitempty"`
+	Scopes        []string       `json:"scopes,omitempty"`
+	Claims        map[string]any `json:"claims,omitempty"`
+	Disabled      bool           `json:"disabled,omitempty"`
+	CreatedAt     time.Time      `json:"createdAt"`
+	UpdatedAt     time.Time      `json:"updatedAt,omitempty"`
+}
+
+// localUser is kept as an alias for existing tests and callers.
+type localUser = User
+
+func (u *User) normalize() {
+	if u.Kind == "" {
+		u.Kind = "local"
+	}
+	u.Email = strings.ToLower(strings.TrimSpace(u.Email))
+	u.Issuer = strings.TrimSpace(u.Issuer)
+	u.Subject = strings.TrimSpace(u.Subject)
+	u.Roles = uniqueSorted(u.Roles)
+	u.Scopes = uniqueSorted(u.Scopes)
+}
+
+func uniqueSorted(items []string) []string {
+	set := map[string]bool{}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			set[item] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for item := range set {
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (u *User) identityKey() string {
+	if u == nil || u.Kind != "federated" || u.Issuer == "" || u.Subject == "" {
+		return ""
+	}
+	return u.Issuer + "\x00" + u.Subject
 }
 
 // verifyToken is the server-side state of an email verification link.
@@ -45,62 +92,148 @@ var errAccountNotFound = errors.New("broker: account not found")
 var errVerifyTokenNotFound = errors.New("broker: verification token not found")
 
 type accountsStore interface {
-	PutUser(ctx context.Context, u *localUser) error
-	GetUserByEmail(ctx context.Context, tenant, email string) (*localUser, error)
+	PutUser(ctx context.Context, u *User) error
+	GetUserByEmail(ctx context.Context, tenant, email string) (*User, error)
+	GetUserByID(ctx context.Context, tenant, id string) (*User, error)
+	GetUserByIdentity(ctx context.Context, tenant, issuer, subject string) (*User, error)
+	ListUsers(ctx context.Context, tenant string) ([]*User, error)
+	DeleteUser(ctx context.Context, tenant, id string) error
 	SetUserVerified(ctx context.Context, tenant, id string) error
 	PutVerifyToken(ctx context.Context, tenant, tokenHash string, v *verifyToken, ttl time.Duration) error
 	TakeVerifyToken(ctx context.Context, tenant, tokenHash string) (*verifyToken, error)
 	Close() error
 }
 
+func acctKey(tenant, v string) string { return tenant + "\x00" + v }
+func identityKey(tenant, issuer, subject string) string {
+	return tenant + "\x00" + issuer + "\x00" + subject
+}
+
 // ---- memory (tests / single instance without Redis) ----
 
 type memoryAccounts struct {
-	mu     sync.Mutex
-	users  map[string]localUser // tenant\x00email
-	byID   map[string]string    // tenant\x00id -> email
-	tokens map[string]verifyToken
+	mu         sync.Mutex
+	users      map[string]User   // tenant\x00id
+	byEmail    map[string]string // tenant\x00email -> id
+	byIdentity map[string]string // tenant\x00issuer\x00subject -> id
+	tokens     map[string]verifyToken
 }
 
 func newMemoryAccounts() *memoryAccounts {
 	return &memoryAccounts{
-		users:  map[string]localUser{},
-		byID:   map[string]string{},
-		tokens: map[string]verifyToken{},
+		users:      map[string]User{},
+		byEmail:    map[string]string{},
+		byIdentity: map[string]string{},
+		tokens:     map[string]verifyToken{},
 	}
 }
 
-func acctKey(tenant, v string) string { return tenant + "\x00" + v }
-
-func (m *memoryAccounts) PutUser(_ context.Context, u *localUser) error {
+func (m *memoryAccounts) PutUser(_ context.Context, u *User) error {
+	if u == nil {
+		return errAccountNotFound
+	}
+	u.normalize()
+	u.UpdatedAt = time.Now().UTC()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.users[acctKey(u.Tenant, u.Email)] = *u
-	m.byID[acctKey(u.Tenant, u.ID)] = u.Email
+	key := acctKey(u.Tenant, u.ID)
+	if old, ok := m.users[key]; ok {
+		if old.Kind == "local" && old.Email != u.Email {
+			delete(m.byEmail, acctKey(old.Tenant, old.Email))
+		}
+		if old.identityKey() != "" && old.identityKey() != u.identityKey() {
+			delete(m.byIdentity, identityKey(old.Tenant, old.Issuer, old.Subject))
+		}
+	}
+	m.users[key] = *u
+	// Email is the local-login key; a federated profile is resolved by
+	// (issuer, subject), so it must not overwrite a local email index.
+	if u.Kind == "local" {
+		m.byEmail[acctKey(u.Tenant, u.Email)] = u.ID
+	}
+	if u.identityKey() != "" {
+		m.byIdentity[identityKey(u.Tenant, u.Issuer, u.Subject)] = u.ID
+	}
 	return nil
 }
 
-func (m *memoryAccounts) GetUserByEmail(_ context.Context, tenant, email string) (*localUser, error) {
+func (m *memoryAccounts) GetUserByEmail(_ context.Context, tenant, email string) (*User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	u, ok := m.users[acctKey(tenant, email)]
+	id, ok := m.byEmail[acctKey(tenant, strings.ToLower(email))]
+	if !ok {
+		return nil, errAccountNotFound
+	}
+	u, ok := m.users[acctKey(tenant, id)]
 	if !ok {
 		return nil, errAccountNotFound
 	}
 	return &u, nil
 }
 
-func (m *memoryAccounts) SetUserVerified(_ context.Context, tenant, id string) error {
+func (m *memoryAccounts) GetUserByID(_ context.Context, tenant, id string) (*User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	email, ok := m.byID[acctKey(tenant, id)]
+	u, ok := m.users[acctKey(tenant, id)]
+	if !ok {
+		return nil, errAccountNotFound
+	}
+	return &u, nil
+}
+
+func (m *memoryAccounts) GetUserByIdentity(_ context.Context, tenant, issuer, subject string) (*User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id, ok := m.byIdentity[identityKey(tenant, issuer, subject)]
+	if !ok {
+		return nil, errAccountNotFound
+	}
+	u, ok := m.users[acctKey(tenant, id)]
+	if !ok {
+		return nil, errAccountNotFound
+	}
+	return &u, nil
+}
+
+func (m *memoryAccounts) ListUsers(_ context.Context, tenant string) ([]*User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*User, 0)
+	for key, u := range m.users {
+		if strings.HasPrefix(key, tenant+"\x00") {
+			cp := u
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
+	return out, nil
+}
+
+func (m *memoryAccounts) DeleteUser(_ context.Context, tenant, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := acctKey(tenant, id)
+	u, ok := m.users[key]
 	if !ok {
 		return errAccountNotFound
 	}
-	u := m.users[acctKey(tenant, email)]
-	u.EmailVerified = true
-	m.users[acctKey(tenant, email)] = u
+	delete(m.users, key)
+	if u.Kind == "local" {
+		delete(m.byEmail, acctKey(tenant, u.Email))
+	}
+	if u.identityKey() != "" {
+		delete(m.byIdentity, identityKey(tenant, u.Issuer, u.Subject))
+	}
 	return nil
+}
+
+func (m *memoryAccounts) SetUserVerified(ctx context.Context, tenant, id string) error {
+	u, err := m.GetUserByID(ctx, tenant, id)
+	if err != nil {
+		return err
+	}
+	u.EmailVerified = true
+	return m.PutUser(ctx, u)
 }
 
 func (m *memoryAccounts) PutVerifyToken(_ context.Context, tenant, tokenHash string, v *verifyToken, _ time.Duration) error {
@@ -138,19 +271,46 @@ func (r *redisAccounts) key(parts ...string) string {
 	return r.prefix + strings.Join(parts, ":")
 }
 
-func (r *redisAccounts) PutUser(ctx context.Context, u *localUser) error {
+func keyPart(v string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(v))
+}
+
+func (r *redisAccounts) PutUser(ctx context.Context, u *User) error {
+	if u == nil {
+		return errAccountNotFound
+	}
+	u.normalize()
+	u.UpdatedAt = time.Now().UTC()
 	raw, err := json.Marshal(u)
 	if err != nil {
 		return err
 	}
+	old, _ := r.GetUserByID(ctx, u.Tenant, u.ID)
 	pipe := r.client.Pipeline()
-	pipe.Set(ctx, r.key("user", "email", u.Tenant, u.Email), raw, 0)
 	pipe.Set(ctx, r.key("user", "id", u.Tenant, u.ID), raw, 0)
+	if u.Kind == "local" {
+		pipe.Set(ctx, r.key("user", "email", u.Tenant, u.Email), raw, 0)
+	}
+	if old != nil && old.Kind == "local" && old.Email != u.Email {
+		pipe.Del(ctx, r.key("user", "email", u.Tenant, old.Email))
+	}
+	if old != nil && old.Kind == "local" && u.Kind != "local" {
+		pipe.Del(ctx, r.key("user", "email", u.Tenant, old.Email))
+	}
+	if old != nil && old.identityKey() != "" &&
+		old.identityKey() != u.identityKey() {
+		pipe.Del(ctx, r.key("user", "identity", u.Tenant,
+			keyPart(old.Issuer), keyPart(old.Subject)))
+	}
+	if u.identityKey() != "" {
+		pipe.Set(ctx, r.key("user", "identity", u.Tenant,
+			keyPart(u.Issuer), keyPart(u.Subject)), u.ID, 0)
+	}
 	_, err = pipe.Exec(ctx)
 	return err
 }
 
-func (r *redisAccounts) GetUserByEmail(ctx context.Context, tenant, email string) (*localUser, error) {
+func (r *redisAccounts) GetUserByEmail(ctx context.Context, tenant, email string) (*User, error) {
 	raw, err := r.client.Get(ctx, r.key("user", "email", tenant, email)).Bytes()
 	if err == redis.Nil {
 		return nil, errAccountNotFound
@@ -158,27 +318,88 @@ func (r *redisAccounts) GetUserByEmail(ctx context.Context, tenant, email string
 	if err != nil {
 		return nil, err
 	}
-	var u localUser
+	return decodeUser(raw)
+}
+
+func (r *redisAccounts) GetUserByID(ctx context.Context, tenant, id string) (*User, error) {
+	raw, err := r.client.Get(ctx, r.key("user", "id", tenant, id)).Bytes()
+	if err == redis.Nil {
+		return nil, errAccountNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return decodeUser(raw)
+}
+
+func (r *redisAccounts) GetUserByIdentity(ctx context.Context, tenant, issuer, subject string) (*User, error) {
+	id, err := r.client.Get(ctx, r.key("user", "identity", tenant,
+		keyPart(issuer), keyPart(subject))).Result()
+	if err == redis.Nil {
+		return nil, errAccountNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.GetUserByID(ctx, tenant, id)
+}
+
+func (r *redisAccounts) ListUsers(ctx context.Context, tenant string) ([]*User, error) {
+	pattern := r.key("user", "id", tenant, "*")
+	iter := r.client.Scan(ctx, 0, pattern, 200).Iterator()
+	out := make([]*User, 0)
+	for iter.Next(ctx) {
+		raw, err := r.client.Get(ctx, iter.Val()).Bytes()
+		if err != nil {
+			return nil, err
+		}
+		u, err := decodeUser(raw)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	if err := iter.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
+	return out, nil
+}
+
+func (r *redisAccounts) DeleteUser(ctx context.Context, tenant, id string) error {
+	u, err := r.GetUserByID(ctx, tenant, id)
+	if err != nil {
+		return err
+	}
+	pipe := r.client.Pipeline()
+	pipe.Del(ctx, r.key("user", "id", tenant, id))
+	if u.Kind == "local" {
+		pipe.Del(ctx, r.key("user", "email", tenant, u.Email))
+	}
+	if u.identityKey() != "" {
+		pipe.Del(ctx, r.key("user", "identity", tenant,
+			keyPart(u.Issuer), keyPart(u.Subject)))
+	}
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+func decodeUser(raw []byte) (*User, error) {
+	var u User
 	if err := json.Unmarshal(raw, &u); err != nil {
 		return nil, err
 	}
+	u.normalize()
 	return &u, nil
 }
 
 func (r *redisAccounts) SetUserVerified(ctx context.Context, tenant, id string) error {
-	raw, err := r.client.Get(ctx, r.key("user", "id", tenant, id)).Bytes()
-	if err == redis.Nil {
-		return errAccountNotFound
-	}
+	u, err := r.GetUserByID(ctx, tenant, id)
 	if err != nil {
 		return err
 	}
-	var u localUser
-	if err := json.Unmarshal(raw, &u); err != nil {
-		return err
-	}
 	u.EmailVerified = true
-	return r.PutUser(ctx, &u)
+	return r.PutUser(ctx, u)
 }
 
 func (r *redisAccounts) PutVerifyToken(ctx context.Context, tenant, tokenHash string, v *verifyToken, ttl time.Duration) error {
