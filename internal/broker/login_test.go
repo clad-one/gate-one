@@ -31,7 +31,7 @@ func newLoginTestBroker(t *testing.T) (*Broker, *tenantRuntime) {
 		rand:     rand.Reader,
 	}
 	rt := &tenantRuntime{cfg: Tenant{
-		ID:                "acme",
+		ID:                "mycompany",
 		ClientID:          "gate-one",
 		RedirectURIs:      []string{"https://login.test/callback"},
 		LocalAccounts:     true,
@@ -39,7 +39,7 @@ func newLoginTestBroker(t *testing.T) (*Broker, *tenantRuntime) {
 		DefaultRoles:      []string{"user"},
 		SessionTTLSeconds: 3600,
 	}}
-	b.tenants["acme"] = rt
+	b.tenants["mycompany"] = rt
 	t.Cleanup(func() { _ = b.Close() })
 	return b, rt
 }
@@ -52,7 +52,7 @@ func putTestUser(t *testing.T, b *Broker, email, password string, verified bool)
 	}
 	u := &localUser{
 		ID:            "user-" + email,
-		Tenant:        "acme",
+		Tenant:        "mycompany",
 		Email:         email,
 		Name:          "Alice",
 		PasswordHash:  hash,
@@ -66,7 +66,7 @@ func putTestUser(t *testing.T, b *Broker, email, password string, verified bool)
 }
 
 func authorizeURL(challenge, idp string) string {
-	return "https://broker.test/t/acme/authorize?client_id=gate-one" +
+	return "https://broker.test/t/mycompany/authorize?client_id=gate-one" +
 		"&redirect_uri=" + url.QueryEscape("https://login.test/callback") +
 		"&response_type=code&state=st&scope=openid" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256" +
@@ -99,7 +99,7 @@ func postLogin(
 		"password": {password},
 	}
 	req := httptest.NewRequest(http.MethodPost,
-		"https://broker.test/t/acme/login", strings.NewReader(form.Encode()))
+		"https://broker.test/t/mycompany/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	b.Handler().ServeHTTP(rec, req)
@@ -122,7 +122,7 @@ func TestLocalLoginFlow(t *testing.T) {
 		t.Fatalf("authorize = %d: %s", rec.Code, rec.Body.String())
 	}
 	loginLoc := rec.Header().Get("Location")
-	if !strings.HasPrefix(loginLoc, "https://broker.test/t/acme/login?flow=") {
+	if !strings.HasPrefix(loginLoc, "https://broker.test/t/mycompany/login?flow=") {
 		t.Fatalf("authorize redirect = %q", loginLoc)
 	}
 
@@ -167,7 +167,7 @@ func TestLocalLoginFlow(t *testing.T) {
 	if code == "" {
 		t.Fatal("no code")
 	}
-	c, err := b.store.TakeCode(context.Background(), "acme", code)
+	c, err := b.store.TakeCode(context.Background(), "mycompany", code)
 	if err != nil || c == nil {
 		t.Fatalf("code store: %v %v", c, err)
 	}
@@ -228,7 +228,7 @@ func TestLocalLoginUnknownFlow(t *testing.T) {
 	b, _ := newLoginTestBroker(t)
 	rec := httptest.NewRecorder()
 	b.Handler().ServeHTTP(rec, httptest.NewRequest(
-		http.MethodGet, "https://broker.test/t/acme/login?flow=unknown", nil))
+		http.MethodGet, "https://broker.test/t/mycompany/login?flow=unknown", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown flow = %d, want 400", rec.Code)
 	}

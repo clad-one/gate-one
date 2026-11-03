@@ -9,11 +9,11 @@ import (
 
 func TestSubjectIDDeterministic(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
-	a, err := SubjectID(secret, "https://auth.example.com/realms/acme", "sub-1")
+	a, err := SubjectID(secret, "https://auth.example.com/realms/mycompany", "sub-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := SubjectID(secret, "https://auth.example.com/realms/acme", "sub-1")
+	b, _ := SubjectID(secret, "https://auth.example.com/realms/mycompany", "sub-1")
 	if a != b {
 		t.Fatalf("not deterministic: %q vs %q", a, b)
 	}
@@ -24,9 +24,9 @@ func TestSubjectIDDeterministic(t *testing.T) {
 		t.Fatal("raw sub leaked in the subject id")
 	}
 	otherIssuer, _ := SubjectID(secret, "https://other.example.com", "sub-1")
-	otherSub, _ := SubjectID(secret, "https://auth.example.com/realms/acme", "sub-2")
+	otherSub, _ := SubjectID(secret, "https://auth.example.com/realms/mycompany", "sub-2")
 	otherSecret, _ := SubjectID([]byte("fedcba9876543210fedcba9876543210"),
-		"https://auth.example.com/realms/acme", "sub-1")
+		"https://auth.example.com/realms/mycompany", "sub-1")
 	if a == otherIssuer || a == otherSub || a == otherSecret {
 		t.Fatal("subject id collisions across issuer/sub/secret")
 	}
@@ -51,7 +51,7 @@ func validEvent() *Event {
 		Timestamp:      time.Now(),
 		InstanceID:     "gw-1",
 		Epoch:          "epoch-1",
-		Tenant:         "acme",
+		Tenant:         "mycompany",
 		SubjectID:      "v1.abc",
 		Route:          "/api/process_stream",
 		Method:         "POST",

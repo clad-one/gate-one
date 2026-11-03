@@ -46,8 +46,8 @@ func TestAuthorizeToken(t *testing.T) {
 	_, ts := newTestServer(t, Config{
 		ClientID: "google-client",
 		Users: []User{{
-			Sub: "google-sub-1", Email: "alice@acme.test",
-			EmailVerified: true, HostedDomain: "acme.test",
+			Sub: "google-sub-1", Email: "alice@mycompany.test",
+			EmailVerified: true, HostedDomain: "mycompany.test",
 			PreferredUsername: "alice", Name: "Alice",
 			Groups: []string{"admins"},
 		}},
@@ -75,10 +75,10 @@ func TestAuthorizeToken(t *testing.T) {
 	if claims["nonce"] != "nonce-1" {
 		t.Errorf("nonce = %v", claims["nonce"])
 	}
-	if claims["email"] != "alice@acme.test" {
+	if claims["email"] != "alice@mycompany.test" {
 		t.Errorf("email = %v", claims["email"])
 	}
-	if claims["hd"] != "acme.test" {
+	if claims["hd"] != "mycompany.test" {
 		t.Errorf("hd = %v", claims["hd"])
 	}
 	if claims["preferred_username"] != "alice" {
@@ -153,11 +153,11 @@ func TestRotateKey(t *testing.T) {
 func TestLoginHintSelectsUser(t *testing.T) {
 	s, ts := newTestServer(t, Config{
 		Users: []User{
-			{Sub: "a", Email: "alice@acme.test", PreferredUsername: "alice"},
+			{Sub: "a", Email: "alice@mycompany.test", PreferredUsername: "alice"},
 			{Sub: "b", Email: "bob@contoso.test", PreferredUsername: "bob"},
 		},
 	})
-	if err := s.SetDefaultUser("alice@acme.test"); err != nil {
+	if err := s.SetDefaultUser("alice@mycompany.test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -166,7 +166,7 @@ func TestLoginHintSelectsUser(t *testing.T) {
 	var set jose.JSONWebKeySet
 	getJSON(t, ts.URL+"/jwks", &set)
 	claims := verify(t, set, tokens["id_token"].(string))
-	if claims["email"] != "alice@acme.test" {
+	if claims["email"] != "alice@mycompany.test" {
 		t.Fatalf("default email = %v", claims["email"])
 	}
 

@@ -1,14 +1,14 @@
 {
   "authProviders": [
     {
-      "id": "acme",
+      "id": "mycompany",
       "type": "oidc",
-      "issuer": "http://auth.acme.localhost:8081/t/acme",
+      "issuer": "http://auth.mycompany.localhost:8081/t/mycompany",
       "clientId": "gate-one",
-      "clientSecretEnv": "ACME_GATE_ONE_SECRET",
-      "loginBaseUrl": "http://login.acme.localhost:8080",
-      "cookieDomain": "acme.localhost",
-      "cookieName": "gate_one_acme",
+      "clientSecretEnv": "MYCOMPANY_GATE_ONE_SECRET",
+      "loginBaseUrl": "http://login.mycompany.localhost:8080",
+      "cookieDomain": "mycompany.localhost",
+      "cookieName": "gate_one_mycompany",
       "roleClaims": [
         "roles",
         "groups"
@@ -47,15 +47,15 @@
       "backchannelLogout": true
     }
   ],
-  "defaultAuthProvider": "acme",
+  "defaultAuthProvider": "mycompany",
   "routes": [
     {
-      "host": "app.acme.localhost",
+      "host": "app.mycompany.localhost",
       "path": "/*",
       "frontend": true,
       "backend": "http://backend:8080",
       "auth": {
-        "provider": "acme"
+        "provider": "mycompany"
       },
       "userBadge": {
         "position": "right",
@@ -69,12 +69,12 @@
       }
     },
     {
-      "host": "app2.acme.localhost",
+      "host": "app2.mycompany.localhost",
       "path": "/*",
       "frontend": true,
       "backend": "http://backend:8080",
       "auth": {
-        "provider": "acme"
+        "provider": "mycompany"
       },
       "userBadge": {
         "position": "right",
@@ -88,15 +88,15 @@
       }
     },
     {
-      "host": "api.acme.localhost",
+      "host": "api.mycompany.localhost",
       "path": "/*",
       "backend": "http://backend:8080",
       "auth": {
-        "provider": "acme"
+        "provider": "mycompany"
       }
     },
     {
-      "host": "public.acme.localhost",
+      "host": "public.mycompany.localhost",
       "path": "/*",
       "frontend": true,
       "backend": "http://backend:8080"

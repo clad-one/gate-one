@@ -62,7 +62,7 @@ func envOr(name, fallback string) string {
 // 502 = fail-closed (Redis unavailable). A transport error is reported
 // as 0 so the poll loop treats it as a failure.
 func (s *Stack) appCode() int {
-	resp, err := s.noRedirect.Get("https://app.acme.test/")
+	resp, err := s.noRedirect.Get("https://app.mycompany.test/")
 	if err != nil {
 		return 0
 	}
@@ -73,10 +73,10 @@ func (s *Stack) appCode() int {
 func TestE2E_HA_SessionSurvivesFailover(t *testing.T) {
 	ha := haConfigFromEnv(t)
 	s := newStack(t, stackOptions{redisHA: ha})
-	s.setUser("alice@acme.test")
+	s.setUser("alice@mycompany.test")
 
-	s.login("https://app.acme.test/")
-	c := s.rpCookie("app.acme.test", "gate_one_acme")
+	s.login("https://app.mycompany.test/")
+	c := s.rpCookie("app.mycompany.test", "gate_one_mycompany")
 	if c == nil {
 		t.Fatal("no RP cookie after login")
 	}
@@ -125,22 +125,22 @@ func TestE2E_HA_SessionSurvivesFailover(t *testing.T) {
 	}
 
 	// Same cookie, same identity: the session survived, not a re-login.
-	c2 := s.rpCookie("app.acme.test", "gate_one_acme")
+	c2 := s.rpCookie("app.mycompany.test", "gate_one_mycompany")
 	if c2 == nil || c2.Value != c.Value {
 		t.Fatal("RP cookie changed across the failover (unexpected re-login)")
 	}
-	h := s.backend.headers("app.acme.test")
+	h := s.backend.headers("app.mycompany.test")
 	if h == nil {
 		t.Fatal("backend did not receive the request after failover")
 	}
-	if got := h.Get("X-Email"); got != "alice@acme.test" {
+	if got := h.Get("X-Email"); got != "alice@mycompany.test" {
 		t.Errorf("X-Email after failover = %q", got)
 	}
 
 	// Revocation after the failover: a fresh Sentinel connection (the
 	// `cladone-auth revoke` path) must be seen by Gate One.
 	if err := broker.RevokeWithConfig(
-		context.Background(), s.acmeCfg, "acme", sid, uid, time.Hour,
+		context.Background(), s.mycompanyCfg, "mycompany", sid, uid, time.Hour,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +152,9 @@ func TestE2E_HA_SessionSurvivesFailover(t *testing.T) {
 
 	// A new login after the failover is allowed and gets a new sid.
 	time.Sleep(1100 * time.Millisecond)
-	s.setUser("alice@acme.test")
-	s.login("https://app.acme.test/")
-	c3 := s.rpCookie("app.acme.test", "gate_one_acme")
+	s.setUser("alice@mycompany.test")
+	s.login("https://app.mycompany.test/")
+	c3 := s.rpCookie("app.mycompany.test", "gate_one_mycompany")
 	if c3 == nil {
 		t.Fatal("no RP cookie after second login")
 	}

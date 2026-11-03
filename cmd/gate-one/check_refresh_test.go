@@ -37,12 +37,12 @@ func TestAC_AUTH_26_CheckWarnsOnMissingTTL(t *testing.T) {
 	path := filepath.Join(dir, "routes.json")
 	cfgJSON := `{
 		"authProviders": [{
-			"id": "acme", "type": "oidc",
+			"id": "mycompany", "type": "oidc",
 			"issuer": ` + quote(issuer) + `,
 			"clientId": "gate-one",
-			"loginBaseUrl": "https://login.acme.test",
-			"cookieDomain": "acme.test",
-			"sessionStore": {"type": "bolt", "path": "./acme.db"}
+			"loginBaseUrl": "https://login.mycompany.test",
+			"cookieDomain": "mycompany.test",
+			"sessionStore": {"type": "bolt", "path": "./mycompany.db"}
 		}],
 		"routes": []
 	}`

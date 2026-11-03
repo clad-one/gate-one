@@ -10,18 +10,18 @@ test("logout in one tab probes the other tab through the storage event", async (
 
   const tabA = await context.newPage();
   await tabA.goto("/");
-  await expect(tabA.locator("body")).toContainText("alice@acme.test");
+  await expect(tabA.locator("body")).toContainText("alice@mycompany.test");
 
   const tabB = await context.newPage();
   await tabB.goto("/");
-  await expect(tabB.locator("body")).toContainText("alice@acme.test");
+  await expect(tabB.locator("body")).toContainText("alice@mycompany.test");
 
   // The fake Google auto-consents; without this, tab A would silently
   // log in again while following the post-logout redirect, and tab B
   // could pick up the new cookie before its probe. Blocking the token
   // exchange keeps the logout observable (test-stack only).
   const fail = await request.post(
-    "http://idp.acme.localhost:9000/__control/fail?token=1",
+    "http://idp.mycompany.localhost:9000/__control/fail?token=1",
   );
   expect(fail.ok()).toBeTruthy();
 
@@ -39,7 +39,7 @@ test("logout in one tab probes the other tab through the storage event", async (
     });
   } finally {
     await request.post(
-      "http://idp.acme.localhost:9000/__control/fail?token=0",
+      "http://idp.mycompany.localhost:9000/__control/fail?token=0",
     );
   }
 });

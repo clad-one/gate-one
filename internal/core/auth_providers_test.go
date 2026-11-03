@@ -10,13 +10,13 @@ func TestAC_AUTH_13_ConfigValidation(t *testing.T) {
 		cfg, err := loadAuthTest(t, `{
 			"authProviders": [
 				{
-					"id": "acme", "type": "oidc",
-					"issuer": "https://auth.test/t/acme",
+					"id": "mycompany", "type": "oidc",
+					"issuer": "https://auth.test/t/mycompany",
 					"clientId": "cladone-go",
-					"loginBaseUrl": "https://login.acme.test",
-					"cookieDomain": "acme.test",
-					"cookieName": "acme_session",
-					"sessionStore": {"type": "bolt", "path": "./acme.db"}
+					"loginBaseUrl": "https://login.mycompany.test",
+					"cookieDomain": "mycompany.test",
+					"cookieName": "mycompany_session",
+					"sessionStore": {"type": "bolt", "path": "./mycompany.db"}
 				},
 				{
 					"id": "contoso", "type": "jwt",
@@ -25,10 +25,10 @@ func TestAC_AUTH_13_ConfigValidation(t *testing.T) {
 					"audience": "cladone-go"
 				}
 			],
-			"defaultAuthProvider": "acme",
+			"defaultAuthProvider": "mycompany",
 			"routes": [
-				{"host": "app.acme.test", "path": "/*", "frontend": true,
-				 "backend": "http://127.0.0.1:1", "auth": {"provider": "acme"}},
+				{"host": "app.mycompany.test", "path": "/*", "frontend": true,
+				 "backend": "http://127.0.0.1:1", "auth": {"provider": "mycompany"}},
 				{"host": "api.contoso.test", "path": "/*",
 				 "backend": "http://127.0.0.1:1", "auth": {"provider": "contoso"}}
 			]
@@ -39,16 +39,16 @@ func TestAC_AUTH_13_ConfigValidation(t *testing.T) {
 		if len(cfg.AuthProviders) != 2 {
 			t.Fatalf("providers = %d", len(cfg.AuthProviders))
 		}
-		acme := cfg.AuthProviderByID("acme")
-		if acme == nil || acme.CookieName != "acme_session" {
-			t.Fatalf("acme = %+v", acme)
+		mycompany := cfg.AuthProviderByID("mycompany")
+		if mycompany == nil || mycompany.CookieName != "mycompany_session" {
+			t.Fatalf("mycompany = %+v", mycompany)
 		}
 		contoso := cfg.AuthProviderByID("contoso")
 		if contoso == nil || contoso.JWKSURL == "" {
 			t.Fatalf("contoso = %+v", contoso)
 		}
-		if got := cfg.LoginURLFor(&cfg.Routes[0]); got != "https://login.acme.test/login" {
-			t.Errorf("acme login = %q", got)
+		if got := cfg.LoginURLFor(&cfg.Routes[0]); got != "https://login.mycompany.test/login" {
+			t.Errorf("mycompany login = %q", got)
 		}
 		if got := cfg.LoginURLFor(&cfg.Routes[1]); got != "" {
 			t.Errorf("contoso login = %q, want empty", got)

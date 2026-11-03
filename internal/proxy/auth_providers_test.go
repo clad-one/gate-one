@@ -32,13 +32,13 @@ func TestAC_AUTH_02_CrossTenantTokenRejected(t *testing.T) {
 
 	privA, pubA := testKey(t)
 	privB, pubB := testKey(t)
-	_, urlA := testJWKS(t, pubA, "acme-1")
+	_, urlA := testJWKS(t, pubA, "mycompany-1")
 	_, urlB := testJWKS(t, pubB, "contoso-1")
 
 	cfg := loadProxyAuthConfig(t, fmt.Sprintf(`{
 		"authProviders": [
-			{"id": "acme", "type": "jwt",
-			 "issuer": "https://auth.test/t/acme",
+			{"id": "mycompany", "type": "jwt",
+			 "issuer": "https://auth.test/t/mycompany",
 			 "jwksUrl": %q, "audience": "cladone-go",
 			 "roleClaims": ["roles"]},
 			{"id": "contoso", "type": "jwt",
@@ -46,10 +46,10 @@ func TestAC_AUTH_02_CrossTenantTokenRejected(t *testing.T) {
 			 "jwksUrl": %q, "audience": "cladone-go",
 			 "roleClaims": ["roles"]}
 		],
-		"defaultAuthProvider": "acme",
+		"defaultAuthProvider": "mycompany",
 		"routes": [
-			{"host": "acme.test", "path": "/*", "backend": %q,
-			 "auth": {"provider": "acme"}},
+			{"host": "mycompany.test", "path": "/*", "backend": %q,
+			 "auth": {"provider": "mycompany"}},
 			{"host": "contoso.test", "path": "/*", "backend": %q,
 			 "auth": {"provider": "contoso"}}
 		]
@@ -61,8 +61,8 @@ func TestAC_AUTH_02_CrossTenantTokenRejected(t *testing.T) {
 	}
 
 	now := time.Now()
-	tokenA := testToken(t, privA, "acme-1", map[string]any{
-		"iss": "https://auth.test/t/acme", "sub": "user-a",
+	tokenA := testToken(t, privA, "mycompany-1", map[string]any{
+		"iss": "https://auth.test/t/mycompany", "sub": "user-a",
 		"aud": "cladone-go", "exp": now.Add(5 * time.Minute).Unix(),
 		"iat": now.Unix(), "roles": []string{"user"},
 	})
@@ -78,12 +78,12 @@ func TestAC_AUTH_02_CrossTenantTokenRejected(t *testing.T) {
 		token string
 		want  int
 	}{
-		{"acme_ok", "acme.test", tokenA, 200},
+		{"mycompany_ok", "mycompany.test", tokenA, 200},
 		{"cross_a_to_b", "contoso.test", tokenA, 401},
 		{"contoso_ok", "contoso.test", tokenB, 200},
-		{"cross_b_to_a", "acme.test", tokenB, 401},
-		{"wrong_audience", "acme.test", testToken(t, privA, "acme-1", map[string]any{
-			"iss": "https://auth.test/t/acme", "sub": "u",
+		{"cross_b_to_a", "mycompany.test", tokenB, 401},
+		{"wrong_audience", "mycompany.test", testToken(t, privA, "mycompany-1", map[string]any{
+			"iss": "https://auth.test/t/mycompany", "sub": "u",
 			"aud": "other", "exp": now.Add(time.Minute).Unix(),
 		}), 401},
 	}
@@ -116,21 +116,21 @@ func TestAC_AUTH_06_BrokerDownDegradesOnlyTenant(t *testing.T) {
 
 	cfg := loadProxyAuthConfig(t, fmt.Sprintf(`{
 		"authProviders": [
-			{"id": "acme", "type": "oidc",
+			{"id": "mycompany", "type": "oidc",
 			 "issuer": %q,
 			 "clientId": "cladone-go",
-			 "loginBaseUrl": "https://login.acme.test",
-			 "cookieDomain": "acme.test",
-			 "cookieName": "acme_session",
-			 "sessionStore": {"type": "bolt", "path": "./acme.db"}},
+			 "loginBaseUrl": "https://login.mycompany.test",
+			 "cookieDomain": "mycompany.test",
+			 "cookieName": "mycompany_session",
+			 "sessionStore": {"type": "bolt", "path": "./mycompany.db"}},
 			{"id": "contoso", "type": "jwt",
 			 "issuer": "https://auth.test/t/contoso",
 			 "jwksUrl": %q, "audience": "cladone-go"}
 		],
 		"defaultAuthProvider": "contoso",
 		"routes": [
-			{"host": "acme.test", "path": "/*", "backend": %q,
-			 "auth": {"provider": "acme"}},
+			{"host": "mycompany.test", "path": "/*", "backend": %q,
+			 "auth": {"provider": "mycompany"}},
 			{"host": "contoso.test", "path": "/*", "backend": %q,
 			 "auth": {"provider": "contoso"}}
 		]
@@ -140,17 +140,17 @@ func TestAC_AUTH_06_BrokerDownDegradesOnlyTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a degraded provider must not block startup: %v", err)
 	}
-	if p := gw.providers["acme"]; p == nil || !p.degraded {
-		t.Fatalf("acme provider = %+v, want degraded", p)
+	if p := gw.providers["mycompany"]; p == nil || !p.degraded {
+		t.Fatalf("mycompany provider = %+v, want degraded", p)
 	}
 	if p := gw.providers["contoso"]; p == nil || p.degraded {
 		t.Fatalf("contoso provider = %+v, want ready", p)
 	}
 
 	// The broken tenant fails closed...
-	rec := doAuthRequest(gw, "acme.test", "")
+	rec := doAuthRequest(gw, "mycompany.test", "")
 	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("acme status = %d, want 502: %s", rec.Code, rec.Body.String())
+		t.Fatalf("mycompany status = %d, want 502: %s", rec.Code, rec.Body.String())
 	}
 	// ...while the other tenant keeps working.
 	token := testToken(t, priv, "contoso-1", map[string]any{
@@ -175,13 +175,13 @@ func TestAC_AUTH_14_InvalidTokenVsUnavailable(t *testing.T) {
 
 	cfg := loadProxyAuthConfig(t, fmt.Sprintf(`{
 		"authProviders": [
-			{"id": "acme", "type": "jwt",
-			 "issuer": "https://auth.test/t/acme",
+			{"id": "mycompany", "type": "jwt",
+			 "issuer": "https://auth.test/t/mycompany",
 			 "jwksUrl": %q, "audience": "cladone-go"}
 		],
 		"routes": [
-			{"host": "acme.test", "path": "/*", "backend": %q,
-			 "auth": {"provider": "acme"}}
+			{"host": "mycompany.test", "path": "/*", "backend": %q,
+			 "auth": {"provider": "mycompany"}}
 		]
 	}`, jwksURL, backend.URL))
 	gw, err := New(cfg)
@@ -190,42 +190,42 @@ func TestAC_AUTH_14_InvalidTokenVsUnavailable(t *testing.T) {
 	}
 	now := time.Now()
 	valid := testToken(t, priv, "k1", map[string]any{
-		"iss": "https://auth.test/t/acme", "sub": "u",
+		"iss": "https://auth.test/t/mycompany", "sub": "u",
 		"aud": "cladone-go", "exp": now.Add(5 * time.Minute).Unix(),
 	})
-	if rec := doAuthRequest(gw, "acme.test", valid); rec.Code != 200 {
+	if rec := doAuthRequest(gw, "mycompany.test", valid); rec.Code != 200 {
 		t.Fatalf("valid = %d: %s", rec.Code, rec.Body.String())
 	}
 
 	// Invalid signature with a reachable JWKS = 401.
 	bad := valid[:len(valid)-2] + "xx"
-	if rec := doAuthRequest(gw, "acme.test", bad); rec.Code != 401 {
+	if rec := doAuthRequest(gw, "mycompany.test", bad); rec.Code != 401 {
 		t.Fatalf("bad signature = %d, want 401", rec.Code)
 	}
 	// Expired with a reachable/cached key = 401.
 	expired := testToken(t, priv, "k1", map[string]any{
-		"iss": "https://auth.test/t/acme", "sub": "u",
+		"iss": "https://auth.test/t/mycompany", "sub": "u",
 		"aud": "cladone-go", "exp": now.Add(-time.Minute).Unix(),
 	})
-	if rec := doAuthRequest(gw, "acme.test", expired); rec.Code != 401 {
+	if rec := doAuthRequest(gw, "mycompany.test", expired); rec.Code != 401 {
 		t.Fatalf("expired = %d, want 401", rec.Code)
 	}
 
 	// Cached key: a valid token still works with the broker down.
 	jwksSrv.Close()
-	if rec := doAuthRequest(gw, "acme.test", valid); rec.Code != 200 {
+	if rec := doAuthRequest(gw, "mycompany.test", valid); rec.Code != 200 {
 		t.Fatalf("cached valid = %d, want 200", rec.Code)
 	}
 	// Expired token with the key cached is an invalid token, not an outage.
-	if rec := doAuthRequest(gw, "acme.test", expired); rec.Code != 401 {
+	if rec := doAuthRequest(gw, "mycompany.test", expired); rec.Code != 401 {
 		t.Fatalf("cached expired = %d, want 401", rec.Code)
 	}
 	// Unknown kid requires a fetch; broker down = 502.
 	unknown := testToken(t, priv, "k-other", map[string]any{
-		"iss": "https://auth.test/t/acme", "sub": "u",
+		"iss": "https://auth.test/t/mycompany", "sub": "u",
 		"aud": "cladone-go", "exp": now.Add(time.Minute).Unix(),
 	})
-	rec := doAuthRequest(gw, "acme.test", unknown)
+	rec := doAuthRequest(gw, "mycompany.test", unknown)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("unknown kid + outage = %d, want 502: %s",
 			rec.Code, rec.Body.String())
@@ -328,43 +328,43 @@ func TestAC_AUTH_15_DegradedStartupAndReload(t *testing.T) {
 		}))
 	t.Cleanup(backend.Close)
 
-	cfgFor := func(acmeIssuer string) *core.Config {
+	cfgFor := func(mycompanyIssuer string) *core.Config {
 		return loadProxyAuthConfig(t, fmt.Sprintf(`{
 			"authProviders": [
-				{"id": "acme", "type": "oidc",
+				{"id": "mycompany", "type": "oidc",
 				 "issuer": %q, "clientId": "cladone-go",
-				 "loginBaseUrl": "https://login.acme.test",
-				 "cookieDomain": "acme.test",
-				 "cookieName": "acme_session",
-				 "sessionStore": {"type": "bolt", "path": "./acme.db"}},
+				 "loginBaseUrl": "https://login.mycompany.test",
+				 "cookieDomain": "mycompany.test",
+				 "cookieName": "mycompany_session",
+				 "sessionStore": {"type": "bolt", "path": "./mycompany.db"}},
 				{"id": "contoso", "type": "jwt",
 				 "issuer": "https://auth.test/t/contoso",
 				 "jwksUrl": %q, "audience": "cladone-go"}
 			],
 			"defaultAuthProvider": "contoso",
 			"routes": [
-				{"host": "acme.test", "path": "/*", "backend": %q,
-				 "auth": {"provider": "acme"}},
+				{"host": "mycompany.test", "path": "/*", "backend": %q,
+				 "auth": {"provider": "mycompany"}},
 				{"host": "contoso.test", "path": "/*", "backend": %q,
 				 "auth": {"provider": "contoso"}}
 			]
-		}`, acmeIssuer, jwksURL, backend.URL, backend.URL))
+		}`, mycompanyIssuer, jwksURL, backend.URL, backend.URL))
 	}
 
 	gw1, err := New(cfgFor(badURL))
 	if err != nil {
 		t.Fatalf("degraded startup: %v", err)
 	}
-	if p := gw1.providers["acme"]; p == nil || !p.degraded {
-		t.Fatalf("acme startup = %+v, want degraded", p)
+	if p := gw1.providers["mycompany"]; p == nil || !p.degraded {
+		t.Fatalf("mycompany startup = %+v, want degraded", p)
 	}
 
 	gw2, err := New(cfgFor(good))
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if p := gw2.providers["acme"]; p == nil || p.degraded {
-		t.Fatalf("acme reload = %+v, want ready", p)
+	if p := gw2.providers["mycompany"]; p == nil || p.degraded {
+		t.Fatalf("mycompany reload = %+v, want ready", p)
 	}
 
 	h := &Reloadable{}
@@ -419,8 +419,8 @@ func TestAC_AUTH_19_RedisFailClosedAndImmediateRevocation(t *testing.T) {
 
 	cfg := loadProxyAuthConfig(t, fmt.Sprintf(`{
 		"authProviders": [{
-			"id": "acme", "type": "jwt",
-			"issuer": "https://auth.test/t/acme",
+			"id": "mycompany", "type": "jwt",
+			"issuer": "https://auth.test/t/mycompany",
 			"jwksUrl": %q, "audience": "cladone-go",
 			"sessionStore": {
 				"type": "redis",
@@ -428,8 +428,8 @@ func TestAC_AUTH_19_RedisFailClosedAndImmediateRevocation(t *testing.T) {
 				"prefix": "test:proxy:auth:v1:"
 			}
 		}],
-		"routes": [{"host": "acme.test", "path": "/*",
-			"backend": %q, "auth": {"provider": "acme"}}]
+		"routes": [{"host": "mycompany.test", "path": "/*",
+			"backend": %q, "auth": {"provider": "mycompany"}}]
 	}`, jwksURL, mr.Addr(), backend.URL))
 	gw, err := New(cfg)
 	if err != nil {
@@ -439,10 +439,10 @@ func TestAC_AUTH_19_RedisFailClosedAndImmediateRevocation(t *testing.T) {
 
 	now := time.Now()
 	token := testToken(t, priv, "k1", map[string]any{
-		"iss": "https://auth.test/t/acme", "sub": "user-1", "sid": "sid-1",
+		"iss": "https://auth.test/t/mycompany", "sub": "user-1", "sid": "sid-1",
 		"aud": "cladone-go", "exp": now.Add(time.Hour).Unix(),
 	})
-	if rec := doAuthRequest(gw, "acme.test", token); rec.Code != 200 {
+	if rec := doAuthRequest(gw, "mycompany.test", token); rec.Code != 200 {
 		t.Fatalf("before revoke = %d: %s", rec.Code, rec.Body.String())
 	}
 
@@ -453,17 +453,17 @@ func TestAC_AUTH_19_RedisFailClosedAndImmediateRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Revoke(t.Context(), "https://auth.test/t/acme",
+	if err := store.Revoke(t.Context(), "https://auth.test/t/mycompany",
 		"sid-1", "", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if rec := doAuthRequest(gw, "acme.test", token); rec.Code != 401 {
+	if rec := doAuthRequest(gw, "mycompany.test", token); rec.Code != 401 {
 		t.Fatalf("after revoke = %d, want 401: %s", rec.Code, rec.Body.String())
 	}
 
 	// Redis outage: fail closed on the auth hot path.
 	mr.Close()
-	rec := doAuthRequest(gw, "acme.test", token)
+	rec := doAuthRequest(gw, "mycompany.test", token)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("redis down = %d, want 502: %s", rec.Code, rec.Body.String())
 	}
@@ -479,12 +479,12 @@ func TestAC_AUTH_17_NoSecretLeak(t *testing.T) {
 	t.Cleanup(backend.Close)
 	cfg := loadProxyAuthConfig(t, fmt.Sprintf(`{
 		"authProviders": [{
-			"id": "acme", "type": "jwt",
-			"issuer": "https://auth.test/t/acme",
+			"id": "mycompany", "type": "jwt",
+			"issuer": "https://auth.test/t/mycompany",
 			"jwksUrl": %q, "audience": "cladone-go"
 		}],
-		"routes": [{"host": "acme.test", "path": "/*",
-			"backend": %q, "auth": {"provider": "acme"}}]
+		"routes": [{"host": "mycompany.test", "path": "/*",
+			"backend": %q, "auth": {"provider": "mycompany"}}]
 	}`, jwksURL, backend.URL))
 	gw, err := New(cfg)
 	if err != nil {
@@ -498,7 +498,7 @@ func TestAC_AUTH_17_NoSecretLeak(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(old)
 
-	rec := doAuthRequest(gw, "acme.test", secret)
+	rec := doAuthRequest(gw, "mycompany.test", secret)
 	if strings.Contains(rec.Body.String(), secret) {
 		t.Fatal("response body leaked the bearer token")
 	}
@@ -518,16 +518,16 @@ func TestAC_AUTH_23_CrossInstanceRevocation(t *testing.T) {
 	t.Cleanup(backend.Close)
 	cfgJSON := fmt.Sprintf(`{
 		"authProviders": [{
-			"id": "acme", "type": "jwt",
-			"issuer": "https://auth.test/t/acme",
+			"id": "mycompany", "type": "jwt",
+			"issuer": "https://auth.test/t/mycompany",
 			"jwksUrl": %q, "audience": "cladone-go",
 			"sessionStore": {
 				"type": "redis", "url": "redis://%s/0",
 				"prefix": "test:cross:auth:v1:"
 			}
 		}],
-		"routes": [{"host": "acme.test", "path": "/*",
-			"backend": %q, "auth": {"provider": "acme"}}]
+		"routes": [{"host": "mycompany.test", "path": "/*",
+			"backend": %q, "auth": {"provider": "mycompany"}}]
 	}`, jwksURL, mr.Addr(), backend.URL)
 	gw1, err := New(loadProxyAuthConfig(t, cfgJSON))
 	if err != nil {
@@ -542,13 +542,13 @@ func TestAC_AUTH_23_CrossInstanceRevocation(t *testing.T) {
 
 	now := time.Now()
 	token := testToken(t, priv, "k1", map[string]any{
-		"iss": "https://auth.test/t/acme", "sub": "user-1", "sid": "sid-cross",
+		"iss": "https://auth.test/t/mycompany", "sub": "user-1", "sid": "sid-cross",
 		"aud": "cladone-go", "exp": now.Add(time.Hour).Unix(),
 	})
-	if rec := doAuthRequest(gw1, "acme.test", token); rec.Code != 200 {
+	if rec := doAuthRequest(gw1, "mycompany.test", token); rec.Code != 200 {
 		t.Fatalf("gw1 before = %d", rec.Code)
 	}
-	if rec := doAuthRequest(gw2, "acme.test", token); rec.Code != 200 {
+	if rec := doAuthRequest(gw2, "mycompany.test", token); rec.Code != 200 {
 		t.Fatalf("gw2 before = %d", rec.Code)
 	}
 	store, err := authn.OpenRedisStore(t.Context(), authn.RedisConfig{
@@ -558,14 +558,14 @@ func TestAC_AUTH_23_CrossInstanceRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Revoke(t.Context(), "https://auth.test/t/acme",
+	if err := store.Revoke(t.Context(), "https://auth.test/t/mycompany",
 		"sid-cross", "", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if rec := doAuthRequest(gw1, "acme.test", token); rec.Code != 401 {
+	if rec := doAuthRequest(gw1, "mycompany.test", token); rec.Code != 401 {
 		t.Fatalf("gw1 after = %d, want 401", rec.Code)
 	}
-	if rec := doAuthRequest(gw2, "acme.test", token); rec.Code != 401 {
+	if rec := doAuthRequest(gw2, "mycompany.test", token); rec.Code != 401 {
 		t.Fatalf("gw2 after = %d, want 401", rec.Code)
 	}
 }
@@ -587,11 +587,11 @@ func TestReadyz_LocalProviderState(t *testing.T) {
 		}))
 	t.Cleanup(backend.Close)
 
-	degradedAcme := fmt.Sprintf(`{"id": "acme", "type": "oidc",
+	degradedMycompany := fmt.Sprintf(`{"id": "mycompany", "type": "oidc",
 		 "issuer": %q, "clientId": "cladone-go",
-		 "loginBaseUrl": "https://login.acme.test",
-		 "cookieDomain": "acme.test", "cookieName": "acme_session",
-		 "sessionStore": {"type": "bolt", "path": "./acme.db"}}`, badURL)
+		 "loginBaseUrl": "https://login.mycompany.test",
+		 "cookieDomain": "mycompany.test", "cookieName": "mycompany_session",
+		 "sessionStore": {"type": "bolt", "path": "./mycompany.db"}}`, badURL)
 	healthyJWT := fmt.Sprintf(`{"id": "contoso", "type": "jwt",
 		 "issuer": "https://auth.test/t/contoso",
 		 "jwksUrl": %q, "audience": "cladone-go"}`, jwksURL)
@@ -600,10 +600,10 @@ func TestReadyz_LocalProviderState(t *testing.T) {
 		t.Helper()
 		cfg := loadProxyAuthConfig(t, fmt.Sprintf(`{
 			"authProviders": [%s],
-			"defaultAuthProvider": "acme",
+			"defaultAuthProvider": "mycompany",
 			"routes": [
-				{"host": "acme.test", "path": "/*", "backend": %q,
-				 "auth": {"provider": "acme"}}
+				{"host": "mycompany.test", "path": "/*", "backend": %q,
+				 "auth": {"provider": "mycompany"}}
 			]
 		}`, providers, backend.URL))
 		gw, err := New(cfg)
@@ -615,7 +615,7 @@ func TestReadyz_LocalProviderState(t *testing.T) {
 
 	readReady := func(gw *Gateway) (int, map[string]any) {
 		t.Helper()
-		resp := doGet(t, gw, "acme.test", "/readyz")
+		resp := doGet(t, gw, "mycompany.test", "/readyz")
 		defer resp.Body.Close()
 		var body map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -625,16 +625,16 @@ func TestReadyz_LocalProviderState(t *testing.T) {
 	}
 
 	// One degraded tenant, one healthy: the instance stays ready.
-	code, body := readReady(build(degradedAcme + "," + healthyJWT))
+	code, body := readReady(build(degradedMycompany + "," + healthyJWT))
 	if code != http.StatusOK {
 		t.Fatalf("mixed providers /readyz = %d, want 200: %v", code, body)
 	}
 	providers, _ := body["providers"].(map[string]any)
-	acme, _ := providers["acme"].(map[string]any)
-	if acme["status"] != "degraded" {
-		t.Fatalf("acme status = %v, want degraded", acme["status"])
+	mycompany, _ := providers["mycompany"].(map[string]any)
+	if mycompany["status"] != "degraded" {
+		t.Fatalf("mycompany status = %v, want degraded", mycompany["status"])
 	}
-	if _, leaked := acme["error"]; leaked {
+	if _, leaked := mycompany["error"]; leaked {
 		t.Fatal("error details exposed without ?verbose=1")
 	}
 	contoso, _ := providers["contoso"].(map[string]any)
@@ -643,7 +643,7 @@ func TestReadyz_LocalProviderState(t *testing.T) {
 	}
 
 	// Only a degraded provider: fail-closed readiness.
-	code, body = readReady(build(degradedAcme))
+	code, body = readReady(build(degradedMycompany))
 	if code != http.StatusServiceUnavailable {
 		t.Fatalf("all-degraded /readyz = %d, want 503: %v", code, body)
 	}

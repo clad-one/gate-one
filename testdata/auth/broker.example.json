@@ -3,18 +3,18 @@
   "listen": ":8081",
   "tenants": [
     {
-      "id": "acme",
+      "id": "mycompany",
       "clientId": "cladone-go",
       "redirectUris": [
-        "https://login.acme.example.com/auth/callback"
+        "https://login.mycompany.example.com/auth/callback"
       ],
       "audiences": [
-        "https://mcp.acme.example.com"
+        "https://mcp.mycompany.example.com"
       ],
       "google": {
         "issuer": "https://accounts.google.com",
         "clientId": "REPLACE_ME.apps.googleusercontent.com",
-        "hostedDomain": "acme.example.com",
+        "hostedDomain": "mycompany.example.com",
         "scopes": [
           "openid",
           "profile",
@@ -26,10 +26,10 @@
         "user"
       ],
       "allowedDomains": [
-        "acme.example.com"
+        "mycompany.example.com"
       ],
       "adminEmails": [
-        "admin@acme.example.com"
+        "admin@mycompany.example.com"
       ],
       "groupRoles": {
         "admins": [
@@ -39,9 +39,9 @@
       "accessTokenTtlSeconds": 600,
       "idTokenTtlSeconds": 600,
       "refreshTokenTtlSeconds": 2592000,
-      "clientSecretEnv": "ACME_BROKER_CLIENT_SECRET",
+      "clientSecretEnv": "MYCOMPANY_BROKER_CLIENT_SECRET",
       "postLogoutRedirectUris": [
-        "https://app.acme.example.com/"
+        "https://app.mycompany.example.com/"
       ],
       "sessionTtlSeconds": 43200
     }

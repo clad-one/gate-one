@@ -282,21 +282,21 @@ testdata/auth/
     config.json              # issuer, client, users, groupes, hd
     keys/                    # clés Ed25519 de test (jamais de secret réel)
   broker/
-    acme.json                # tenant, clients, policy, audiences
+    mycompany.json                # tenant, clients, policy, audiences
     contoso.json
     policy.json
   gateone/
-    two-tenants.json         # providers acme/contoso + routes
+    two-tenants.json         # providers mycompany/contoso + routes
     degraded.json            # un provider injoignable
     public.json
     api-jwt.json
   keys/
-    acme-2026-01.json        # clé de test, marquée TEST ONLY
+    mycompany-2026-01.json        # clé de test, marquée TEST ONLY
     contoso-2026-01.json
   certs/                     # V1.1 mTLS
     ca.pem
-    client-acme.pem
-    client-acme-key.pem
+    client-mycompany.pem
+    client-mycompany-key.pem
   plugins/                   # V2
     valid.tar
     bad-signature.tar
@@ -585,8 +585,8 @@ Il sert à tester la suite de conformité elle-même, puis le broker.
 
 Étapes :
 
-. Démarrer faux Google, broker de test, Gate One avec le provider `acme`.
-. `GET /` sur `app.acme.test` sans cookie.
+. Démarrer faux Google, broker de test, Gate One avec le provider `mycompany`.
+. `GET /` sur `app.mycompany.test` sans cookie.
 . Suivre la redirection vers le broker puis Google.
 . Google auto-consent, callback broker, callback Gate One.
 . Vérifier le cookie de session, `roles`, `tenant`, `sid`.
@@ -594,8 +594,8 @@ Il sert à tester la suite de conformité elle-même, puis le broker.
 Assertions :
 
 * `200` sur la page protégée ;
-* cookie `cladone_acme_session` présent, `HttpOnly`, `Secure`, `SameSite=Lax` ;
-* claims `tenant=acme`, `roles` attendus, `sid` non vide ;
+* cookie `cladone_mycompany_session` présent, `HttpOnly`, `Secure`, `SameSite=Lax` ;
+* claims `tenant=mycompany`, `roles` attendus, `sid` non vide ;
 * aucun cookie Google sur le domaine Gate One ;
 * le broker n'a jamais transmis le token Google à Gate One.
 
@@ -618,11 +618,11 @@ Table :
 |===
 | Token | Route | Attendu
 
-| `iss=acme`, `aud=acme` | `contoso` | `401`
-| `iss=contoso`, `aud=contoso` | `acme` | `401`
-| `iss=acme`, `aud=contoso` | `contoso` | `401`
-| `tenant=acme` dans claims, `iss=contoso` | `acme` | `401`
-| token acme valide | `acme` | `200`
+| `iss=mycompany`, `aud=mycompany` | `contoso` | `401`
+| `iss=contoso`, `aud=contoso` | `mycompany` | `401`
+| `iss=mycompany`, `aud=contoso` | `contoso` | `401`
+| `tenant=mycompany` dans claims, `iss=contoso` | `mycompany` | `401`
+| token mycompany valide | `mycompany` | `200`
 |===
 
 Le test vérifie aussi que le cache d'identité n'est pas partagé : deux providers
@@ -643,12 +643,12 @@ de même type `oidc` ne doivent pas avoir la même clé de cache.
 
 `TestAC_AUTH_04_KeyRotationKeepsSessions`
 
-* Émettre un token avec `kid=acme-2026-01`.
-* Publier `acme-2026-02` dans JWKS.
-* Émettre un nouveau token avec `acme-2026-02`.
+* Émettre un token avec `kid=mycompany-2026-01`.
+* Publier `mycompany-2026-02` dans JWKS.
+* Émettre un nouveau token avec `mycompany-2026-02`.
 * Vérifier que l'ancien et le nouveau token sont acceptés pendant le chevauchement.
 * Avancer l'horloge au-delà de l'expiration de l'ancien token.
-* Retirer `acme-2026-01` du JWKS.
+* Retirer `mycompany-2026-01` du JWKS.
 * Vérifier qu'aucune session Gate One n'est déconnectée par la rotation.
 
 Sous-tests :
@@ -676,17 +676,17 @@ Sous-tests :
 
 Scénario :
 
-. Deux tenants `acme` et `contoso`, deux brokers.
+. Deux tenants `mycompany` et `contoso`, deux brokers.
 . Login sur les deux.
-. Arrêter le broker `acme`.
-. Requête avec session `acme` : `200` (validation locale).
-. Nouveau login `acme` : `502`.
-. MCP `acme` avec `kid` en cache : `200`.
-. MCP `acme` avec `kid` inconnu : `502`.
+. Arrêter le broker `mycompany`.
+. Requête avec session `mycompany` : `200` (validation locale).
+. Nouveau login `mycompany` : `502`.
+. MCP `mycompany` avec `kid` en cache : `200`.
+. MCP `mycompany` avec `kid` inconnu : `502`.
 . Routes `contoso` : `200`.
 . `/healthz` : `200`.
 . `/readyz` : `200` car `contoso` sert encore.
-. `/__gate-one/health/providers` : `acme=degraded`, `contoso=ready`.
+. `/__gate-one/health/providers` : `mycompany=degraded`, `contoso=ready`.
 
 === AC-AUTH-07 — Aucun plugin provider
 
@@ -776,7 +776,7 @@ Les résultats sont comparés : mêmes `Step.Kind`, mêmes erreurs, mêmes asser
 * Deux providers, deux cookies, deux stores, deux caches.
 * Token A sur route B → `401`.
 * Cookie A sur route B → `401`.
-* Les métadonnées MCP de `acme` annoncent l'issuer `acme`, pas `contoso`.
+* Les métadonnées MCP de `mycompany` annoncent l'issuer `mycompany`, pas `contoso`.
 * Le badge/logout utilisent le provider de la route.
 
 === AC-AUTH-13 — Validation de config
@@ -826,12 +826,12 @@ Le test vérifie aussi les en-têtes : `WWW-Authenticate` uniquement sur `401`.
 
 `TestAC_AUTH_15_DegradedStartupAndReload`
 
-* Démarrage avec `acme` down, `contoso` up : process démarre ; `acme` `degraded`,
+* Démarrage avec `mycompany` down, `contoso` up : process démarre ; `mycompany` `degraded`,
   `contoso` `ready` ; routes `contoso` `200`.
-* Reload avec `acme` down : nouvelle génération ; `acme` `degraded` ; `contoso`
+* Reload avec `mycompany` down : nouvelle génération ; `mycompany` `degraded` ; `contoso`
   mise à jour.
 * Reload avec config invalide : refusé ; ancienne génération active.
-* Reload avec un provider qui revient : `acme` repasse `ready` après health check.
+* Reload avec un provider qui revient : `mycompany` repasse `ready` après health check.
 * Drain : les requêtes en cours sur l'ancienne génération se terminent.
 
 === AC-AUTH-16 — Plugin V2
@@ -1070,8 +1070,8 @@ Phase E (rollout) :
 
 [source,bash]
 ----
-go run ./cmd/cladone-auth testkey --tenant acme --kid acme-2026-01 \
-  --seed testdata/auth/keys/acme.seed
+go run ./cmd/cladone-auth testkey --tenant mycompany --kid mycompany-2026-01 \
+  --seed testdata/auth/keys/mycompany.seed
 ----
 
 Le seed est public et réservé aux tests. Les clés de production ne sont jamais
@@ -1082,15 +1082,15 @@ dans le dépôt.
 [source,json]
 ----
 {
-  "iss": "https://auth.test/t/acme",
+  "iss": "https://auth.test/t/mycompany",
   "sub": "user-123",
   "aud": "cladone-go",
   "exp": 1770000000,
   "iat": 1769999700,
   "nbf": 1769999700,
   "jti": "01J...",
-  "tenant": "acme",
-  "email": "alice@acme.test",
+  "tenant": "mycompany",
+  "email": "alice@mycompany.test",
   "preferred_username": "alice",
   "roles": ["user"],
   "scope": "openid profile email mcp-tools",

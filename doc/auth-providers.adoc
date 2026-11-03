@@ -127,7 +127,7 @@ Native OIDC (production):
 export OIDC_CLIENT_SECRET=...      # never put it in the JSON
 gate-one init --oidc --host app.example.com \
   --backend http://127.0.0.1:8080 \
-  --issuer https://auth.example.com/realms/acme \
+  --issuer https://auth.example.com/realms/mycompany \
   --client-id gate-one
 gate-one -config api-routes.json
 ----
@@ -139,7 +139,7 @@ The generated configuration:
 {
   "authProvider": {
     "type": "oidc",
-    "issuer": "https://auth.example.com/realms/acme",
+    "issuer": "https://auth.example.com/realms/mycompany",
     "clientId": "gate-one",
     "clientSecretEnv": "OIDC_CLIENT_SECRET",
     "loginBaseUrl": "https://login.example.com",

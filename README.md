@@ -44,7 +44,7 @@ cd ../cladone-it-infra && make sync-config
 # 3. Production OIDC (your IdP; no auth-bridge required)
 ./bin/gate-one init --oidc --host app.example.com \
   --backend http://127.0.0.1:8080 \
-  --issuer https://auth.example.com/realms/acme \
+  --issuer https://auth.example.com/realms/mycompany \
   --client-id gate-one
 ```
 
@@ -76,33 +76,33 @@ second tenant gets its own issuer, key, audience, cookie and store:
 {
   "authProviders": [
     {
-      "id": "acme",
+      "id": "mycompany",
       "type": "oidc",
-      "issuer": "https://auth.example.com/t/acme",
+      "issuer": "https://auth.example.com/t/mycompany",
       "clientId": "cladone-go",
-      "clientSecretEnv": "ACME_OIDC_SECRET",
-      "loginBaseUrl": "https://login.acme.example.com",
-      "cookieDomain": "acme.example.com",
-      "cookieName": "cladone_acme_session",
+      "clientSecretEnv": "MYCOMPANY_OIDC_SECRET",
+      "loginBaseUrl": "https://login.mycompany.example.com",
+      "cookieDomain": "mycompany.example.com",
+      "cookieName": "cladone_mycompany_session",
       "roleClaims": ["roles"],
-      "mcpAudience": "https://mcp.acme.example.com",
-      "sessionStore": {"type": "bolt", "path": "./state/acme.db"}
+      "mcpAudience": "https://mcp.mycompany.example.com",
+      "sessionStore": {"type": "bolt", "path": "./state/mycompany.db"}
     },
     {
-      "id": "acme-api",
+      "id": "mycompany-api",
       "type": "jwt",
-      "issuer": "https://auth.example.com/t/acme",
-      "jwksUrl": "https://auth.example.com/t/acme/jwks.json",
-      "audience": "https://api.acme.example.com",
+      "issuer": "https://auth.example.com/t/mycompany",
+      "jwksUrl": "https://auth.example.com/t/mycompany/jwks.json",
+      "audience": "https://api.mycompany.example.com",
       "algorithms": ["EdDSA"]
     }
   ],
-  "defaultAuthProvider": "acme",
+  "defaultAuthProvider": "mycompany",
   "routes": [
-    {"host": "app.acme.example.com", "path": "/*", "frontend": true,
-     "backend": "http://app:8080", "auth": {"provider": "acme"}},
-    {"host": "api.acme.example.com", "path": "/*",
-     "backend": "http://api:8080", "auth": {"provider": "acme-api"}}
+    {"host": "app.mycompany.example.com", "path": "/*", "frontend": true,
+     "backend": "http://app:8080", "auth": {"provider": "mycompany"}},
+    {"host": "api.mycompany.example.com", "path": "/*",
+     "backend": "http://api:8080", "auth": {"provider": "mycompany-api"}}
   ]
 }
 ```
@@ -117,8 +117,8 @@ For multi-instance or immediate revocation, use the shared Redis store:
 
 ```json
 "authProviders": [{
-  "id": "acme", "type": "oidc", "...": "...",
-  "sessionKeyEnv": "ACME_SESSION_KEY",
+  "id": "mycompany", "type": "oidc", "...": "...",
+  "sessionKeyEnv": "MYCOMPANY_SESSION_KEY",
   "sessionStore": {
     "type": "redis",
     "url": "redis://redis:6379/0",
@@ -561,6 +561,6 @@ Mint tokens (vendor side; keep the private key offline):
 
 ```bash
 go run ./cmd/gate-one-license keygen
-go run ./cmd/gate-one-license sign -key priv.b64 -org "ACME" \
-  -email ops@acme.fr -plan pro -days 365 -domains acme.fr -features sso,mcp
+go run ./cmd/gate-one-license sign -key priv.b64 -org "MYCOMPANY" \
+  -email ops@mycompany.fr -plan pro -days 365 -domains mycompany.fr -features sso,mcp
 ```

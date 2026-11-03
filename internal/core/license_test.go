@@ -16,7 +16,7 @@ func TestLicenseStrictConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok, err := license.Sign(priv, license.Claims{
-		Org: "ACME", Exp: time.Now().Add(time.Hour).Unix(),
+		Org: "MYCOMPANY", Exp: time.Now().Add(time.Hour).Unix(),
 	})
 	if err != nil {
 		t.Fatal(err)

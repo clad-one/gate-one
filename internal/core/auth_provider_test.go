@@ -123,13 +123,13 @@ func TestPublicRouteNeedsNoProvider(t *testing.T) {
 }
 
 func TestAuthProviderOIDCConfig(t *testing.T) {
-	t.Setenv("ACME_OIDC_SECRET", "s3cret")
+	t.Setenv("MYCOMPANY_OIDC_SECRET", "s3cret")
 	cfg, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "oidc",
-			"issuer": "https://auth.example.com/realms/acme",
+			"issuer": "https://auth.example.com/realms/mycompany",
 			"clientId": "gate-one",
-			"clientSecretEnv": "ACME_OIDC_SECRET",
+			"clientSecretEnv": "MYCOMPANY_OIDC_SECRET",
 			"loginBaseUrl": "https://login.example.com",
 			"cookieDomain": "example.com"
 		},
@@ -154,7 +154,7 @@ func TestAuthProviderOIDCConfig(t *testing.T) {
 	if ap.RedirectURL != "https://login.example.com/auth/callback" {
 		t.Errorf("redirect = %q", ap.RedirectURL)
 	}
-	if got := cfg.AuthIssuer(); got != "https://auth.example.com/realms/acme" {
+	if got := cfg.AuthIssuer(); got != "https://auth.example.com/realms/mycompany" {
 		t.Errorf("issuer = %q", got)
 	}
 	if ap.SessionStore == nil || ap.SessionStore.Type != "bolt" {
@@ -171,7 +171,7 @@ func TestOIDCSessionStoreRedisRequiresURL(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "oidc",
-			"issuer": "https://auth.example.com/realms/acme",
+			"issuer": "https://auth.example.com/realms/mycompany",
 			"clientId": "gate-one",
 			"loginBaseUrl": "https://login.example.com",
 			"cookieDomain": "example.com",
@@ -189,7 +189,7 @@ func TestOIDCSessionKeyEnvMissing(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "oidc",
-			"issuer": "https://auth.example.com/realms/acme",
+			"issuer": "https://auth.example.com/realms/mycompany",
 			"clientId": "gate-one",
 			"loginBaseUrl": "https://login.example.com",
 			"cookieDomain": "example.com",
@@ -237,7 +237,7 @@ func TestAuthProviderOIDCMissingSecret(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "oidc",
-			"issuer": "https://auth.example.com/realms/acme",
+			"issuer": "https://auth.example.com/realms/mycompany",
 			"clientId": "gate-one",
 			"clientSecretEnv": "MISSING_OIDC_SECRET",
 			"loginBaseUrl": "https://login.example.com",
@@ -254,7 +254,7 @@ func TestAuthProviderOIDCMissingSecret(t *testing.T) {
 func TestOIDCTypeInferredFromClientID(t *testing.T) {
 	cfg, err := loadAuthTest(t, `{
 		"authProvider": {
-			"issuer": "https://auth.example.com/realms/acme",
+			"issuer": "https://auth.example.com/realms/mycompany",
 			"clientId": "gate-one",
 			"loginBaseUrl": "https://login.example.com",
 			"cookieDomain": "example.com"
@@ -292,7 +292,7 @@ func TestSessionStoreSentinelAuthTLSResolved(t *testing.T) {
 	cfg, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "oidc",
-			"issuer": "https://auth.example.com/realms/acme",
+			"issuer": "https://auth.example.com/realms/mycompany",
 			"clientId": "gate-one",
 			"loginBaseUrl": "https://login.example.com",
 			"cookieDomain": "example.com",
@@ -332,7 +332,7 @@ func TestSessionStoreSentinelFieldsRequireSentinelMode(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "oidc",
-			"issuer": "https://auth.example.com/realms/acme",
+			"issuer": "https://auth.example.com/realms/mycompany",
 			"clientId": "gate-one",
 			"loginBaseUrl": "https://login.example.com",
 			"cookieDomain": "example.com",
@@ -356,7 +356,7 @@ func TestSessionStoreTLSHelpersRequireTLS(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "oidc",
-			"issuer": "https://auth.example.com/realms/acme",
+			"issuer": "https://auth.example.com/realms/mycompany",
 			"clientId": "gate-one",
 			"loginBaseUrl": "https://login.example.com",
 			"cookieDomain": "example.com",
@@ -381,7 +381,7 @@ func TestSessionStoreTLSCaFileMissing(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "oidc",
-			"issuer": "https://auth.example.com/realms/acme",
+			"issuer": "https://auth.example.com/realms/mycompany",
 			"clientId": "gate-one",
 			"loginBaseUrl": "https://login.example.com",
 			"cookieDomain": "example.com",

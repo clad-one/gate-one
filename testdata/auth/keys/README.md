@@ -3,7 +3,7 @@
 These Ed25519 seeds were generated with:
 
 ```bash
-go run ./cmd/cladone-auth keygen -out testdata/auth/keys/acme-2026.key
+go run ./cmd/cladone-auth keygen -out testdata/auth/keys/mycompany-2026.key
 go run ./cmd/cladone-auth keygen -out testdata/auth/keys/contoso-2026.key
 ```
 

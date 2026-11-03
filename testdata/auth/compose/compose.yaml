@@ -18,16 +18,16 @@ services:
       timeout: 2s
       retries: 30
 
-  fake-google-acme:
+  fake-google-mycompany:
     <<: *go-service
     entrypoint: ["/usr/local/bin/fake-google"]
     command:
       - "-addr"
       - ":9000"
       - "-issuer"
-      - "http://idp.acme.localhost:9000"
+      - "http://idp.mycompany.localhost:9000"
       - "-config"
-      - "/auth/fake-google/acme.json"
+      - "/auth/fake-google/mycompany.json"
     volumes:
       - ../:/auth:ro
     ports:
@@ -35,7 +35,7 @@ services:
     networks:
       default:
         aliases:
-          - idp.acme.localhost
+          - idp.mycompany.localhost
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/healthz"]
       interval: 2s
@@ -66,10 +66,10 @@ services:
       timeout: 2s
       retries: 30
 
-  broker-acme:
+  broker-mycompany:
     <<: *go-service
     entrypoint: ["/usr/local/bin/cladone-auth"]
-    command: ["-config", "/auth/broker/acme.json"]
+    command: ["-config", "/auth/broker/mycompany.json"]
     volumes:
       - ../:/auth:ro
     ports:
@@ -77,11 +77,11 @@ services:
     networks:
       default:
         aliases:
-          - auth.acme.localhost
+          - auth.mycompany.localhost
     depends_on:
       redis:
         condition: service_healthy
-      fake-google-acme:
+      fake-google-mycompany:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
@@ -142,12 +142,12 @@ services:
       - "8080:8080"
     environment:
       GATE_ONE_SESSION_KEY: local-session-key
-      ACME_GATE_ONE_SECRET: local-acme-secret
+      MYCOMPANY_GATE_ONE_SECRET: local-mycompany-secret
       CONTOSO_GATE_ONE_SECRET: local-contoso-secret
     depends_on:
       redis:
         condition: service_healthy
-      broker-acme:
+      broker-mycompany:
         condition: service_healthy
       broker-contoso:
         condition: service_healthy
@@ -173,12 +173,12 @@ services:
       - "8090:8080"
     environment:
       GATE_ONE_SESSION_KEY: local-session-key
-      ACME_GATE_ONE_SECRET: local-acme-secret
+      MYCOMPANY_GATE_ONE_SECRET: local-mycompany-secret
       CONTOSO_GATE_ONE_SECRET: local-contoso-secret
     depends_on:
       redis:
         condition: service_healthy
-      broker-acme:
+      broker-mycompany:
         condition: service_healthy
       broker-contoso:
         condition: service_healthy

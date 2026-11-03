@@ -68,7 +68,7 @@ auth path never scans `plugins.d`.
   "ts": "2026-11-02T12:00:00Z",
   "instanceId": "gw-1",
   "epoch": "2026-11-02T11:00:00Z",
-  "tenant": "acme",
+  "tenant": "mycompany",
   "subjectId": "v1....",
   "route": "/api/process_stream",
   "method": "POST",
@@ -128,7 +128,7 @@ the subscription:
   "types": ["audit", "error"],
   "filters": {
     "routes": ["/api/*", "/mcp/*"],
-    "tenants": ["acme"],
+    "tenants": ["mycompany"],
     "methods": ["POST"],
     "statusClasses": ["2xx", "5xx"],
     "sampleRate": 1.0

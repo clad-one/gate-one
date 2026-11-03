@@ -309,8 +309,8 @@ const SESSION = {
   const gReg = renderGuard({
     userBadge: badgeCfg,
     license:
-      '{"state":"registered","reason":"ok","org":"ACME","email":"ops@acme.fr",' +
-      '"plan":"pro","exp":"2027-10-24","domains":["acme.fr"],"features":["sso"]}',
+      '{"state":"registered","reason":"ok","org":"MYCOMPANY","email":"ops@mycompany.fr",' +
+      '"plan":"pro","exp":"2027-10-24","domains":["mycompany.fr"],"features":["sso"]}',
   });
   const xr = await mkWindow(gReg, html, SESSION);
   const br = xr.doc.querySelector(".cladone-userbadge");
@@ -322,8 +322,8 @@ const SESSION = {
   xr.click(ir);
   await tick();
   boxR.textContent.includes("registered to:") &&
-  boxR.textContent.includes("ACME") &&
-  boxR.textContent.includes("ops@acme.fr") &&
+  boxR.textContent.includes("MYCOMPANY") &&
+  boxR.textContent.includes("ops@mycompany.fr") &&
   boxR.textContent.includes("plan: pro")
     ? ok("licence registered: details = registered to + signed claims")
     : fail("licence registered: details missing claims");

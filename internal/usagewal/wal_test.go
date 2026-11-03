@@ -17,7 +17,7 @@ func testEvent(typ usage.EventType, n int) *usage.Event {
 		Timestamp:      time.Now().UTC(),
 		InstanceID:     "gw-test",
 		Epoch:          "epoch-1",
-		Tenant:         "acme",
+		Tenant:         "mycompany",
 		SubjectID:      "v1.abcdef",
 		Route:          "/api/process_stream",
 		Method:         "POST",

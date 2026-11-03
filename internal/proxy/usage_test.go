@@ -203,7 +203,7 @@ func TestUsageRuntimeAuthEvent(t *testing.T) {
 	u := testUsageRuntime(t, srv.URL, 1<<20)
 
 	if err := u.authEvent(
-		"acme", "https://issuer.test",
+		"mycompany", "https://issuer.test",
 		authn.AuthEvent{
 			Action: "login", Result: "ok",
 			UserID: "sub-1", SessionID: "sid-1",
@@ -224,7 +224,7 @@ func TestUsageRuntimeAuthEvent(t *testing.T) {
 				!strings.HasPrefix(ev.SubjectID, "v1.") {
 				t.Fatalf("subjectId = %q", ev.SubjectID)
 			}
-			if ev.Tenant != "acme" {
+			if ev.Tenant != "mycompany" {
 				t.Fatalf("tenant = %q", ev.Tenant)
 			}
 			return
@@ -323,7 +323,7 @@ func TestUsageRuntimeSignedManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer u.close()
-	if err := u.authEvent("acme", "https://issuer.test",
+	if err := u.authEvent("mycompany", "https://issuer.test",
 		authn.AuthEvent{Action: "login", Result: "ok", UserID: "sub-1"}); err != nil {
 		t.Fatal(err)
 	}

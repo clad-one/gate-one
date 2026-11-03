@@ -41,16 +41,16 @@ func TestVerifyTokenSingleUse(t *testing.T) {
 	}
 	store := newMemoryAccounts()
 	ctx := context.Background()
-	if err := store.PutVerifyToken(ctx, "acme", hash, &verifyToken{
+	if err := store.PutVerifyToken(ctx, "mycompany", hash, &verifyToken{
 		Email:   "a@b.test",
 		Expires: time.Now().Add(time.Minute),
 	}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.TakeVerifyToken(ctx, "acme", hash); err != nil {
+	if _, err := store.TakeVerifyToken(ctx, "mycompany", hash); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.TakeVerifyToken(ctx, "acme", hash); err == nil {
+	if _, err := store.TakeVerifyToken(ctx, "mycompany", hash); err == nil {
 		t.Fatal("token replayed")
 	}
 }
@@ -104,14 +104,14 @@ func newAccountsTestBroker(t *testing.T) (*Broker, *tenantRuntime, *fakeMailer) 
 		rand:     rand.Reader,
 	}
 	rt := &tenantRuntime{cfg: Tenant{
-		ID:                    "acme",
+		ID:                    "mycompany",
 		LocalAccounts:         true,
 		AppOrigins:            []string{"https://app.test"},
 		RegistrationSecret:    "s3cret",
 		DefaultRoles:          []string{"user"},
 		RegistrationSecretEnv: "X",
 	}}
-	b.tenants["acme"] = rt
+	b.tenants["mycompany"] = rt
 	t.Cleanup(func() { _ = b.Close() })
 	return b, rt, mail
 }
@@ -134,7 +134,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 	b, rt, mail := newAccountsTestBroker(t)
 
 	rec := doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/acme/register", "s3cret",
+		"https://broker.test/t/mycompany/register", "s3cret",
 		`{"email":"Alice@App.test","password":"long-enough-pass",
 		  "name":"Alice","continueUrl":"https://app.test/"}`)
 	if rec.Code != http.StatusAccepted {
@@ -143,13 +143,13 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 	if mail.to != "alice@app.test" {
 		t.Fatalf("email sent to %q", mail.to)
 	}
-	if !strings.HasPrefix(mail.link, "https://broker.test/t/acme/verify-email?") {
+	if !strings.HasPrefix(mail.link, "https://broker.test/t/mycompany/verify-email?") {
 		t.Fatalf("link = %q", mail.link)
 	}
 
 	// The account exists, unverified, with the default role.
 	u, err := b.accounts.GetUserByEmail(
-		context.Background(), "acme", "alice@app.test")
+		context.Background(), "mycompany", "alice@app.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 		t.Fatalf("verify redirect = %q", loc)
 	}
 	u, err = b.accounts.GetUserByEmail(
-		context.Background(), "acme", "alice@app.test")
+		context.Background(), "mycompany", "alice@app.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 
 	// A verified account cannot be registered again.
 	rec = doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/acme/register", "s3cret",
+		"https://broker.test/t/mycompany/register", "s3cret",
 		`{"email":"alice@app.test","password":"long-enough-pass",
 		  "continueUrl":"https://app.test/"}`)
 	if rec.Code != http.StatusConflict {
@@ -198,7 +198,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 
 	// The registration secret is enforced.
 	rec = doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/acme/register", "wrong",
+		"https://broker.test/t/mycompany/register", "wrong",
 		`{"email":"bob@app.test","password":"long-enough-pass",
 		  "continueUrl":"https://app.test/"}`)
 	if rec.Code != http.StatusUnauthorized {
@@ -207,7 +207,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 
 	// continueUrl outside the tenant allowlist is refused.
 	rec = doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/acme/register", "s3cret",
+		"https://broker.test/t/mycompany/register", "s3cret",
 		`{"email":"bob@app.test","password":"long-enough-pass",
 		  "continueUrl":"https://evil.test/"}`)
 	if rec.Code != http.StatusBadRequest {
@@ -217,7 +217,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 	// Local accounts disabled on another tenant.
 	rt.cfg.LocalAccounts = false
 	rec = doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/acme/register", "s3cret", `{}`)
+		"https://broker.test/t/mycompany/register", "s3cret", `{}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("disabled register = %d, want 404", rec.Code)
 	}
@@ -236,7 +236,7 @@ func TestRegisterValidation(t *testing.T) {
 	}
 	for _, c := range cases {
 		rec := doJSON(t, b, http.MethodPost,
-			"https://broker.test/t/acme/register", "s3cret", c.body)
+			"https://broker.test/t/mycompany/register", "s3cret", c.body)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d, want 400", c.name, rec.Code)
 		}
@@ -247,7 +247,7 @@ func TestRegisterMailerFailure(t *testing.T) {
 	b, _, mail := newAccountsTestBroker(t)
 	mail.err = context.DeadlineExceeded
 	rec := doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/acme/register", "s3cret",
+		"https://broker.test/t/mycompany/register", "s3cret",
 		`{"email":"a@app.test","password":"long-enough-pass",
 		  "continueUrl":"https://app.test/"}`)
 	if rec.Code != http.StatusBadGateway {

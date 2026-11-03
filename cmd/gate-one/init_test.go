@@ -11,7 +11,7 @@ func TestDeriveDevHosts(t *testing.T) {
 	cases := []struct{ host, domain, login string }{
 		{"app.localhost", "app.localhost", "login.app.localhost"},
 		{"app.demo.localhost", "demo.localhost", "login.demo.localhost"},
-		{"app.acme.com", "acme.com", "login.acme.com"},
+		{"app.mycompany.com", "mycompany.com", "login.mycompany.com"},
 	}
 	for _, c := range cases {
 		domain, login := deriveDevHosts(c.host)
@@ -126,9 +126,9 @@ func TestRunInitOIDC(t *testing.T) {
 		"--oidc",
 		"--host", "app.demo.localhost",
 		"--backend", "http://127.0.0.1:8080",
-		"--issuer", "https://auth.example.com/realms/acme",
+		"--issuer", "https://auth.example.com/realms/mycompany",
 		"--client-id", "gate-one",
-		"--client-secret-env", "ACME_OIDC_SECRET",
+		"--client-secret-env", "MYCOMPANY_OIDC_SECRET",
 		"--out", out,
 	}); code != 0 {
 		t.Fatalf("oidc init = %d", code)
@@ -157,8 +157,8 @@ func TestRunInitOIDC(t *testing.T) {
 	}
 	ap := cfg.AuthProvider
 	if ap.Type != "oidc" || ap.ClientID != "gate-one" ||
-		ap.Issuer != "https://auth.example.com/realms/acme" ||
-		ap.ClientSecretEnv != "ACME_OIDC_SECRET" {
+		ap.Issuer != "https://auth.example.com/realms/mycompany" ||
+		ap.ClientSecretEnv != "MYCOMPANY_OIDC_SECRET" {
 		t.Errorf("authProvider = %+v", ap)
 	}
 	if ap.LoginBaseURL != "https://login.demo.localhost" {

@@ -87,7 +87,7 @@ func TestBrokerRedisConfigSentinelValidation(t *testing.T) {
 		return &Config{
 			PublicURL: "https://broker.test",
 			Tenants: []Tenant{{
-				ID:           "acme",
+				ID:           "mycompany",
 				ClientID:     "gate-one",
 				RedirectURIs: []string{"https://login.test/callback"},
 				Google:       GoogleConfig{ClientID: "google-client"},

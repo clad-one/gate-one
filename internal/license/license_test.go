@@ -27,8 +27,8 @@ func TestEvalRegistered(t *testing.T) {
 	}
 	exp := time.Now().Add(24 * time.Hour).Unix()
 	tok, err := Sign(priv, Claims{
-		Sub: "acme", Org: "ACME", Email: "ops@acme.fr", Plan: "pro",
-		Exp: exp, Domains: []string{"acme.fr"}, Features: []string{"sso"},
+		Sub: "mycompany", Org: "MYCOMPANY", Email: "ops@mycompany.fr", Plan: "pro",
+		Exp: exp, Domains: []string{"mycompany.fr"}, Features: []string{"sso"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -37,10 +37,10 @@ func TestEvalRegistered(t *testing.T) {
 	if st.State != "registered" || st.Reason != "ok" {
 		t.Fatalf("state=%s reason=%s, want registered/ok", st.State, st.Reason)
 	}
-	if st.Org != "ACME" || st.Email != "ops@acme.fr" || st.Plan != "pro" {
+	if st.Org != "MYCOMPANY" || st.Email != "ops@mycompany.fr" || st.Plan != "pro" {
 		t.Fatalf("claims not surfaced: %+v", st)
 	}
-	if len(st.Domains) != 1 || st.Domains[0] != "acme.fr" {
+	if len(st.Domains) != 1 || st.Domains[0] != "mycompany.fr" {
 		t.Fatalf("domains = %v", st.Domains)
 	}
 	if st.Exp == "" {
@@ -50,19 +50,19 @@ func TestEvalRegistered(t *testing.T) {
 
 func TestEvalExpired(t *testing.T) {
 	pub, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "ACME", Exp: time.Now().Add(-time.Hour).Unix()})
+	tok, _ := Sign(priv, Claims{Org: "MYCOMPANY", Exp: time.Now().Add(-time.Hour).Unix()})
 	st := Eval(&Config{Token: tok, PublicKey: EncodePublicKey(pub)}, time.Now())
 	if st.State != "eval" || st.Reason != "expired" {
 		t.Fatalf("state=%s reason=%s, want eval/expired", st.State, st.Reason)
 	}
-	if st.Org != "ACME" {
+	if st.Org != "MYCOMPANY" {
 		t.Fatal("expired token should still surface its claims for the UI")
 	}
 }
 
 func TestEvalTampered(t *testing.T) {
 	pub, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "ACME"})
+	tok, _ := Sign(priv, Claims{Org: "MYCOMPANY"})
 	parts := strings.Split(tok, ".")
 	// flip a payload character (keep base64url alphabet valid)
 	payload := []byte(parts[1])
@@ -81,7 +81,7 @@ func TestEvalTampered(t *testing.T) {
 func TestEvalWrongKey(t *testing.T) {
 	_, priv, _ := GenerateKey()
 	otherPub, _, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "ACME"})
+	tok, _ := Sign(priv, Claims{Org: "MYCOMPANY"})
 	st := Eval(&Config{Token: tok, PublicKey: EncodePublicKey(otherPub)}, time.Now())
 	if st.State != "eval" || st.Reason != "invalid" {
 		t.Fatalf("wrong key = %s/%s, want eval/invalid", st.State, st.Reason)
@@ -90,7 +90,7 @@ func TestEvalWrongKey(t *testing.T) {
 
 func TestEvalNoKey(t *testing.T) {
 	_, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "ACME"})
+	tok, _ := Sign(priv, Claims{Org: "MYCOMPANY"})
 	st := Eval(&Config{Token: tok}, time.Now())
 	if st.State != "eval" || st.Reason != "no-key" {
 		t.Fatalf("no key = %s/%s, want eval/no-key", st.State, st.Reason)

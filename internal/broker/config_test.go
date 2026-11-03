@@ -8,8 +8,8 @@ func TestAC_AUTH_13_BrokerLocalRedirectURIs(t *testing.T) {
 		"http://localhost:8080/auth/callback",
 		"http://127.0.0.1:8080/auth/callback",
 		"http://[::1]:8080/auth/callback",
-		"http://login.acme.localhost:8080/auth/callback",
-		"http://app.acme.localhost:8080/*",
+		"http://login.mycompany.localhost:8080/auth/callback",
+		"http://app.mycompany.localhost:8080/*",
 	}
 	for _, raw := range ok {
 		if !isLocalRedirect(raw) {
@@ -30,17 +30,17 @@ func TestAC_AUTH_13_BrokerLocalRedirectURIs(t *testing.T) {
 	}
 
 	cfg := &Config{
-		PublicURL: "http://auth.acme.localhost:8081",
+		PublicURL: "http://auth.mycompany.localhost:8081",
 		Tenants: []Tenant{{
-			ID:           "acme",
+			ID:           "mycompany",
 			ClientID:     "gate-one",
 			ClientSecret: "secret",
 			RedirectURIs: []string{
-				"http://login.acme.localhost:8080/auth/callback",
+				"http://login.mycompany.localhost:8080/auth/callback",
 			},
 			PostLogoutRedirectURIs: []string{
-				"http://login.acme.localhost:8080/*",
-				"http://app.acme.localhost:8080/*",
+				"http://login.mycompany.localhost:8080/*",
+				"http://app.mycompany.localhost:8080/*",
 			},
 			Google: GoogleConfig{
 				Issuer:   "http://idp.localhost:9000",
@@ -69,11 +69,11 @@ func TestAC_AUTH_13_GoogleClientIDEnv(t *testing.T) {
 		return &Config{
 			PublicURL: "https://broker.test",
 			Tenants: []Tenant{{
-				ID:           "acme",
+				ID:           "mycompany",
 				ClientID:     "gate-one",
 				ClientSecret: "secret",
 				RedirectURIs: []string{
-					"https://login.acme.test/auth/callback",
+					"https://login.mycompany.test/auth/callback",
 				},
 				Google: GoogleConfig{
 					Issuer:      "https://accounts.google.com",
@@ -123,7 +123,7 @@ func TestLocalAccountsConfigValidation(t *testing.T) {
 		return &Config{
 			PublicURL: "https://broker.test",
 			Tenants: []Tenant{{
-				ID:                    "acme",
+				ID:                    "mycompany",
 				ClientID:              "gate-one",
 				RedirectURIs:          []string{"https://login.test/callback"},
 				Google:                GoogleConfig{ClientID: "google-client"},

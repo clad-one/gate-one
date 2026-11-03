@@ -92,9 +92,9 @@ func New(cfg Config) (*Server, error) {
 	if len(cfg.Users) == 0 {
 		cfg.Users = []User{{
 			Sub:               "google-sub-1",
-			Email:             "alice@acme.test",
+			Email:             "alice@mycompany.test",
 			EmailVerified:     true,
-			HostedDomain:      "acme.test",
+			HostedDomain:      "mycompany.test",
 			PreferredUsername: "alice",
 			Name:              "Alice",
 		}}

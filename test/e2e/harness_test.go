@@ -3,7 +3,7 @@
 // Package e2e runs the full authentication chain in-process: fake
 // Google, two brokers (one per tenant), two Gate One instances sharing
 // Redis, and a test backend. Hosts are rewritten by a transport so the
-// cookie jar sees real domains (acme.test, contoso.test) while the
+// cookie jar sees real domains (mycompany.test, contoso.test) while the
 // servers listen on 127.0.0.1.
 package e2e
 
@@ -37,7 +37,7 @@ import (
 )
 
 const (
-	acmeDomain    = "acme.test"
+	mycompanyDomain    = "mycompany.test"
 	contosoDomain = "contoso.test"
 
 	sessionKeyEnv   = "E2E_SESSION_KEY"
@@ -48,17 +48,17 @@ const (
 )
 
 type stackOptions struct {
-	acmeBrokerDown bool
-	// acmeBrokerDelay injects a per-request delay into the acme broker
-	// handler (0 = none). Adjustable at runtime via s.acmeDelay.
-	acmeBrokerDelay time.Duration
+	mycompanyBrokerDown bool
+	// mycompanyBrokerDelay injects a per-request delay into the mycompany broker
+	// handler (0 = none). Adjustable at runtime via s.mycompanyDelay.
+	mycompanyBrokerDelay time.Duration
 	// redisDelay injects a per-direction TCP delay in front of the
 	// shared Redis (0 = direct connection).
 	redisDelay time.Duration
-	// acmeBrokerProxy puts a stable, swappable HTTP proxy in front of
-	// the acme broker so a key rotation can replace the broker
+	// mycompanyBrokerProxy puts a stable, swappable HTTP proxy in front of
+	// the mycompany broker so a key rotation can replace the broker
 	// instance behind the same public URL.
-	acmeBrokerProxy bool
+	mycompanyBrokerProxy bool
 	// redisHA replaces the miniredis URL with a real Sentinel cluster
 	// (TLS + ACL). Used by the e2e_ha build tag against the local
 	// Redis HA stack.
@@ -129,15 +129,15 @@ type Stack struct {
 	fakeSrv *httptest.Server
 	redis   *miniredis.Miniredis
 
-	acmeBroker *broker.Broker
-	acmeSrv    *httptest.Server
-	acmeCfg    *broker.Config
-	acmeDelay  *netchaos.HTTPDelay
+	mycompanyBroker *broker.Broker
+	mycompanySrv    *httptest.Server
+	mycompanyCfg    *broker.Config
+	mycompanyDelay  *netchaos.HTTPDelay
 
-	// Set when the acme broker sits behind a stable proxy (key
+	// Set when the mycompany broker sits behind a stable proxy (key
 	// rotation test).
 	brokerProxy *netchaos.HTTPProxy
-	acmeKeyFile string
+	mycompanyKeyFile string
 
 	redisProxy *netchaos.DelayProxy
 
@@ -170,14 +170,14 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		ClientID: "google-client",
 		Users: []fakegoogle.User{
 			{
-				Sub: "google-acme-alice", Email: "alice@acme.test",
-				EmailVerified: true, HostedDomain: acmeDomain,
+				Sub: "google-mycompany-alice", Email: "alice@mycompany.test",
+				EmailVerified: true, HostedDomain: mycompanyDomain,
 				PreferredUsername: "alice", Name: "Alice",
 				Groups: []string{"admins"},
 			},
 			{
-				Sub: "google-acme-carol", Email: "carol@acme.test",
-				EmailVerified: true, HostedDomain: acmeDomain,
+				Sub: "google-mycompany-carol", Email: "carol@mycompany.test",
+				EmailVerified: true, HostedDomain: mycompanyDomain,
 				PreferredUsername: "carol", Name: "Carol",
 				Groups: []string{"superusers"},
 			},
@@ -227,56 +227,56 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		brokerRedis = opts.redisHA.brokerRedis
 	}
 
-	s.acmeCfg = newBrokerConfig(
-		"acme", s.fakeSrv.URL, brokerRedis("acme"), acmeDomain)
-	if opts.acmeBrokerProxy {
+	s.mycompanyCfg = newBrokerConfig(
+		"mycompany", s.fakeSrv.URL, brokerRedis("mycompany"), mycompanyDomain)
+	if opts.mycompanyBrokerProxy {
 		// A stable key file so the rotated config can keep the old
 		// key in keyFiles (overlap window).
-		kf := filepath.Join(t.TempDir(), "acme.key")
+		kf := filepath.Join(t.TempDir(), "mycompany.key")
 		if err := writeTestKey(kf); err != nil {
 			t.Fatal(err)
 		}
-		s.acmeKeyFile = kf
-		s.acmeCfg.Tenants[0].KeyFiles = []string{kf}
+		s.mycompanyKeyFile = kf
+		s.mycompanyCfg.Tenants[0].KeyFiles = []string{kf}
 	}
-	s.acmeBroker, s.acmeSrv, s.acmeDelay = newBroker(t, s.acmeCfg)
-	if opts.acmeBrokerDelay > 0 {
-		s.acmeDelay.SetDelay(opts.acmeBrokerDelay)
+	s.mycompanyBroker, s.mycompanySrv, s.mycompanyDelay = newBroker(t, s.mycompanyCfg)
+	if opts.mycompanyBrokerDelay > 0 {
+		s.mycompanyDelay.SetDelay(opts.mycompanyBrokerDelay)
 	}
-	if opts.acmeBrokerDown {
+	if opts.mycompanyBrokerDown {
 		// Close only the HTTP surface: the broker object (and its
 		// Redis client) stays alive so t.Cleanup closes it once.
-		s.acmeSrv.Close()
+		s.mycompanySrv.Close()
 	}
-	if opts.acmeBrokerProxy {
-		bp, err := netchaos.NewHTTPProxy(s.acmeSrv.URL)
+	if opts.mycompanyBrokerProxy {
+		bp, err := netchaos.NewHTTPProxy(s.mycompanySrv.URL)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(bp.Close)
 		s.brokerProxy = bp
-		s.acmeBroker.SetPublicURL(bp.URL())
+		s.mycompanyBroker.SetPublicURL(bp.URL())
 	}
 
 	s.contosoCfg = newBrokerConfig(
 		"contoso", s.fakeSrv.URL, brokerRedis("contoso"), contosoDomain)
 	s.contosoBroker, s.contosoSrv, _ = newBroker(t, s.contosoCfg)
 
-	acmeIssuer := s.acmeSrv.URL
+	mycompanyIssuer := s.mycompanySrv.URL
 	if s.brokerProxy != nil {
-		acmeIssuer = s.brokerProxy.URL()
+		mycompanyIssuer = s.brokerProxy.URL()
 	}
 
 	cfg := loadConfig(t, fmt.Sprintf(`{
 		"authProviders": [
 			{
-				"id": "acme", "type": "oidc",
+				"id": "mycompany", "type": "oidc",
 				"issuer": %q,
 				"clientId": "gate-one",
 				"clientSecretEnv": %q,
-				"loginBaseUrl": "https://login.acme.test",
+				"loginBaseUrl": "https://login.mycompany.test",
 				"cookieDomain": %q,
-				"cookieName": "gate_one_acme",
+				"cookieName": "gate_one_mycompany",
 				"roleClaims": ["roles", "groups"],
 				"sessionStore": %s,
 				"sessionKeyEnv": %q,
@@ -300,25 +300,25 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 				"backchannelLogout": true
 			}
 		],
-		"defaultAuthProvider": "acme",
-		"defaultAppUrl": "https://app.acme.test/",
+		"defaultAuthProvider": "mycompany",
+		"defaultAppUrl": "https://app.mycompany.test/",
 		"routes": [
-			{"host": "app.acme.test", "path": "/*", "frontend": true,
-			 "backend": %q, "auth": {"provider": "acme"}},
-			{"host": "app2.acme.test", "path": "/*", "frontend": true,
-			 "backend": %q, "auth": {"provider": "acme"}},
-			{"host": "api.acme.test", "path": "/*",
-			 "backend": %q, "auth": {"provider": "acme"}},
-			{"host": "public.acme.test", "path": "/*", "frontend": true,
+			{"host": "app.mycompany.test", "path": "/*", "frontend": true,
+			 "backend": %q, "auth": {"provider": "mycompany"}},
+			{"host": "app2.mycompany.test", "path": "/*", "frontend": true,
+			 "backend": %q, "auth": {"provider": "mycompany"}},
+			{"host": "api.mycompany.test", "path": "/*",
+			 "backend": %q, "auth": {"provider": "mycompany"}},
+			{"host": "public.mycompany.test", "path": "/*", "frontend": true,
 			 "backend": %q},
-			{"host": "denied.acme.test", "path": "/*", "frontend": true,
-			 "backend": %q, "auth": {"provider": "acme",
+			{"host": "denied.mycompany.test", "path": "/*", "frontend": true,
+			 "backend": %q, "auth": {"provider": "mycompany",
 			  "identity": {"roles": ["superusers"]}}},
 			{"host": "app.contoso.test", "path": "/*", "frontend": true,
 			 "backend": %q, "auth": {"provider": "contoso"}}
 		]
 	}`,
-		acmeIssuer+"/t/acme", clientSecretEnv, acmeDomain,
+		mycompanyIssuer+"/t/mycompany", clientSecretEnv, mycompanyDomain,
 		sessionStore, sessionKeyEnv,
 		s.contosoSrv.URL+"/t/contoso", clientSecretEnv, contosoDomain,
 		sessionStore, sessionKeyEnv,
@@ -349,12 +349,12 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 	})
 
 	hosts := map[string]*httptest.Server{
-		"app.acme.test":      s.gw1Srv,
-		"app2.acme.test":     s.gw2Srv,
-		"login.acme.test":    s.gw1Srv,
-		"api.acme.test":      s.gw1Srv,
-		"public.acme.test":   s.gw1Srv,
-		"denied.acme.test":   s.gw1Srv,
+		"app.mycompany.test":      s.gw1Srv,
+		"app2.mycompany.test":     s.gw2Srv,
+		"login.mycompany.test":    s.gw1Srv,
+		"api.mycompany.test":      s.gw1Srv,
+		"public.mycompany.test":   s.gw1Srv,
+		"denied.mycompany.test":   s.gw1Srv,
 		"app.contoso.test":   s.gw1Srv,
 		"login.contoso.test": s.gw1Srv,
 	}

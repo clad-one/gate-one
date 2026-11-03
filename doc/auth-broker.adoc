@@ -20,10 +20,10 @@ Gate One ne charge **aucun plugin de provider**. Il connaît seulement
 
 ----
 Navigateur
-  -> Gate One (route acme, pas de session)
-  -> broker /t/acme/authorize
+  -> Gate One (route mycompany, pas de session)
+  -> broker /t/mycompany/authorize
   -> Google
-  -> broker /t/acme/callback
+  -> broker /t/mycompany/callback
   -> Gate One /auth/callback
   -> session Gate One
 ----
@@ -58,7 +58,7 @@ logout global utilisateur.
 
 ----
 Client M2M
-  -> broker /t/acme/token (client_credentials)
+  -> broker /t/mycompany/token (client_credentials)
   -> access token JWT (aud = ressource MCP)
   -> Gate One Authorization: Bearer
   -> validation JWKS locale
@@ -79,32 +79,32 @@ Client M2M
   },
   "tenants": [
     {
-      "id": "acme",
+      "id": "mycompany",
       "clientId": "cladone-go",
-      "clientSecretEnv": "ACME_BROKER_CLIENT_SECRET",
+      "clientSecretEnv": "MYCOMPANY_BROKER_CLIENT_SECRET",
       "redirectUris": [
-        "https://login.acme.example.com/auth/callback"
+        "https://login.mycompany.example.com/auth/callback"
       ],
       "postLogoutRedirectUris": [
-        "https://app.acme.example.com/"
+        "https://app.mycompany.example.com/"
       ],
       "audiences": [
-        "https://mcp.acme.example.com"
+        "https://mcp.mycompany.example.com"
       ],
       "keyFiles": [
-        "keys/acme-2025.key",
-        "keys/acme-2026.key"
+        "keys/mycompany-2025.key",
+        "keys/mycompany-2026.key"
       ],
       "google": {
         "issuer": "https://accounts.google.com",
         "clientId": "REPLACE_ME.apps.googleusercontent.com",
         "clientSecretEnv": "GOOGLE_CLIENT_SECRET",
-        "hostedDomain": "acme.example.com",
+        "hostedDomain": "mycompany.example.com",
         "scopes": ["openid", "profile", "email"]
       },
       "defaultRoles": ["user"],
-      "allowedDomains": ["acme.example.com"],
-      "adminEmails": ["admin@acme.example.com"],
+      "allowedDomains": ["mycompany.example.com"],
+      "adminEmails": ["admin@mycompany.example.com"],
       "groupRoles": {
         "admins": ["admin"]
       },
@@ -136,33 +136,33 @@ GET  /t/{tenant}/logout
 {
   "authProviders": [
     {
-      "id": "acme",
+      "id": "mycompany",
       "type": "oidc",
-      "issuer": "https://auth.example.com/t/acme",
+      "issuer": "https://auth.example.com/t/mycompany",
       "clientId": "cladone-go",
-      "clientSecretEnv": "ACME_OIDC_SECRET",
-      "loginBaseUrl": "https://login.acme.example.com",
-      "cookieDomain": "acme.example.com",
-      "cookieName": "cladone_acme_session",
+      "clientSecretEnv": "MYCOMPANY_OIDC_SECRET",
+      "loginBaseUrl": "https://login.mycompany.example.com",
+      "cookieDomain": "mycompany.example.com",
+      "cookieName": "cladone_mycompany_session",
       "roleClaims": ["roles"],
-      "mcpAudience": "https://mcp.acme.example.com",
+      "mcpAudience": "https://mcp.mycompany.example.com",
       "sessionStore": {
         "type": "redis",
         "url": "redis://redis:6379/0",
         "passwordEnv": "REDIS_PASSWORD",
         "prefix": "cladone:auth:v1:"
       },
-      "sessionKeyEnv": "ACME_SESSION_KEY"
+      "sessionKeyEnv": "MYCOMPANY_SESSION_KEY"
     }
   ],
-  "defaultAuthProvider": "acme",
+  "defaultAuthProvider": "mycompany",
   "routes": [
     {
-      "host": "app.acme.example.com",
+      "host": "app.mycompany.example.com",
       "path": "/*",
       "frontend": true,
       "backend": "http://app:8080",
-      "auth": { "provider": "acme" }
+      "auth": { "provider": "mycompany" }
     }
   ]
 }
@@ -175,20 +175,20 @@ Pour une API machine non-MCP :
 {
   "authProviders": [
     {
-      "id": "acme-api",
+      "id": "mycompany-api",
       "type": "jwt",
-      "issuer": "https://auth.example.com/t/acme",
-      "jwksUrl": "https://auth.example.com/t/acme/jwks.json",
-      "audience": "https://api.acme.example.com",
+      "issuer": "https://auth.example.com/t/mycompany",
+      "jwksUrl": "https://auth.example.com/t/mycompany/jwks.json",
+      "audience": "https://api.mycompany.example.com",
       "algorithms": ["EdDSA"]
     }
   ],
   "routes": [
     {
-      "host": "api.acme.example.com",
+      "host": "api.mycompany.example.com",
       "path": "/*",
       "backend": "http://api:8080",
-      "auth": { "provider": "acme-api" }
+      "auth": { "provider": "mycompany-api" }
     }
   ]
 }
@@ -276,14 +276,14 @@ make build-auth
 
 # Nouvelle clé : l'ajouter en FIN de keyFiles, recharger, puis retirer
 # l'ancienne après expiration des tokens signés avec elle.
-./bin/cladone-auth keygen -out keys/acme-2026.key
+./bin/cladone-auth keygen -out keys/mycompany-2026.key
 
 # Révocation immédiate d'une session ou d'un utilisateur (Redis requis).
 # Sans -ttl, la durée est celle du refresh token du tenant (jamais
 # moins que la session) : une révocation plus courte laisserait un
 # refresh token encore valide recréer une session après le logout.
 ./bin/cladone-auth revoke -config cladone-auth.json \
-  -tenant acme -sid <sid>
+  -tenant mycompany -sid <sid>
 ----
 
 `keyFiles` est ordonné de l'ancienne à la plus récente : la dernière clé

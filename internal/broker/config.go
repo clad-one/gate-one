@@ -500,7 +500,7 @@ func (t *Tenant) logoutRevocationTTL() time.Duration {
 
 // isLocalRedirect accepts HTTPS anywhere, or HTTP on a loopback or
 // .localhost name (RFC 6761). The .localhost form is what lets the
-// local Compose stack use real cookie domains (app.acme.localhost)
+// local Compose stack use real cookie domains (app.mycompany.localhost)
 // without TLS.
 func isLocalRedirect(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))

@@ -152,7 +152,7 @@ type statsSnapshot struct {
 
 func readStats(t *testing.T, client *http.Client) statsSnapshot {
 	t.Helper()
-	resp, err := client.Get("https://app.acme.test/__gate-one/stats")
+	resp, err := client.Get("https://app.mycompany.test/__gate-one/stats")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,18 +172,18 @@ func readStats(t *testing.T, client *http.Client) statsSnapshot {
 // check) and proves the cache is actually serving.
 func TestLoad_AuthenticatedLatency(t *testing.T) {
 	s := NewStack(t)
-	s.setUser("alice@acme.test")
-	s.login("https://app.acme.test/")
+	s.setUser("alice@mycompany.test")
+	s.login("https://app.mycompany.test/")
 
 	// Warm up: TLS session, Redis pool, identity cache.
 	for i := 0; i < 20; i++ {
-		if got := getStatus(t, s.noRedirect, "https://app.acme.test/"); got != 200 {
+		if got := getStatus(t, s.noRedirect, "https://app.mycompany.test/"); got != 200 {
 			t.Fatalf("warmup = %d", got)
 		}
 	}
 
 	before := readStats(t, s.noRedirect)
-	res := runLoad(t, s.noRedirect, "https://app.acme.test/", 8, 150)
+	res := runLoad(t, s.noRedirect, "https://app.mycompany.test/", 8, 150)
 	after := readStats(t, s.noRedirect)
 
 	res.requireAll(t, 200)
@@ -206,18 +206,18 @@ func TestLoad_AuthenticatedLatency(t *testing.T) {
 // failing requests.
 func TestChaos_RedisSlowDown(t *testing.T) {
 	s := newStack(t, stackOptions{redisDelay: 20 * time.Millisecond})
-	s.setUser("alice@acme.test")
-	s.login("https://app.acme.test/")
+	s.setUser("alice@mycompany.test")
+	s.login("https://app.mycompany.test/")
 	for i := 0; i < 10; i++ {
-		getStatus(t, s.noRedirect, "https://app.acme.test/")
+		getStatus(t, s.noRedirect, "https://app.mycompany.test/")
 	}
 
 	s.redisProxy.SetDelay(0)
-	fast := runLoad(t, s.noRedirect, "https://app.acme.test/", 4, 60)
+	fast := runLoad(t, s.noRedirect, "https://app.mycompany.test/", 4, 60)
 	fast.requireAll(t, 200)
 
 	s.redisProxy.SetDelay(20 * time.Millisecond)
-	slow := runLoad(t, s.noRedirect, "https://app.acme.test/", 4, 60)
+	slow := runLoad(t, s.noRedirect, "https://app.mycompany.test/", 4, 60)
 	slow.requireAll(t, 200)
 
 	f50, s50 := fast.lat.quantile(0.50), slow.lat.quantile(0.50)
@@ -233,22 +233,22 @@ func TestChaos_RedisSlowDown(t *testing.T) {
 // working, and traffic recovers when Redis returns.
 func TestChaos_RedisOutageUnderLoad(t *testing.T) {
 	s := NewStack(t)
-	s.setUser("alice@acme.test")
-	s.login("https://app.acme.test/")
+	s.setUser("alice@mycompany.test")
+	s.login("https://app.mycompany.test/")
 	proxy.ResetAuthCache()
 
 	s.redis.SetError("ERR simulated outage")
 
-	down := runLoad(t, s.noRedirect, "https://app.acme.test/", 4, 50)
+	down := runLoad(t, s.noRedirect, "https://app.mycompany.test/", 4, 50)
 	down.requireAll(t, http.StatusBadGateway)
 
-	pub := runLoad(t, s.noRedirect, "https://public.acme.test/", 4, 50)
+	pub := runLoad(t, s.noRedirect, "https://public.mycompany.test/", 4, 50)
 	pub.requireAll(t, 200)
 
 	s.redis.SetError("")
 	proxy.ResetAuthCache()
 
-	up := runLoad(t, s.noRedirect, "https://app.acme.test/", 4, 50)
+	up := runLoad(t, s.noRedirect, "https://app.mycompany.test/", 4, 50)
 	up.requireAll(t, 200)
 
 	t.Logf("outage: authenticated 502, public 200, recovery 200")
@@ -258,18 +258,18 @@ func TestChaos_RedisOutageUnderLoad(t *testing.T) {
 // the broker: a slow broker makes login slow but leaves established
 // sessions fast.
 func TestChaos_BrokerSlow(t *testing.T) {
-	s := newStack(t, stackOptions{acmeBrokerDelay: 200 * time.Millisecond})
-	s.setUser("alice@acme.test")
+	s := newStack(t, stackOptions{mycompanyBrokerDelay: 200 * time.Millisecond})
+	s.setUser("alice@mycompany.test")
 
 	t0 := time.Now()
-	s.login("https://app.acme.test/")
+	s.login("https://app.mycompany.test/")
 	loginDur := time.Since(t0)
 	if loginDur < 200*time.Millisecond {
 		t.Fatalf("login = %s, broker delay not applied", loginDur)
 	}
 
 	proxy.ResetAuthCache()
-	res := runLoad(t, s.noRedirect, "https://app.acme.test/", 4, 100)
+	res := runLoad(t, s.noRedirect, "https://app.mycompany.test/", 4, 100)
 	res.requireAll(t, 200)
 
 	t.Logf("login (broker delayed 200ms) = %s", loginDur.Round(time.Millisecond))
@@ -284,10 +284,10 @@ func TestChaos_BrokerSlow(t *testing.T) {
 // and the gateway must not fail with 5xx.
 func TestLoad_RevocationUnderLoad(t *testing.T) {
 	s := NewStack(t)
-	s.setUser("alice@acme.test")
-	s.login("https://app.acme.test/")
+	s.setUser("alice@mycompany.test")
+	s.login("https://app.mycompany.test/")
 
-	c := s.rpCookie("app.acme.test", "gate_one_acme")
+	c := s.rpCookie("app.mycompany.test", "gate_one_mycompany")
 	if c == nil {
 		t.Fatal("no RP cookie after login")
 	}
@@ -325,7 +325,7 @@ func TestLoad_RevocationUnderLoad(t *testing.T) {
 					return
 				default:
 				}
-				resp, err := s.noRedirect.Get("https://app.acme.test/")
+				resp, err := s.noRedirect.Get("https://app.mycompany.test/")
 				if err != nil {
 					return
 				}
@@ -338,7 +338,7 @@ func TestLoad_RevocationUnderLoad(t *testing.T) {
 
 	time.Sleep(250 * time.Millisecond)
 	if err := broker.RevokeWithConfig(
-		context.Background(), s.acmeCfg, "acme", sid, uid, time.Hour,
+		context.Background(), s.mycompanyCfg, "mycompany", sid, uid, time.Hour,
 	); err != nil {
 		close(stop)
 		wg.Wait()
@@ -361,7 +361,7 @@ func TestLoad_RevocationUnderLoad(t *testing.T) {
 	}
 
 	// After the load, the session is definitively refused.
-	if got := getStatus(t, s.noRedirect, "https://app.acme.test/"); got != http.StatusFound &&
+	if got := getStatus(t, s.noRedirect, "https://app.mycompany.test/"); got != http.StatusFound &&
 		got != http.StatusUnauthorized {
 		t.Fatalf("after revocation = %d, want 302/401", got)
 	}
@@ -372,11 +372,11 @@ func TestLoad_RevocationUnderLoad(t *testing.T) {
 // one. The old session must stay valid (overlap) and a new login must
 // succeed with the new key (JWKS refresh on unknown kid).
 func TestLoad_KeyRotationOverlap(t *testing.T) {
-	s := newStack(t, stackOptions{acmeBrokerProxy: true})
-	s.setUser("alice@acme.test")
-	s.login("https://app.acme.test/")
+	s := newStack(t, stackOptions{mycompanyBrokerProxy: true})
+	s.setUser("alice@mycompany.test")
+	s.login("https://app.mycompany.test/")
 
-	old := s.rpCookie("app.acme.test", "gate_one_acme")
+	old := s.rpCookie("app.mycompany.test", "gate_one_mycompany")
 	if old == nil {
 		t.Fatal("no RP cookie after login")
 	}
@@ -386,14 +386,14 @@ func TestLoad_KeyRotationOverlap(t *testing.T) {
 	}
 
 	// Rotated broker: keyFiles = [old, new], last key active.
-	key2 := filepath.Join(t.TempDir(), "acme-2.key")
+	key2 := filepath.Join(t.TempDir(), "mycompany-2.key")
 	if err := writeTestKey(key2); err != nil {
 		t.Fatal(err)
 	}
-	cfg := *s.acmeCfg
+	cfg := *s.mycompanyCfg
 	cfg.PublicURL = s.brokerProxy.URL()
 	tenant := cfg.Tenants[0]
-	tenant.KeyFiles = []string{s.acmeKeyFile, key2}
+	tenant.KeyFiles = []string{s.mycompanyKeyFile, key2}
 	cfg.Tenants = []broker.Tenant{tenant}
 
 	b2, srv2, _ := newBroker(t, &cfg)
@@ -404,20 +404,20 @@ func TestLoad_KeyRotationOverlap(t *testing.T) {
 	// still publishes. Force a full verification (bypass the identity
 	// cache).
 	proxy.ResetAuthCache()
-	if got := getStatus(t, s.noRedirect, "https://app.acme.test/"); got != 200 {
+	if got := getStatus(t, s.noRedirect, "https://app.mycompany.test/"); got != 200 {
 		t.Fatalf("old session after rotation = %d, want 200", got)
 	}
 
 	// New login goes through the rotated broker and is signed by key2:
 	// Gate One must refresh JWKS (unknown kid) and accept it.
-	if _, err := s.follow.Get("https://login.acme.test/logout"); err != nil {
+	if _, err := s.follow.Get("https://login.mycompany.test/logout"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(1100 * time.Millisecond) // sub revocation is per-second
-	s.setUser("alice@acme.test")
-	s.login("https://app.acme.test/")
+	s.setUser("alice@mycompany.test")
+	s.login("https://app.mycompany.test/")
 
-	fresh := s.rpCookie("app.acme.test", "gate_one_acme")
+	fresh := s.rpCookie("app.mycompany.test", "gate_one_mycompany")
 	if fresh == nil {
 		t.Fatal("no RP cookie after rotation login")
 	}
@@ -427,7 +427,7 @@ func TestLoad_KeyRotationOverlap(t *testing.T) {
 	}
 
 	// Both keys are published during the overlap window.
-	resp, err := http.Get(s.brokerProxy.URL() + "/t/acme/jwks.json")
+	resp, err := http.Get(s.brokerProxy.URL() + "/t/mycompany/jwks.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,9 +451,9 @@ func TestLoad_KeyRotationOverlap(t *testing.T) {
 // does not accumulate goroutines (connection/leak regression).
 func TestLoad_NoGoroutineLeak(t *testing.T) {
 	s := NewStack(t)
-	s.setUser("alice@acme.test")
-	s.login("https://app.acme.test/")
-	getStatus(t, s.noRedirect, "https://app.acme.test/")
+	s.setUser("alice@mycompany.test")
+	s.login("https://app.mycompany.test/")
+	getStatus(t, s.noRedirect, "https://app.mycompany.test/")
 
 	settle := func() int {
 		s.noRedirect.CloseIdleConnections()
@@ -465,12 +465,12 @@ func TestLoad_NoGoroutineLeak(t *testing.T) {
 
 	// Warm up once so pools and server loops reach steady state, then
 	// measure growth caused by the bursts alone.
-	runLoad(t, s.noRedirect, "https://app.acme.test/", 8, 20).
+	runLoad(t, s.noRedirect, "https://app.mycompany.test/", 8, 20).
 		requireAll(t, 200)
 	base := settle()
 
 	for i := 0; i < 4; i++ {
-		res := runLoad(t, s.noRedirect, "https://app.acme.test/", 8, 50)
+		res := runLoad(t, s.noRedirect, "https://app.mycompany.test/", 8, 50)
 		res.requireAll(t, 200)
 	}
 	after := settle()

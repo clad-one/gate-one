@@ -17,10 +17,10 @@ test("fetch on a page route gets 401 and shows the guard banner", async ({
   });
 
   await page.goto("/");
-  await expect(page.locator("body")).toContainText("alice@acme.test");
+  await expect(page.locator("body")).toContainText("alice@mycompany.test");
 
   // Drop the RP session cookie: the next request is anonymous.
-  await context.clearCookies({ name: "gate_one_acme" });
+  await context.clearCookies({ name: "gate_one_mycompany" });
 
   const result = await page.evaluate(async () => {
     const p = fetch("/api/process_stream", {

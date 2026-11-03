@@ -12,7 +12,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["list"]],
   use: {
-    baseURL: "http://app.acme.localhost:8080",
+    baseURL: "http://app.mycompany.localhost:8080",
     trace: "retain-on-failure",
   },
   projects: [

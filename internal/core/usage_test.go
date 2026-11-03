@@ -40,7 +40,7 @@ func TestUsageConfigValid(t *testing.T) {
 	cfg, err := loadAuthTest(t, usageConfigJSON(
 		"usage-wal",
 		`{"error": {"shareBytes": 500000, "fsync": "window_ms", "windowMs": 100}}`,
-		`[{"name": "audit", "url": "http://127.0.0.1:9100", "types": ["error"], "filters": {"tenants": ["acme"]}}]`,
+		`[{"name": "audit", "url": "http://127.0.0.1:9100", "types": ["error"], "filters": {"tenants": ["mycompany"]}}]`,
 	))
 	if err != nil {
 		t.Fatal(err)

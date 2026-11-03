@@ -2,10 +2,10 @@
   "clientId": "google-client",
   "users": [
     {
-      "sub": "google-acme-alice",
-      "email": "alice@acme.test",
+      "sub": "google-mycompany-alice",
+      "email": "alice@mycompany.test",
       "emailVerified": true,
-      "hostedDomain": "acme.test",
+      "hostedDomain": "mycompany.test",
       "preferredUsername": "alice",
       "name": "Alice",
       "groups": [

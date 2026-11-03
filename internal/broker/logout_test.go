@@ -24,18 +24,18 @@ func newLogoutTestBroker(t *testing.T) *Broker {
 		rand:     rand.Reader,
 	}
 	rt := &tenantRuntime{cfg: Tenant{
-		ID:                     "acme",
+		ID:                     "mycompany",
 		PostLogoutRedirectURIs: []string{"https://app.test/*"},
 		AppOrigins:             []string{"https://app.test/"},
 	}}
-	b.tenants["acme"] = rt
+	b.tenants["mycompany"] = rt
 	t.Cleanup(func() { _ = b.Close() })
 	return b
 }
 
 func doLogout(t *testing.T, b *Broker, browserID string) *httptest.ResponseRecorder {
 	t.Helper()
-	target := "https://broker.test/t/acme/logout?post_logout_redirect_uri=" +
+	target := "https://broker.test/t/mycompany/logout?post_logout_redirect_uri=" +
 		url.QueryEscape("https://app.test/")
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	if browserID != "" {
@@ -50,7 +50,7 @@ func TestLogoutUpstreamRPInitiated(t *testing.T) {
 	b := newLogoutTestBroker(t)
 	ctx := context.Background()
 	const bid = "browser-1"
-	if err := b.store.PutUpstream(ctx, "acme", bid, &upstreamSession{
+	if err := b.store.PutUpstream(ctx, "mycompany", bid, &upstreamSession{
 		AdapterID:  "auth0",
 		IDToken:    "upstream-id-token",
 		EndSession: "https://idp.test/oidc/logout",
@@ -79,7 +79,7 @@ func TestLogoutUpstreamRPInitiated(t *testing.T) {
 		t.Fatalf("client_id = %q", q.Get("client_id"))
 	}
 	if q.Get("post_logout_redirect_uri") !=
-		"https://broker.test/t/acme/logout/done" {
+		"https://broker.test/t/mycompany/logout/done" {
 		t.Fatalf("post_logout_redirect_uri = %q",
 			q.Get("post_logout_redirect_uri"))
 	}
@@ -96,7 +96,7 @@ func TestLogoutUpstreamRPInitiated(t *testing.T) {
 		t.Fatal("broker_logout_to cookie missing")
 	}
 	req := httptest.NewRequest(http.MethodGet,
-		"https://broker.test/t/acme/logout/done", nil)
+		"https://broker.test/t/mycompany/logout/done", nil)
 	req.AddCookie(logoutCookie)
 	done := httptest.NewRecorder()
 	b.Handler().ServeHTTP(done, req)
@@ -107,7 +107,7 @@ func TestLogoutUpstreamRPInitiated(t *testing.T) {
 		t.Fatalf("logout/done redirect = %q", got)
 	}
 
-	if up, err := b.store.GetUpstream(ctx, "acme", bid); err != nil || up != nil {
+	if up, err := b.store.GetUpstream(ctx, "mycompany", bid); err != nil || up != nil {
 		t.Fatalf("upstream session not deleted: %+v %v", up, err)
 	}
 }
@@ -116,7 +116,7 @@ func TestLogoutWithoutUpstreamEndSessionFallsBack(t *testing.T) {
 	b := newLogoutTestBroker(t)
 	ctx := context.Background()
 	const bid = "browser-2"
-	if err := b.store.PutUpstream(ctx, "acme", bid, &upstreamSession{
+	if err := b.store.PutUpstream(ctx, "mycompany", bid, &upstreamSession{
 		AdapterID: "google",
 		IDToken:   "google-token",
 	}, time.Hour); err != nil {

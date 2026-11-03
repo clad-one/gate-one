@@ -236,7 +236,7 @@ func normalizeInitHost(h string) string {
 //
 //	app.localhost       -> app.localhost / login.app.localhost
 //	app.demo.localhost  -> demo.localhost / login.demo.localhost
-//	app.acme.com        -> acme.com / login.acme.com
+//	app.mycompany.com        -> mycompany.com / login.mycompany.com
 func deriveDevHosts(host string) (cookieDomain, loginHost string) {
 	labels := strings.Split(host, ".")
 	if len(labels) >= 3 {

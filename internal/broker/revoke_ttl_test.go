@@ -14,7 +14,7 @@ func ttlTestConfig(mr *miniredis.Miniredis, refresh, session int) *Config {
 	return &Config{
 		PublicURL: "https://broker.test",
 		Tenants: []Tenant{{
-			ID:                "acme",
+			ID:                "mycompany",
 			ClientID:          "gate-one",
 			RedirectURIs:      []string{"https://login.test/callback"},
 			Google:            GoogleConfig{ClientID: "google-client"},
@@ -32,7 +32,7 @@ func ttlTestConfig(mr *miniredis.Miniredis, refresh, session int) *Config {
 func revokedSubTTL(t *testing.T, mr *miniredis.Miniredis, sub string) time.Duration {
 	t.Helper()
 	key := authstate.Key(
-		"test:auth:v1:", "revoked:sub", "https://broker.test/t/acme", sub)
+		"test:auth:v1:", "revoked:sub", "https://broker.test/t/mycompany", sub)
 	if !mr.Exists(key) {
 		t.Fatalf("revocation key %q missing", key)
 	}
@@ -47,7 +47,7 @@ func TestRevokeDefaultTTLUsesRefreshToken(t *testing.T) {
 	cfg := ttlTestConfig(mr, 7200, 3600) // refresh 2h, session 1h
 
 	if err := RevokeWithConfig(
-		context.Background(), cfg, "acme", "", "sub-ttl", 0,
+		context.Background(), cfg, "mycompany", "", "sub-ttl", 0,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestRevokeDefaultTTLNeverShorterThanSession(t *testing.T) {
 	cfg := ttlTestConfig(mr, 600, 3600) // refresh 10m, session 1h
 
 	if err := RevokeWithConfig(
-		context.Background(), cfg, "acme", "", "sub-session", 0,
+		context.Background(), cfg, "mycompany", "", "sub-session", 0,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestRevokeExplicitTTLIsHonored(t *testing.T) {
 	cfg := ttlTestConfig(mr, 7200, 3600)
 
 	if err := RevokeWithConfig(
-		context.Background(), cfg, "acme", "", "sub-explicit", time.Hour,
+		context.Background(), cfg, "mycompany", "", "sub-explicit", time.Hour,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -91,11 +91,11 @@ func TestRevokeExplicitTTLIsHonored(t *testing.T) {
 
 func TestTenantRevocationTTL(t *testing.T) {
 	cfg := &Config{Tenants: []Tenant{{
-		ID:                "acme",
+		ID:                "mycompany",
 		RefreshTokenTTL:   7200,
 		SessionTTLSeconds: 3600,
 	}}}
-	if d, err := TenantRevocationTTL(cfg, "acme"); err != nil || d != 2*time.Hour {
+	if d, err := TenantRevocationTTL(cfg, "mycompany"); err != nil || d != 2*time.Hour {
 		t.Fatalf("ttl = %s, %v; want 2h", d, err)
 	}
 	if _, err := TenantRevocationTTL(cfg, "nope"); err == nil {

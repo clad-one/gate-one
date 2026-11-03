@@ -144,19 +144,19 @@ func TestHostDeliversAndAcks(t *testing.T) {
 	if err := h.Register(Plugin{
 		Name: "audit", URL: srv.URL,
 		Types:   []usage.EventType{usage.TypeAudit},
-		Filters: &Filters{Tenants: []string{"acme"}},
+		Filters: &Filters{Tenants: []string{"mycompany"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	appendEvent(t, w, "acme", 0)
+	appendEvent(t, w, "mycompany", 0)
 	appendEvent(t, w, "contoso", 1)
-	appendEvent(t, w, "acme", 2)
+	appendEvent(t, w, "mycompany", 2)
 
 	waitFor(t, "two events", func() bool { return len(fp.received()) == 2 })
 	for _, ev := range fp.received() {
-		if ev.Tenant != "acme" {
-			t.Fatalf("delivered tenant %q, want acme", ev.Tenant)
+		if ev.Tenant != "mycompany" {
+			t.Fatalf("delivered tenant %q, want mycompany", ev.Tenant)
 		}
 	}
 	tail, _ := w.Tail(usage.TypeAudit)
@@ -195,7 +195,7 @@ func TestHostRetriesWhilePluginFails(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	appendEvent(t, w, "acme", 0)
+	appendEvent(t, w, "mycompany", 0)
 	time.Sleep(200 * time.Millisecond)
 	cur, _ := w.Cursor(usage.TypeAudit, "audit")
 	if cur != 0 {
@@ -255,7 +255,7 @@ func TestHostDropByLag(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 20; i++ {
-		appendEvent(t, w, "acme", i)
+		appendEvent(t, w, "mycompany", i)
 	}
 	waitFor(t, "lag within budget", func() bool {
 		lag, err := w.Lag(usage.TypeAudit, "audit")

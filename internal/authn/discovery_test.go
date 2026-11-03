@@ -38,7 +38,7 @@ func TestAC_AUTH_26_RefreshTTLWarning(t *testing.T) {
 	if ttl != 0 {
 		t.Fatalf("ttl = %d, want 0 (field absent)", ttl)
 	}
-	msg := RefreshTTLWarning(issuer, "acme")
+	msg := RefreshTTLWarning(issuer, "mycompany")
 	for _, want := range []string{
 		"does not advertise",
 		"revocationTtlSeconds",
@@ -76,7 +76,7 @@ func TestAC_AUTH_26_StartupWarning(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(old)
 	_, err := NewOIDC(context.Background(), OIDCConfig{
-		ProviderID:   "acme",
+		ProviderID:   "mycompany",
 		Issuer:       issuer,
 		ClientID:     "gate-one",
 		LoginBaseURL: "http://login.test:3000",

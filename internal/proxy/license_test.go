@@ -31,9 +31,9 @@ func TestLicenseJSONRegistered(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok, err := license.Sign(priv, license.Claims{
-		Org: "ACME", Email: "ops@acme.fr", Plan: "pro",
+		Org: "MYCOMPANY", Email: "ops@mycompany.fr", Plan: "pro",
 		Exp:     time.Now().Add(time.Hour).Unix(),
-		Domains: []string{"acme.fr"}, Features: []string{"sso"},
+		Domains: []string{"mycompany.fr"}, Features: []string{"sso"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -46,8 +46,8 @@ func TestLicenseJSONRegistered(t *testing.T) {
 	if err := json.Unmarshal([]byte(licenseJSON(cfg)), &st); err != nil {
 		t.Fatal(err)
 	}
-	if st.State != "registered" || st.Org != "ACME" || st.Email != "ops@acme.fr" {
-		t.Fatalf("got %+v, want registered/ACME", st)
+	if st.State != "registered" || st.Org != "MYCOMPANY" || st.Email != "ops@mycompany.fr" {
+		t.Fatalf("got %+v, want registered/MYCOMPANY", st)
 	}
 	if st.URL != "https://example.test/pricing" {
 		t.Fatalf("url = %q", st.URL)

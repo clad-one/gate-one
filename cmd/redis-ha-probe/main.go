@@ -102,7 +102,7 @@ func run() error {
 	fmt.Printf("sentinel discovery OK (master %q, store %s)\n",
 		*master, store.StoreID())
 
-	const issuer = "https://probe.invalid/t/acme"
+	const issuer = "https://probe.invalid/t/mycompany"
 	sid := fmt.Sprintf("probe-%d", time.Now().UnixNano())
 
 	if err := store.Revoke(

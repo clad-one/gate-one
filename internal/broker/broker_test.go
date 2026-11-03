@@ -34,7 +34,7 @@ func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
 	verifier := "verifier-0123456789-0123456789-0123456789"
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
-	redirectURI := "https://login.acme.test/auth/callback"
+	redirectURI := "https://login.mycompany.test/auth/callback"
 	state := "client-state"
 	client := &http.Client{CheckRedirect: func(
 		*http.Request, []*http.Request,
@@ -52,7 +52,7 @@ func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
 
-	resp, err := client.Get(srv.URL + "/t/acme/authorize?" + q.Encode())
+	resp, err := client.Get(srv.URL + "/t/mycompany/authorize?" + q.Encode())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
 	form.Set("client_secret", "secret")
 	form.Set("redirect_uri", redirectURI)
 	form.Set("code_verifier", verifier)
-	resp, err = http.PostForm(srv.URL+"/t/acme/token", form)
+	resp, err = http.PostForm(srv.URL+"/t/mycompany/token", form)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,16 +135,16 @@ func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
 		t.Fatalf("tokens = %+v", tokens)
 	}
 
-	pub := b.tenants["acme"].activeKey().pub
+	pub := b.tenants["mycompany"].activeKey().pub
 
 	accessClaims := verifyJWT(t, pub, access)
-	if accessClaims["iss"] != srv.URL+"/t/acme" {
+	if accessClaims["iss"] != srv.URL+"/t/mycompany" {
 		t.Errorf("iss = %v", accessClaims["iss"])
 	}
-	if accessClaims["tenant"] != "acme" {
+	if accessClaims["tenant"] != "mycompany" {
 		t.Errorf("tenant = %v", accessClaims["tenant"])
 	}
-	if accessClaims["email"] != "alice@acme.test" {
+	if accessClaims["email"] != "alice@mycompany.test" {
 		t.Errorf("email = %v", accessClaims["email"])
 	}
 	if accessClaims["sid"] == "" {
@@ -167,7 +167,7 @@ func TestAC_AUTH_09_IdentityAdapterConformance(t *testing.T) {
 	b, srv := newTestBroker(t, google)
 	_ = b
 
-	resp, err := http.Get(srv.URL + "/t/acme/.well-known/openid-configuration")
+	resp, err := http.Get(srv.URL + "/t/mycompany/.well-known/openid-configuration")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestAC_AUTH_09_IdentityAdapterConformance(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&disc); err != nil {
 		t.Fatal(err)
 	}
-	if disc["issuer"] != srv.URL+"/t/acme" {
+	if disc["issuer"] != srv.URL+"/t/mycompany" {
 		t.Fatalf("issuer = %v", disc["issuer"])
 	}
 	for _, k := range []string{
@@ -189,7 +189,7 @@ func TestAC_AUTH_09_IdentityAdapterConformance(t *testing.T) {
 		}
 	}
 
-	resp, err = http.Get(srv.URL + "/t/acme/jwks.json")
+	resp, err = http.Get(srv.URL + "/t/mycompany/jwks.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,9 +212,9 @@ func TestAC_AUTH_09_ClientCredentials(t *testing.T) {
 	form.Set("grant_type", "client_credentials")
 	form.Set("client_id", "cladone-go")
 	form.Set("client_secret", "secret")
-	form.Set("audience", "https://mcp.acme.test")
+	form.Set("audience", "https://mcp.mycompany.test")
 	form.Set("scope", "mcp-tools")
-	resp, err := http.PostForm(srv.URL+"/t/acme/token", form)
+	resp, err := http.PostForm(srv.URL+"/t/mycompany/token", form)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,15 +231,15 @@ func TestAC_AUTH_09_ClientCredentials(t *testing.T) {
 	if access == "" {
 		t.Fatal("no access token")
 	}
-	pub := b.tenants["acme"].activeKey().pub
+	pub := b.tenants["mycompany"].activeKey().pub
 	claims := verifyJWT(t, pub, access)
 	if claims["sub"] != "cladone-go" {
 		t.Errorf("sub = %v", claims["sub"])
 	}
-	if claims["aud"] != "https://mcp.acme.test" {
+	if claims["aud"] != "https://mcp.mycompany.test" {
 		t.Errorf("aud = %v", claims["aud"])
 	}
-	if claims["tenant"] != "acme" {
+	if claims["tenant"] != "mycompany" {
 		t.Errorf("tenant = %v", claims["tenant"])
 	}
 }
@@ -247,7 +247,7 @@ func TestAC_AUTH_09_ClientCredentials(t *testing.T) {
 func TestAC_AUTH_13_BrokerRejectsBadRedirect(t *testing.T) {
 	google := newFakeGoogle(t)
 	_, srv := newTestBroker(t, google)
-	resp, err := http.Get(srv.URL + "/t/acme/authorize?client_id=cladone-go&" +
+	resp, err := http.Get(srv.URL + "/t/mycompany/authorize?client_id=cladone-go&" +
 		"redirect_uri=https://evil.test/cb&response_type=code&scope=openid&state=x")
 	if err != nil {
 		t.Fatal(err)
@@ -263,21 +263,21 @@ func newTestBroker(t *testing.T, google *fakeGoogle) (*Broker, *httptest.Server)
 	cfg := &Config{
 		PublicURL: "http://placeholder.test",
 		Tenants: []Tenant{{
-			ID:           "acme",
+			ID:           "mycompany",
 			ClientID:     "cladone-go",
 			ClientSecret: "secret",
-			RedirectURIs: []string{"https://login.acme.test/auth/callback"},
-			Audiences:    []string{"https://mcp.acme.test"},
+			RedirectURIs: []string{"https://login.mycompany.test/auth/callback"},
+			Audiences:    []string{"https://mcp.mycompany.test"},
 			Google: GoogleConfig{
 				Issuer:       google.srv.URL,
 				ClientID:     "google-client",
 				ClientSecret: "google-secret",
-				HostedDomain: "acme.test",
+				HostedDomain: "mycompany.test",
 				Scopes:       []string{"openid", "profile", "email"},
 			},
 			DefaultRoles:   []string{"user"},
-			AllowedDomains: []string{"acme.test"},
-			AdminEmails:    []string{"admin@acme.test"},
+			AllowedDomains: []string{"mycompany.test"},
+			AdminEmails:    []string{"admin@mycompany.test"},
 		}},
 	}
 	b, err := New(context.Background(), cfg)
@@ -300,9 +300,9 @@ func newFakeGoogle(t *testing.T) *fakeGoogle {
 		ClientID: "google-client",
 		Users: []fakegoogle.User{{
 			Sub:               "google-sub-1",
-			Email:             "alice@acme.test",
+			Email:             "alice@mycompany.test",
 			EmailVerified:     true,
-			HostedDomain:      "acme.test",
+			HostedDomain:      "mycompany.test",
 			PreferredUsername: "alice",
 			Name:              "Alice",
 		}},
@@ -350,15 +350,15 @@ func TestAC_AUTH_18_BrokerRedisStore(t *testing.T) {
 	defer b.Close()
 
 	ctx := context.Background()
-	f := &flow{Tenant: "acme", ClientID: "cladone-go", Expires: time.Now().Add(time.Minute)}
-	if err := b.store.PutFlow(ctx, "acme", "flow-1", f, time.Minute); err != nil {
+	f := &flow{Tenant: "mycompany", ClientID: "cladone-go", Expires: time.Now().Add(time.Minute)}
+	if err := b.store.PutFlow(ctx, "mycompany", "flow-1", f, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	got, err := b.store.TakeFlow(ctx, "acme", "flow-1")
+	got, err := b.store.TakeFlow(ctx, "mycompany", "flow-1")
 	if err != nil || got == nil || got.ClientID != "cladone-go" {
 		t.Fatalf("flow = %+v, %v", got, err)
 	}
-	got, _ = b.store.TakeFlow(ctx, "acme", "flow-1")
+	got, _ = b.store.TakeFlow(ctx, "mycompany", "flow-1")
 	if got != nil {
 		t.Fatal("flow was not consumed")
 	}
@@ -369,17 +369,17 @@ func TestAC_AUTH_18_BrokerRedisStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b2.Close()
-	c := &authCode{Tenant: "acme", ClientID: "cladone-go", Expires: time.Now().Add(time.Minute)}
-	if err := b.store.PutCode(ctx, "acme", "code-1", c, time.Minute); err != nil {
+	c := &authCode{Tenant: "mycompany", ClientID: "cladone-go", Expires: time.Now().Add(time.Minute)}
+	if err := b.store.PutCode(ctx, "mycompany", "code-1", c, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	gotCode, err := b2.store.TakeCode(ctx, "acme", "code-1")
+	gotCode, err := b2.store.TakeCode(ctx, "mycompany", "code-1")
 	if err != nil || gotCode == nil || gotCode.ClientID != "cladone-go" {
 		t.Fatalf("code across instances = %+v, %v", gotCode, err)
 	}
 
 	// Broker revocation is readable by Gate One's shared store.
-	if err := b.Revoke(ctx, "acme", "sid-1", "", time.Now().Add(time.Hour)); err != nil {
+	if err := b.Revoke(ctx, "mycompany", "sid-1", "", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	gs, err := authn.OpenRedisStore(ctx, authn.RedisConfig{
@@ -390,7 +390,7 @@ func TestAC_AUTH_18_BrokerRedisStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer gs.Close()
-	revoked, err := gs.IsRevoked(ctx, b.issuer(b.tenants["acme"]), "sid-1", "")
+	revoked, err := gs.IsRevoked(ctx, b.issuer(b.tenants["mycompany"]), "sid-1", "")
 	if err != nil || !revoked {
 		t.Fatalf("gate one sees revocation = %v, %v", revoked, err)
 	}
@@ -400,19 +400,19 @@ func testBrokerConfig(google *fakeGoogle) *Config {
 	return &Config{
 		PublicURL: "https://broker.test",
 		Tenants: []Tenant{{
-			ID:           "acme",
+			ID:           "mycompany",
 			ClientID:     "cladone-go",
 			ClientSecret: "secret",
-			RedirectURIs: []string{"https://login.acme.test/auth/callback"},
-			Audiences:    []string{"https://mcp.acme.test"},
+			RedirectURIs: []string{"https://login.mycompany.test/auth/callback"},
+			Audiences:    []string{"https://mcp.mycompany.test"},
 			Google: GoogleConfig{
 				Issuer:       google.srv.URL,
 				ClientID:     "google-client",
 				ClientSecret: "google-secret",
-				HostedDomain: "acme.test",
+				HostedDomain: "mycompany.test",
 			},
 			DefaultRoles:   []string{"user"},
-			AllowedDomains: []string{"acme.test"},
+			AllowedDomains: []string{"mycompany.test"},
 		}},
 	}
 }
@@ -437,7 +437,7 @@ func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
 		t.Fatal(err)
 	}
 	step, err := a.Start(context.Background(), identityadapter.Request{
-		Tenant: "acme",
+		Tenant: "mycompany",
 		Params: map[string]string{
 			"broker_state": "flow-1",
 			"nonce":        "nonce-adapter",
@@ -473,7 +473,7 @@ func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
 		t.Fatal("fake google returned no code")
 	}
 	cont, err := a.Continue(context.Background(), identityadapter.Request{
-		Tenant: "acme",
+		Tenant: "mycompany",
 		Params: map[string]string{"code": code},
 	}, step.State)
 	if err != nil {
@@ -482,7 +482,7 @@ func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
 	if cont.Kind != identityadapter.StepResult || cont.Assertion == nil {
 		t.Fatalf("continue = %+v, want result", cont)
 	}
-	if cont.Assertion.Email != "alice@acme.test" {
+	if cont.Assertion.Email != "alice@mycompany.test" {
 		t.Errorf("email = %q", cont.Assertion.Email)
 	}
 }
@@ -512,7 +512,7 @@ func TestAC_AUTH_20_BrokerKeyRotation(t *testing.T) {
 	}
 	defer b.Close()
 
-	rt := b.tenants["acme"]
+	rt := b.tenants["mycompany"]
 	if len(rt.keys) != 2 {
 		t.Fatalf("keys = %d", len(rt.keys))
 	}
@@ -522,7 +522,7 @@ func TestAC_AUTH_20_BrokerKeyRotation(t *testing.T) {
 	if got := len(mergeJWKS(rt.keys).Keys); got != 2 {
 		t.Fatalf("jwks keys = %d", got)
 	}
-	claims := map[string]any{"iss": "https://broker.test/t/acme", "sub": "u"}
+	claims := map[string]any{"iss": "https://broker.test/t/mycompany", "sub": "u"}
 	tok, err := rt.activeKey().sign(claims)
 	if err != nil {
 		t.Fatal(err)
@@ -545,7 +545,7 @@ func TestAC_AUTH_21_RevokeWithConfig(t *testing.T) {
 		AuthPrefix: "test:revoke:v1:",
 	}
 	ctx := context.Background()
-	if err := RevokeWithConfig(ctx, cfg, "acme", "sid-cli", "", time.Hour); err != nil {
+	if err := RevokeWithConfig(ctx, cfg, "mycompany", "sid-cli", "", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	gs, err := authn.OpenRedisStore(ctx, authn.RedisConfig{
@@ -556,7 +556,7 @@ func TestAC_AUTH_21_RevokeWithConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer gs.Close()
-	revoked, err := gs.IsRevoked(ctx, cfg.PublicURL+"/t/acme", "sid-cli", "")
+	revoked, err := gs.IsRevoked(ctx, cfg.PublicURL+"/t/mycompany", "sid-cli", "")
 	if err != nil || !revoked {
 		t.Fatalf("revoked = %v, %v", revoked, err)
 	}
@@ -569,16 +569,16 @@ func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
 	google := newFakeGoogle(t)
 	b, srv := newTestBroker(t, google)
 	ctx := context.Background()
-	rt := b.tenants["acme"]
+	rt := b.tenants["mycompany"]
 
 	// A browser session shared by two apps in the same browser.
-	if err := b.store.PutSession(ctx, "acme", "browser-1", "sid-shared", "user-1",
+	if err := b.store.PutSession(ctx, "mycompany", "browser-1", "sid-shared", "user-1",
 		time.Now().Add(-time.Minute), time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	q := url.Values{}
 	q.Set("client_id", "cladone-go")
-	q.Set("redirect_uri", "https://login.acme.test/auth/callback")
+	q.Set("redirect_uri", "https://login.mycompany.test/auth/callback")
 	q.Set("response_type", "code")
 	q.Set("scope", "openid")
 	q.Set("state", "client-state")
@@ -586,7 +586,7 @@ func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
 	q.Set("code_challenge", "challenge")
 	q.Set("code_challenge_method", "S256")
 	req := httptest.NewRequest(http.MethodGet,
-		srv.URL+"/t/acme/authorize?"+q.Encode(), nil)
+		srv.URL+"/t/mycompany/authorize?"+q.Encode(), nil)
 	req.AddCookie(&http.Cookie{Name: b.cfg.SessionCookieName, Value: "browser-1"})
 	rec := httptest.NewRecorder()
 	b.serveHTTP(rec, req)
@@ -598,7 +598,7 @@ func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
 		t.Fatal(err)
 	}
 	flowID := loc.Query().Get("state")
-	f, err := b.store.TakeFlow(ctx, "acme", flowID)
+	f, err := b.store.TakeFlow(ctx, "mycompany", flowID)
 	if err != nil || f == nil {
 		t.Fatalf("flow = %+v, %v", f, err)
 	}
@@ -607,7 +607,7 @@ func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
 	}
 
 	// Logout via the broker cookie revokes the shared sid immediately.
-	req = httptest.NewRequest(http.MethodGet, srv.URL+"/t/acme/logout", nil)
+	req = httptest.NewRequest(http.MethodGet, srv.URL+"/t/mycompany/logout", nil)
 	req.AddCookie(&http.Cookie{Name: b.cfg.SessionCookieName, Value: "browser-1"})
 	rec = httptest.NewRecorder()
 	b.serveHTTP(rec, req)
@@ -630,11 +630,11 @@ func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
 		t.Fatalf("fresh subject = %v, %v", fresh, err)
 	}
 	// A new login after the logout can reuse its new browser session.
-	if err := b.store.PutSession(ctx, "acme", "browser-2", "sid-new",
+	if err := b.store.PutSession(ctx, "mycompany", "browser-2", "sid-new",
 		"user-1", time.Now().Add(time.Minute), time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	req = httptest.NewRequest(http.MethodGet, srv.URL+"/t/acme/authorize", nil)
+	req = httptest.NewRequest(http.MethodGet, srv.URL+"/t/mycompany/authorize", nil)
 	req.AddCookie(&http.Cookie{Name: b.cfg.SessionCookieName, Value: "browser-2"})
 	_, gotSID, _, _, err := b.browserSession(ctx, rt, req)
 	if err != nil || gotSID != "sid-new" {
@@ -650,7 +650,7 @@ func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest(http.MethodGet,
-		srv.URL+"/t/acme/logout?id_token_hint="+url.QueryEscape(hint), nil)
+		srv.URL+"/t/mycompany/logout?id_token_hint="+url.QueryEscape(hint), nil)
 	rec = httptest.NewRecorder()
 	b.serveHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
