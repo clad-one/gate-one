@@ -90,7 +90,7 @@ func TestAC_AUTH_13_ConfigValidation(t *testing.T) {
 
 	t.Run("singular_and_plural_mutually_exclusive", func(t *testing.T) {
 		_, err := loadAuthTest(t, `{
-			"authProvider": {"type": "http", "baseUrl": "http://bridge:3000"},
+			"authProvider": {"type": "http-bridge", "baseUrl": "http://bridge:3000"},
 			"authProviders": [
 				{"id": "a", "type": "jwt", "issuer": "https://a.test",
 				 "jwksUrl": "https://a.test/jwks"}
@@ -226,7 +226,7 @@ func TestAC_AUTH_18_RedisConfigValidation(t *testing.T) {
 
 	t.Run("plural_rejects_http", func(t *testing.T) {
 		_, err := loadAuthTest(t, `{
-			"authProviders": [{"id": "a", "type": "http",
+			"authProviders": [{"id": "a", "type": "http-bridge",
 				"baseUrl": "http://bridge:3000"}],
 			"routes": []
 		}`)

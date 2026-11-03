@@ -85,18 +85,19 @@
     },
     "authProvider": {
       "type": "object",
-      "description": "Authentication provider. `dev` is the embedded loopback-only IdP used for onboarding/tests; `http` is any external service implementing the Gate One auth contract (auth-bridge is the reference implementation; a non-conforming service needs an adapter); `oidc` is the native Relying Party (discovery, code+PKCE, JWKS, session, logout, MCP resource server). Absent = legacy oidc + auth-bridge translation, so existing configs are unchanged.",
+      "description": "Authentication provider. `dev` is the embedded loopback-only IdP used for onboarding/tests; `http-bridge` is any external service implementing the Gate One HTTP bridge contract (auth-bridge is the reference implementation; a non-conforming service needs an adapter); `oidc` is the native Relying Party (discovery, code+PKCE, JWKS, session, logout, MCP resource server); `jwt` is a stateless bearer verifier. Absent = legacy oidc + auth-bridge translation, so existing configs are unchanged. The legacy type `http` is accepted as a deprecated alias of `http-bridge`.",
       "additionalProperties": false,
       "properties": {
         "type": {
           "type": "string",
           "enum": [
             "dev",
+            "http-bridge",
             "http",
             "oidc",
             "jwt"
           ],
-          "description": "Provider implementation. Default: dev when a dev block is present, oidc when clientId is present, jwt when jwksUrl is present, http otherwise."
+          "description": "Provider implementation. Default: dev when a dev block is present, oidc when clientId is present, jwt when jwksUrl is present, http-bridge otherwise. `http` is a deprecated alias of `http-bridge`."
         },
         "id": {
           "type": "string",
@@ -108,7 +109,7 @@
         },
         "baseUrl": {
           "type": "string",
-          "description": "Service root for type http (default http://auth-bridge:3000, or AUTH_BRIDGE_URL)."
+          "description": "Service root for type http-bridge (default http://auth-bridge:3000, or AUTH_BRIDGE_URL)."
         },
         "loginBaseUrl": {
           "type": "string",
@@ -116,7 +117,7 @@
         },
         "loginUrl": {
           "type": "string",
-          "description": "Full login page URL. Defaults to loginBaseUrl + /login, then (type http) the legacy oidc.loginUrl, then baseUrl + /login."
+          "description": "Full login page URL. Defaults to loginBaseUrl + /login, then (type http-bridge) the legacy oidc.loginUrl, then baseUrl + /login."
         },
         "issuer": {
           "type": "string",
@@ -128,19 +129,19 @@
         },
         "verifyUrl": {
           "type": "string",
-          "description": "Identity verification endpoint (type http). Default baseUrl + /auth."
+          "description": "Identity verification endpoint (type http-bridge). Default baseUrl + /auth."
         },
         "mcpVerifyUrl": {
           "type": "string",
-          "description": "MCP bearer verification endpoint (type http). Default baseUrl + /auth/mcp."
+          "description": "MCP bearer verification endpoint (type http-bridge). Default baseUrl + /auth/mcp."
         },
         "healthUrl": {
           "type": "string",
-          "description": "Readiness endpoint (type http). Default baseUrl + /health."
+          "description": "Readiness endpoint (type http-bridge). Default baseUrl + /health."
         },
         "headers": {
           "type": "object",
-          "description": "Maps the identity response headers of an external provider (type http). Empty = auth-bridge defaults.",
+          "description": "Maps the identity response headers of an external provider (type http-bridge). Empty = auth-bridge defaults.",
           "additionalProperties": false,
           "properties": {
             "userId": {

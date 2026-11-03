@@ -1,6 +1,6 @@
 {
   "authProvider": {
-    "type": "http",
+    "type": "http-bridge",
     "loginUrl": "https://login.example.com/login",
     "issuer": "https://auth.example.com/realms/example",
     "links": {

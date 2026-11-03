@@ -11,17 +11,21 @@ share one contract:
 | `dev` | Embedded development IdP: dedicated `login.<domain>` host,
 real alice/bob form, signed session cookie, MCP dev tokens. Loopback
 only. | none
-| `http` | Any service speaking the Gate One auth contract
-(`GET /auth`, `/auth/mcp`, `/login`, `/logout`, `/auth/popup-done`,
-`/health`). auth-bridge is the reference implementation; a
-non-conforming service needs an adapter. | auth-bridge, or a custom
-adapter
+| `http-bridge` | Any service speaking the Gate One HTTP bridge
+contract (`GET /auth`, `/auth/mcp`, `/login`, `/logout`,
+`/auth/popup-done`, `/health`). auth-bridge is the reference
+implementation; a non-conforming service needs an adapter. | auth-bridge,
+or a custom bridge
 | `oidc` | Native OpenID Connect Relying Party: discovery, code + PKCE,
 state/nonce, JWKS, signed session, RP-initiated logout, local MCP
 bearer verification. | an OIDC IdP
 | `jwt` | Stateless JWKS bearer verifier for API/MCP routes; no login
 page, no session cookie. | a JWT issuer with JWKS
 |===
+
+The legacy spelling `http` is accepted as a deprecated alias of
+`http-bridge`; new configurations should use `http-bridge`. The bridge
+contract is documented in the product docs (`HTTP bridge contract`).
 
 For multi-tenant hosting, use the plural `authProviders` block and bind
 each route with `auth.provider`. Only `oidc` and `jwt` are allowed in
@@ -224,7 +228,7 @@ By default only the scope is enforced, because Keycloak does not add a
 resource audience without an audience mapper. Set `mcpAudience: "auto"`
 to require the endpoint's own protected-resource identifier in `aud`
 (recommended when the mapper exists), or a literal `aud` value. Opaque
-access tokens are not accepted by the native provider; use `type: http`
+access tokens are not accepted by the native provider; use `type: http-bridge`
 with auth-bridge when the IdP only issues opaque tokens.
 
 == Sessions, revocation and logout
@@ -311,14 +315,14 @@ false and give the native provider a dedicated login host.
 
 == auth-bridge remains an option
 
-Use `type: "http"` to keep auth-bridge (including in front of
+Use `type: "http-bridge"` to keep auth-bridge (including in front of
 Keycloak):
 
 [source,json]
 ----
 {
   "authProvider": {
-    "type": "http",
+    "type": "http-bridge",
     "baseUrl": "http://auth-bridge:3000",
     "loginUrl": "https://login.example.com/login",
     "issuer": "https://auth.example.com/realms/example"
@@ -352,7 +356,7 @@ is **behaviorally identical** to:
 [source,json]
 ----
 "authProvider": {
-  "type": "http",
+  "type": "http-bridge",
   "loginUrl": "https://login.example.com/login",
   "issuer": "https://auth.example.com/realms/example"
 }
@@ -373,12 +377,12 @@ client; do not cut production over before that parity exists.
 == Authelia, Authentik, other IdPs
 
 * **Authentik**: an OIDC provider — use `type: "oidc"` directly.
-* **Keycloak**: `type: "oidc"` directly, or `type: "http"` with
+* **Keycloak**: `type: "oidc"` directly, or `type: "http-bridge"` with
   auth-bridge when its hardened session/refresh/popup flow is wanted.
 * **Authelia**: a forward-auth portal, *not* an implementation of the
   Gate One contract. It needs an adapter for `/auth`, `/auth/mcp` and
   `/auth/popup-done`; overriding `verifyUrl`/`headers` is not enough.
-* **SAML / LDAP / GitHub OAuth2**: `type: "http"` plus an adapter
+* **SAML / LDAP / GitHub OAuth2**: `type: "http-bridge"` plus an adapter
   (auth-bridge or custom).
 
 == Troubleshooting

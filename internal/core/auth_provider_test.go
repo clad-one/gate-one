@@ -78,7 +78,7 @@ func TestAuthProviderUnknownType(t *testing.T) {
 	}
 }
 
-func TestLegacyOIDCTranslatesToHTTP(t *testing.T) {
+func TestLegacyOIDCTranslatesToHTTPBridge(t *testing.T) {
 	cfg, err := loadAuthTest(t, `{
 		"oidc": {
 			"loginUrl": "https://login.example.com/login",
@@ -93,8 +93,8 @@ func TestLegacyOIDCTranslatesToHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	ap := cfg.AuthProvider
-	if ap == nil || ap.Type != "http" {
-		t.Fatalf("authProvider = %+v, want an http translation", ap)
+	if ap == nil || ap.Type != "http-bridge" {
+		t.Fatalf("authProvider = %+v, want an http-bridge translation", ap)
 	}
 	if ap.LoginURL != "https://login.example.com/login" {
 		t.Errorf("login = %q", ap.LoginURL)
@@ -206,7 +206,7 @@ func TestOIDCSessionKeyEnvMissing(t *testing.T) {
 func TestSessionStoreRejectedForHTTP(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
-			"type": "http",
+			"type": "http-bridge",
 			"baseUrl": "http://auth-bridge:3000",
 			"sessionStore": {"type": "bolt"}
 		},
@@ -399,5 +399,21 @@ func TestSessionStoreTLSCaFileMissing(t *testing.T) {
 	}`)
 	if err == nil || !strings.Contains(err.Error(), "tlsCaFile") {
 		t.Fatalf("err = %v, want missing CA refusal", err)
+	}
+}
+
+func TestLegacyHTTPTypeIsNormalized(t *testing.T) {
+	cfg, err := loadAuthTest(t, `{
+		"authProvider": {"type": "http", "baseUrl": "http://bridge:3000"},
+		"routes": [{
+			"host": "app.example.com", "path": "/*", "frontend": true,
+			"backend": "http://127.0.0.1:1", "auth": {}
+		}]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthProvider == nil || cfg.AuthProvider.Type != "http-bridge" {
+		t.Fatalf("type = %+v, want http-bridge", cfg.AuthProvider)
 	}
 }

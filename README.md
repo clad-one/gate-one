@@ -157,7 +157,7 @@ Absent `authProvider` = the legacy `oidc` + auth-bridge translation, so
 existing configs keep working. A purely public route needs no auth block
 at all.
 
-Authelia and Authentik are **not** drop-in `http` providers: Authentik
+Authelia and Authentik are **not** drop-in `http-bridge` providers: Authentik
 exposes an OIDC provider (`type: "oidc"`); Authelia is a forward-auth
 portal and needs an adapter implementing the Gate One contract
 (`/auth`, `/auth/mcp`, `/auth/popup-done`). `verifyUrl` and the header
@@ -166,7 +166,7 @@ mapping only cover the verification call.
 ```json
 {
   "authProvider": {
-    "type": "http",
+    "type": "http-bridge",
     "baseUrl": "http://auth-bridge:3000",
     "loginUrl": "https://login.example.com/login",
     "issuer": "https://auth.example.com/realms/example"
@@ -175,7 +175,7 @@ mapping only cover the verification call.
 ```
 
 `baseUrl` defaults to `http://auth-bridge:3000`; the legacy block
-`"oidc": {loginUrl, issuer}` and this explicit `type: "http"` block are
+`"oidc": {loginUrl, issuer}` and this explicit `type: "http-bridge"` block are
 **behaviorally identical**. Migrating the shape is therefore safe (no
 session change, no auth-bridge change) and is the recommended first
 step before considering native OIDC. Examples:
@@ -233,7 +233,7 @@ used only when the link carries no return target (or an invalid one).
 
 `gate-one init --oidc --issuer ... --client-id ...` writes this block and
 prints the URIs to register. auth-bridge stays fully supported
-for OIDC too: use `type: "http"` when you want the bridge in front of
+for OIDC too: use `type: "http-bridge"` when you want the bridge in front of
 Keycloak.
 
 An unreachable provider is a **502**, never a login redirect: the

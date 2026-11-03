@@ -8,7 +8,7 @@ import (
 func TestUserLinksLoadAndDefaults(t *testing.T) {
 	cfg, err := loadAuthTest(t, `{
 		"authProvider": {
-			"type": "http",
+			"type": "http-bridge",
 			"loginUrl": "https://login.example.com/login",
 			"issuer": "https://auth.example.com/realms/example",
 			"links": {
@@ -46,7 +46,7 @@ func TestUserLinksLoadAndDefaults(t *testing.T) {
 func TestUserLinksRejectsJavaScriptURL(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
-			"type": "http",
+			"type": "http-bridge",
 			"loginUrl": "https://login.example.com/login",
 			"links": {"account": {"url": "javascript:alert(1)"}}
 		},
@@ -61,7 +61,7 @@ func TestUserLinksRejectsJavaScriptURL(t *testing.T) {
 func TestUserLinksRequiresAppLabel(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
-			"type": "http",
+			"type": "http-bridge",
 			"loginUrl": "https://login.example.com/login"
 		},
 		"routes": [{
@@ -78,7 +78,7 @@ func TestUserLinksRequiresAppLabel(t *testing.T) {
 func TestUserLinksRejectsUnknownKey(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {
-			"type": "http",
+			"type": "http-bridge",
 			"loginUrl": "https://login.example.com/login",
 			"links": {"foo": {"url": "https://x"}}
 		},

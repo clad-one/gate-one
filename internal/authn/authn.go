@@ -6,12 +6,13 @@
 // The provider can be:
 //
 //   - dev:  the embedded development IdP (loopback only, onboarding);
-//   - http: any external service implementing the Gate One auth
-//     contract (auth-bridge/Keycloak, or a custom adapter);
+//   - http-bridge: any external service implementing the Gate One
+//     auth contract (auth-bridge/Keycloak, or a custom adapter);
 //   - oidc: a native OpenID Connect Relying Party (same contract,
-//     no external bridge).
+//     no external bridge);
+//   - jwt: a stateless JWKS bearer verifier for APIs/MCP.
 //
-// Keeping the three implementations behind one interface is what
+// Keeping the four implementations behind one interface is what
 // makes auth-bridge optional: removing it is a configuration choice,
 // not a rewrite of the gateway.
 package authn

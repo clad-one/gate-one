@@ -904,7 +904,7 @@ func buildAuthProvider(
 			storeLabel(ap.SessionStore))
 		return p, nil, nil
 
-	case "http", "":
+	case "http-bridge", "http", "":
 		base := gw.authBridgeBaseURL
 		if base == "" {
 			base = ap.BaseURL
@@ -953,7 +953,7 @@ func buildAuthProvider(
 			return nil, nil, err
 		}
 		log.Printf(
-			"AUTH PROVIDER http base=%s login=%s",
+			"AUTH PROVIDER http-bridge base=%s login=%s",
 			base, p.LoginURL())
 		return p, nil, nil
 

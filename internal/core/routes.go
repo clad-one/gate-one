@@ -1473,8 +1473,10 @@ type AuthProviderConfig struct {
 	// legacy authProvider block is normalized to id "default".
 	ID string `json:"id,omitempty"`
 
-	// Type: dev | http | oidc | jwt. Empty = inferred from the
-	// declared fields (dev block, clientId => oidc, else http).
+	// Type: dev | http-bridge | oidc | jwt. Empty = inferred from the
+	// declared fields (dev block, clientId => oidc, else http-bridge).
+	// The legacy "http" spelling is accepted and normalized to
+	// "http-bridge".
 	Type string `json:"type,omitempty"`
 
 	// CookieName: session cookie name for oidc. Empty = the legacy
@@ -1715,7 +1717,7 @@ func (p *AuthProviderConfig) IsInteractive() bool {
 		return false
 	}
 	switch p.Type {
-	case "dev", "http", "oidc":
+	case "dev", "http-bridge", "http", "oidc":
 		return true
 	default:
 		return false
@@ -2999,7 +3001,7 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 			if ap.Type != "oidc" && ap.Type != "jwt" {
 				return fmt.Errorf(
 					"authProviders[%s]: type %q is not allowed in the "+
-						"multi-tenant form (use oidc or jwt; http/dev are "+
+						"multi-tenant form (use oidc or jwt; http-bridge/dev are "+
 						"legacy authProvider only)",
 					id, ap.Type)
 			}
@@ -3033,7 +3035,7 @@ func (c *Config) resolveAuthProvider(authBridgeURL string) error {
 		if c.OIDC == nil && authBridgeURL == "" {
 			return nil
 		}
-		ap := &AuthProviderConfig{Type: "http", ID: "default"}
+		ap := &AuthProviderConfig{Type: "http-bridge", ID: "default"}
 		if c.OIDC != nil {
 			ap.LoginURL = c.OIDC.LoginURL
 			ap.Issuer = c.OIDC.Issuer
@@ -3069,8 +3071,13 @@ func (c *Config) resolveOneAuthProvider(ap *AuthProviderConfig, authBridgeURL st
 		case ap.JWKSURL != "":
 			ap.Type = "jwt"
 		default:
-			ap.Type = "http"
+			ap.Type = "http-bridge"
 		}
+	}
+	// Backward compatibility: the old name was ambiguous with the URL
+	// scheme, not with the bridge concept. Canonicalize it internally.
+	if ap.Type == "http" {
+		ap.Type = "http-bridge"
 	}
 
 	if ap.Type != "oidc" && ap.Type != "jwt" && ap.SessionStore != nil {
@@ -3360,7 +3367,7 @@ func (c *Config) resolveOneAuthProvider(ap *AuthProviderConfig, authBridgeURL st
 				ap.CookieName)
 		}
 
-	case "http":
+	case "http-bridge":
 		if authBridgeURL != "" {
 			// CLI flag: highest precedence, and it resets derived
 			// endpoints so they follow the new base.
@@ -3428,7 +3435,7 @@ func (c *Config) resolveOneAuthProvider(ap *AuthProviderConfig, authBridgeURL st
 	default:
 		return fmt.Errorf(
 			"authProvider.type %q: unknown provider "+
-				"(expected dev, http or oidc)",
+				"(expected dev, http-bridge, oidc or jwt)",
 			ap.Type)
 	}
 

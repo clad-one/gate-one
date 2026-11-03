@@ -10,7 +10,7 @@ import (
 func testLinksConfig() *core.Config {
 	return &core.Config{
 		AuthProvider: &core.AuthProviderConfig{
-			Type: "http",
+			Type: "http-bridge",
 			Links: &core.AuthProviderLinks{
 				Account: &core.UserLink{
 					Label: "Account",
@@ -94,7 +94,7 @@ func TestGatewayMergesUserBadgeLinks(t *testing.T) {
 	t.Setenv("TOKEN_BROKER_SHARED_SECRET", "s3cret")
 	cfg := loadForTest(t, `{
 		"authProvider": {
-			"type": "http",
+			"type": "http-bridge",
 			"loginUrl": "https://login.test/login",
 			"issuer": "https://auth.test/realms/test",
 			"links": {"account": {"url": "https://idp.test/account/"}}

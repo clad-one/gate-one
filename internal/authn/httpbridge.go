@@ -91,7 +91,7 @@ type HTTP struct {
 func NewHTTP(cfg HTTPConfig) (*HTTP, error) {
 	base := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if base == "" {
-		return nil, fmt.Errorf("authProvider: baseUrl is required for type http")
+		return nil, fmt.Errorf("authProvider: baseUrl is required for type http-bridge")
 	}
 	u, err := url.Parse(base)
 	if err != nil || u.Host == "" {
@@ -127,7 +127,7 @@ func NewHTTP(cfg HTTPConfig) (*HTTP, error) {
 	return h, nil
 }
 
-func (h *HTTP) Name() string   { return "http" }
+func (h *HTTP) Name() string   { return "http-bridge" }
 func (h *HTTP) Issuer() string { return h.issuer }
 func (h *HTTP) LoginURL() string {
 	return h.loginURL
