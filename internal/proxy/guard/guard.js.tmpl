@@ -19,7 +19,8 @@
   // (precedence: the markup wins).
   var UIGATE = %[3]s;
   // User badge (route userBadge config): visible handle at the top
-  // edge; click cycle handle → compact → extended.
+  // edge; hover = compact, click the handle = extended, triple click =
+  // hide for 2 s (escape hatch for covered UI).
   var USERBADGE = %[4]s;
   // Client-side rewrite (route upstream.rewriteBody): origin hosts +
   // public target + prefix exceptions, or null. Drives the
@@ -608,12 +609,50 @@
   // the logout button (end_session navigation). Absent when anonymous
   // and without policy. Built in pure DOM (never innerHTML).
   var badgeEl = null;
+  var badgeClickCount = 0;
+  var badgeLastClick = 0;
+  var badgeSnoozeTimer = 0;
+  var badgePointerSeen = false;
+  var badgeLastX = 0;
+  var badgeLastY = 0;
 
   function removeBadge() {
+    if (badgeSnoozeTimer) {
+      clearTimeout(badgeSnoozeTimer);
+      badgeSnoozeTimer = 0;
+    }
     if (badgeEl) {
       badgeEl.parentNode.removeChild(badgeEl);
       badgeEl = null;
     }
+  }
+
+  // badgeTripleClick: three quick clicks on the badge chrome hide it
+  // for two seconds. The user can then reach controls the badge
+  // covers, even while the pointer stays near the top edge.
+  function badgeTripleClick() {
+    var now = Date.now();
+    if (now - badgeLastClick > 600) badgeClickCount = 0;
+    badgeLastClick = now;
+    badgeClickCount++;
+    return badgeClickCount >= 3;
+  }
+
+  function snoozeBadge() {
+    if (!badgeEl) return;
+    badgeClickCount = 0;
+    badgeEl.classList.remove("cladone-userbadge-open");
+    badgeEl.classList.add("cladone-userbadge-snoozed");
+    if (badgeSnoozeTimer) clearTimeout(badgeSnoozeTimer);
+    badgeSnoozeTimer = setTimeout(function () {
+      badgeSnoozeTimer = 0;
+      if (badgeEl) {
+        badgeEl.classList.remove("cladone-userbadge-snoozed");
+        if (badgePointerSeen) {
+          updateBadgeNear(badgeLastX, badgeLastY);
+        }
+      }
+    }, 2000);
   }
 
   // Common base for both badge modes (authenticated / login
@@ -861,19 +900,25 @@
   // after login and re-appears when the mouse approaches the top edge
   // (its own corner). Hovering it shows the compact view (CSS); a
   // click opens the full view.
+  function updateBadgeNear(x, y) {
+    if (!badgeEl) return;
+    var near = badgeEl.matches(":hover") ||
+      badgeEl.classList.contains("cladone-userbadge-open") ||
+      badgeEl.classList.contains("cladone-userbadge-reveal");
+    if (!near && y <= 40) {
+      var r = badgeEl.getBoundingClientRect();
+      var margin = 150;
+      near = x >= r.left - margin && x <= r.right + margin;
+    }
+    badgeEl.classList.toggle("cladone-userbadge-near", near);
+  }
+
   if (USERBADGE) {
     window.addEventListener("mousemove", function (ev) {
-      if (!badgeEl) return;
-      var near = badgeEl.matches(":hover") ||
-        badgeEl.classList.contains("cladone-userbadge-open") ||
-        badgeEl.classList.contains("cladone-userbadge-reveal");
-      if (!near && ev.clientY <= 40) {
-        var r = badgeEl.getBoundingClientRect();
-        var margin = 150;
-        near = ev.clientX >= r.left - margin &&
-               ev.clientX <= r.right + margin;
-      }
-      badgeEl.classList.toggle("cladone-userbadge-near", near);
+      badgePointerSeen = true;
+      badgeLastX = ev.clientX;
+      badgeLastY = ev.clientY;
+      updateBadgeNear(ev.clientX, ev.clientY);
     });
   }
 
@@ -1348,12 +1393,25 @@
     // it navigates (its own onclick).
     if (authed && badgeEl) {
       if (badgeEl.contains(t)) {
-        // Interactive children keep their native action; a click on
-        // the badge chrome toggles the FULL view.
+        // Interactive children keep their native action.
         if (t.closest("a,button,input,select,textarea,label")) {
           return;
         }
-        badgeEl.classList.toggle("cladone-userbadge-open");
+        // Triple click anywhere on the non-interactive badge chrome
+        // temporarily hides it, even if the pointer stays near the
+        // top edge. This is the escape hatch for covered UI.
+        var triple = badgeTripleClick();
+        if (triple) {
+          snoozeBadge();
+          return;
+        }
+        // Only the handle toggles the FULL view. A click on the
+        // body (e.g. the empty space right of the logout button or
+        // the scope chips) must not toggle: repeated toggles looked
+        // like a two-second blink. Use the handle or click outside.
+        if (t.closest(".cladone-userbadge-tab")) {
+          badgeEl.classList.toggle("cladone-userbadge-open");
+        }
         return;
       }
       // click outside: collapse the full view (hover/near still

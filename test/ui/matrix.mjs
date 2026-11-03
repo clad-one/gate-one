@@ -388,7 +388,47 @@ const SESSION = {
     : fail("badge: compact/full CSS rules missing");
 }
 
-// ── 6e. refresh(): in-place session changes, no reload ──
+// ── 6e. badge: blank body click is a no-op; triple click snoozes 2 s ──
+{
+  const guardBadge = renderGuard({
+    userBadge:
+      '{"position":"right","claims":["preferred_username"],' +
+      '"roles":true,"scopes":true,"logoutLabel":"Log out"}',
+  });
+  const x = await mkWindow(guardBadge, html, SESSION);
+  const badge = x.doc.querySelector(".cladone-userbadge");
+  const tab = badge.querySelector(".cladone-userbadge-tab");
+  await tick(2200); // transient reveal over
+
+  x.click(tab); // open
+  await tick(700); // let the triple-click window expire
+  const body = badge.querySelector(".cladone-userbadge-body");
+  x.click(body); // empty area right of the controls
+  await tick(50);
+  badge.classList.contains("cladone-userbadge-open")
+    ? ok("badge: blank body click leaves the full view open")
+    : fail("badge: blank body click toggled the full view");
+
+  await tick(700); // let the triple-click window expire
+  x.w.dispatchEvent(new x.w.MouseEvent("mousemove", {
+    bubbles: true, clientX: 100, clientY: 20,
+  }));
+  await tick();
+  x.click(tab);
+  x.click(tab);
+  x.click(tab);
+  badge.classList.contains("cladone-userbadge-snoozed")
+    ? ok("badge: triple click snoozes the badge")
+    : fail("badge: triple click did not snooze the badge");
+
+  await tick(2100);
+  !badge.classList.contains("cladone-userbadge-snoozed") &&
+  badge.classList.contains("cladone-userbadge-near")
+    ? ok("badge: snooze ends after 2 s and the near handle returns")
+    : fail("badge: badge still snoozed after 2 s");
+}
+
+// ── 6f. refresh(): in-place session changes, no reload ──
 {
   const x = await mkWindow(guard, html, null);
   const off = await x.w.__cladoneAuth.refresh();

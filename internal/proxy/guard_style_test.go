@@ -44,6 +44,7 @@ func TestGuardUsesClassesNotInlineStyles(t *testing.T) {
 		".cladone-badge-links",
 		".cladone-badge-link",
 		".cladone-userbadge-with-chips",
+		".cladone-userbadge-snoozed",
 		":hover:not(.cladone-userbadge-open)",
 		"white-space:normal",
 		"overflow-y:auto",
