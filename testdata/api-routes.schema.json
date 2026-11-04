@@ -668,6 +668,13 @@
         "description": "Path prefix of the API responses cached by the service worker."
       },
       "description": "Routes served by this gateway. Order is not significant: the most specific host/path match wins."
+    },
+    "ssoGroups": {
+      "type": "array",
+      "description": "Cross-domain SSO groups. Shared OIDC/client/session settings are declared once per group; providers[] declares only what varies per application domain. Expanded into authProviders at load. Auth-registry is exhaustive: a shared field placed in a provider entry is rejected by the strict decoder.",
+      "items": {
+        "$ref": "#/definitions/ssoGroup"
+      }
     }
   },
   "definitions": {
@@ -1656,14 +1663,23 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "host",
         "path",
         "backend"
       ],
       "properties": {
         "host": {
           "type": "string",
-          "description": "Host of the route (routed by Host). Named capture {name}: one DNS label, expanded AT LOAD into one concrete route per allow-listed label of the wildcard block (bounded, fail-closed anti-SSRF)."
+          "description": "Single literal application host (or wildcard pattern when wildcard is set). Mutually exclusive with hosts."
+        },
+        "hosts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Literal application hosts sharing this route body. Expanded at load into one concrete route per host; auth.provider is inferred from the ssoGroups provider whose cookieDomain covers each host. Mutually exclusive with host and wildcard."
         },
         "wildcard": {
           "type": "object",
@@ -1739,6 +1755,261 @@
         },
         "authGuard": {
           "$ref": "#/definitions/authGuardPolicy"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "host"
+          ],
+          "not": {
+            "required": [
+              "hosts"
+            ]
+          }
+        },
+        {
+          "required": [
+            "hosts"
+          ],
+          "not": {
+            "required": [
+              "host"
+            ]
+          }
+        }
+      ]
+    },
+    "ssoGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One cross-domain SSO group. Every provider in the group shares issuer, client, scopes, session key and session store; only login host, cookie domain and domain-specific links may differ.",
+      "required": [
+        "id",
+        "issuer",
+        "clientId",
+        "providers"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Group identifier used in diagnostics and -check output."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "oidc"
+          ],
+          "description": "Provider type. Only oidc is allowed in a group; JWT providers stay standalone authProviders entries. Default: oidc."
+        },
+        "issuer": {
+          "type": "string",
+          "description": "OIDC issuer shared by every provider in the group."
+        },
+        "clientId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OIDC client id shared by every provider. Register every provider callback URL at the IdP."
+        },
+        "clientSecretEnv": {
+          "type": "string",
+          "description": "Environment variable holding the shared OIDC client secret. Empty = public client (PKCE only)."
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "OIDC scopes requested for every provider."
+        },
+        "roleClaims": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Dot paths in the ID token whose values become roles, shared by every provider."
+        },
+        "scopesClaim": {
+          "type": "string",
+          "description": "Claim holding granted scopes. Default: scope; scp is always also read."
+        },
+        "sessionKeyEnv": {
+          "type": "string",
+          "description": "Environment variable holding the RP cookie signing key. Required with Redis; identical for every provider in the group."
+        },
+        "sessionStore": {
+          "type": "object",
+          "description": "RP-side revocation store (back-channel logout, RP logout). Default: bbolt at ./gate-one-state.db, relative to the config file. bbolt is single-writer: a second Gate One instance on the same file is refused. Redis is the shared, multi-instance backend and makes revocation visible on the next request on every instance.",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "bolt",
+                "redis"
+              ],
+              "description": "bolt (default, single instance) or redis (shared, multi-instance, immediate revocation)."
+            },
+            "path": {
+              "type": "string",
+              "description": "bbolt file path. Default ./gate-one-state.db (relative to the config file)."
+            },
+            "url": {
+              "type": "string",
+              "description": "Redis URL for type redis (redis:// or rediss://). Mutually exclusive with sentinel mode."
+            },
+            "sentinelAddrs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Redis Sentinel addresses (host:port). Required with masterName."
+            },
+            "masterName": {
+              "type": "string",
+              "description": "Redis Sentinel master name. Requires sentinelAddrs."
+            },
+            "sentinelUsername": {
+              "type": "string",
+              "description": "ACL user used to authenticate to the Sentinels themselves (sentinel mode only). Separate from username, which is the Redis data user."
+            },
+            "sentinelPasswordEnv": {
+              "type": "string",
+              "description": "Environment variable holding the Sentinel password (sentinel mode only). Never put the password in this file."
+            },
+            "tls": {
+              "type": "boolean",
+              "description": "Use TLS in sentinel mode (Sentinels and the discovered master). In URL mode use a rediss:// URL instead."
+            },
+            "tlsCaFile": {
+              "type": "string",
+              "description": "PEM CA bundle for the Sentinel TLS connections. Requires tls=true; empty = system roots."
+            },
+            "tlsServerName": {
+              "type": "string",
+              "description": "TLS server name override (useful when the Sentinels are addressed by IP). Requires tls=true."
+            },
+            "username": {
+              "type": "string",
+              "description": "Redis ACL username."
+            },
+            "passwordEnv": {
+              "type": "string",
+              "description": "Environment variable holding the Redis password. Never put the password in this file."
+            },
+            "db": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis logical database. Default 0."
+            },
+            "prefix": {
+              "type": "string",
+              "description": "Shared revocation key prefix. Default cladone:auth:v1:. Must match the broker's redis.authPrefix."
+            },
+            "dialTimeoutMs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis dial timeout in milliseconds. Default 500."
+            },
+            "readTimeoutMs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis read timeout in milliseconds. Default 300."
+            },
+            "writeTimeoutMs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis write timeout in milliseconds. Default 300."
+            },
+            "poolSize": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Redis connection pool size. Default 64."
+            }
+          }
+        },
+        "sessionTtlSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "OIDC RP session lifetime. Default 3600 (1h): a short TTL bounds revocation when no shared store is used. The refresh/reauth flow renews it."
+        },
+        "backchannelLogout": {
+          "type": "boolean",
+          "description": "OIDC Back-Channel Logout. Absent = auto: enabled when the IdP discovery advertises backchannel_logout_supported. false disables it. Register <loginBaseUrl>/backchannel-logout at the IdP."
+        },
+        "backchannelForwardUrl": {
+          "type": "string",
+          "description": "Migration bridge: after a valid local back-channel revocation, POST the same logout_token to this auth-bridge /backchannel-logout URL so its persistent sid list stays in sync for /auth and /connections. Best effort."
+        },
+        "revocationTtlSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the broker), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout."
+        },
+        "legacyTokenCookies": {
+          "type": "boolean",
+          "description": "Migration bridge: also set auth-bridge's access_token/refresh_token/id_token cookies on cookieDomain, so auth-bridge's token-broker proxy routes (/connections, /connect, /oauth) resolve the same session when both share the login host. Default false. The native session cookie remains authoritative for Gate One."
+        },
+        "providers": {
+          "type": "array",
+          "minItems": 1,
+          "description": "One entry per application domain/provider. Only fields that vary per domain are allowed here.",
+          "items": {
+            "$ref": "#/definitions/ssoGroupProvider"
+          }
+        }
+      }
+    },
+    "ssoGroupProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One domain/provider inside an SSO group. Shared fields (issuer, clientId, sessionStore, …) are deliberately absent: put them on the group.",
+      "required": [
+        "id",
+        "loginBaseUrl",
+        "cookieDomain"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider id used by routes (auth.provider). Must be globally unique."
+        },
+        "loginBaseUrl": {
+          "type": "string",
+          "description": "Public origin of this domain's login service. Must be the cookieDomain or one of its subdomains."
+        },
+        "loginUrl": {
+          "type": "string",
+          "description": "Optional full login page URL. Defaults to loginBaseUrl + /login."
+        },
+        "cookieDomain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Registrable parent domain for this provider's session cookie (e.g. app-a.com or app-b.fr). Distinct and non-overlapping within the group; route hosts must be covered by it."
+        },
+        "cookieName": {
+          "type": "string",
+          "description": "Optional session cookie name. Empty = provider-scoped default."
+        },
+        "redirectUrl": {
+          "type": "string",
+          "description": "Optional OIDC callback URL. Defaults to loginBaseUrl + /auth/callback. Must be on cookieDomain or a subdomain."
+        },
+        "links": {
+          "type": "object",
+          "description": "Links owned by the authentication connector, displayed in the user badge. account is the IdP's own account console: NO OIDC standard, so the URL is explicit (Keycloak /realms/<realm>/account/, Entra myaccount.microsoft.com, Google myaccount.google.com, Okta /enduser/settings…).",
+          "additionalProperties": false,
+          "properties": {
+            "account": {
+              "$ref": "#/definitions/userLink"
+            }
+          }
+        },
+        "mcpAudience": {
+          "type": "string",
+          "description": "MCP access-token audience policy. Empty = scope-only (compatible default). A literal value requires that value in aud. \"auto\" requires the endpoint's own protected-resource identifier (recommended, and used with Keycloak audience mappers)."
         }
       }
     }

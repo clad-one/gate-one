@@ -37,6 +37,86 @@ its routes answer 502, the other tenants continue. See
 Absent `authProvider` keeps the legacy `oidc` + auth-bridge behaviour:
 existing configurations need no edit.
 
+=== Cross-domain SSO groups
+
+A cookie cannot cross unrelated registrable domains. For
+`app-a.com` and `app-b.fr`, declare one `ssoGroups` entry: the group
+holds the shared OIDC/client/session settings once, and `providers[]`
+declares only what varies per domain. Gate One expands each provider at
+load; `auth.provider` still names the concrete provider.
+
+[source,json]
+----
+{
+  "ssoGroups": [{
+    "id": "acme",
+    "type": "oidc",
+    "issuer": "https://idp.example.com/realms/acme",
+    "clientId": "gate-one",
+    "clientSecretEnv": "OIDC_CLIENT_SECRET",
+    "scopes": ["openid", "profile", "email"],
+    "roleClaims": ["roles"],
+    "sessionKeyEnv": "OIDC_SESSION_KEY",
+    "sessionStore": {
+      "type": "redis",
+      "url": "redis://redis:6379/0",
+      "passwordEnv": "REDIS_PASSWORD",
+      "prefix": "cladone:auth:v1:"
+    },
+    "backchannelLogout": true,
+    "providers": [
+      {
+        "id": "app-a",
+        "loginBaseUrl": "https://login.app-a.com",
+        "cookieDomain": "app-a.com"
+      },
+      {
+        "id": "app-b",
+        "loginBaseUrl": "https://login.app-b.fr",
+        "cookieDomain": "app-b.fr"
+      }
+    ]
+  }],
+  "defaultAuthProvider": "app-a",
+  "routes": [{
+    "hosts": ["app-a.com", "app-b.fr"],
+    "path": "/*",
+    "frontend": true,
+    "backend": "http://app:8080",
+    "auth": {}
+  }]
+}
+----
+
+Rules:
+
+* shared fields (`issuer`, `clientId`, `scopes`, `sessionStore`,
+  `sessionKeyEnv`, `backchannelLogout`, …) are only accepted on the
+  group; the strict decoder rejects them inside `providers[]`;
+* each provider's `loginBaseUrl` and every route host must be the
+  `cookieDomain` or one of its subdomains;
+* cookie domains inside one group must be distinct and must not overlap
+  (no `example.com` plus `sub.example.com`);
+* a group with more than one provider requires
+  `sessionStore.type: "redis"` and a shared `sessionKeyEnv`, so a logout
+  revokes every domain on the next request;
+* `routes[].hosts[]` expands one route body into one concrete route per
+  host; `auth.provider` is inferred from the provider whose
+  `cookieDomain` covers the host. `hosts` is mutually exclusive with
+  `host` and `wildcard`;
+* `ssoGroups` and the legacy singular `authProvider` are mutually
+  exclusive. Standalone `authProviders` entries (for example JWT API
+  providers) may coexist with `ssoGroups` if provider ids are unique.
+
+The zero-form behaviour relies on the IdP session: the second domain
+redirects to the same IdP, which already has a session, and returns a
+code without showing a login form. If the IdP session is expired, the
+normal interactive login is required. Register every
+`https://login.<domain>/auth/callback` (and back-channel logout URL) at
+the IdP. Gate One currently sends the provider's default prompt: the
+zero-form path depends on the IdP reusing its own session when one
+exists.
+
 For multi-instance or immediate revocation, set the OIDC revocation
 store to Redis:
 

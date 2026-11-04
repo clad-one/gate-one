@@ -343,8 +343,12 @@ func printRoutes(cfg *core.Config) {
 				label = "default"
 			}
 			fmt.Fprintf(out,
-				"AUTH PROVIDER %-12s %-6s login=%s issuer=%s\n",
+				"AUTH PROVIDER %-12s %-6s login=%s issuer=%s",
 				label, ap.Type, ap.LoginURL, ap.Issuer)
+			if group := ap.SSOGroupID(); group != "" {
+				fmt.Fprintf(out, " ssoGroup=%s", group)
+			}
+			fmt.Fprintln(out)
 		}
 	} else if ap := cfg.AuthProvider; ap != nil {
 		fmt.Fprintf(out, "AUTH PROVIDER %s  login=%s  issuer=%s\n",
@@ -363,6 +367,9 @@ func printRoutes(cfg *core.Config) {
 		}
 		if r.Auth != nil {
 			p = append(p, "auth")
+			if ap := cfg.AuthProviderFor(r); ap != nil {
+				p = append(p, "provider:"+ap.ID)
+			}
 		}
 		if r.StripPrefix != "" {
 			p = append(p, "stripPrefix")

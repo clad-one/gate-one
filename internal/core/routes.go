@@ -866,8 +866,14 @@ func (p *PWAPolicy) networkOnlyPatterns() []string {
 }
 
 type Route struct {
-	Host string `json:"host"`
-	Path string `json:"path"`
+	Host string `json:"host,omitempty"`
+	// Hosts: one route body shared by several literal application
+	// hosts. Expanded at load into one concrete route per host, each
+	// bound to the SSO-group provider that owns the host's cookie
+	// domain. Mutually exclusive with Host and Wildcard; use Wildcard
+	// for DNS-label expansion inside one domain.
+	Hosts []string `json:"hosts,omitempty"`
+	Path  string   `json:"path"`
 
 	// Wildcard: named host/backend expansion — one route, N sites.
 	// Each key is a capture name ({name} in host and backend), its
@@ -990,6 +996,10 @@ func (c *Config) expandWildcards() error {
 	taken := make(map[string]bool, len(c.Routes))
 	for i := range c.Routes {
 		r := &c.Routes[i]
+		if len(r.Hosts) > 0 && r.Wildcard != nil {
+			return fmt.Errorf(
+				"route: hosts and wildcard are mutually exclusive")
+		}
 		if r.Wildcard == nil {
 			taken[wildcardKey(r.Host, r.Path)] = true
 		}
@@ -1010,6 +1020,327 @@ func (c *Config) expandWildcards() error {
 	}
 	c.Routes = expanded
 	return nil
+}
+
+// expandSSOGroups expands every ssoGroups[].providers[] entry into a
+// concrete AuthProviderConfig carrying the group's shared settings.
+// The group fields are copied, never re-declared: a shared field placed
+// inside providers[] is already rejected by the strict JSON decoder.
+func (c *Config) expandSSOGroups() error {
+	if len(c.SSOGroups) == 0 {
+		return nil
+	}
+	if c.AuthProvider != nil {
+		return fmt.Errorf(
+			"authProvider and ssoGroups are mutually exclusive")
+	}
+	groupIDs := make(map[string]bool, len(c.SSOGroups))
+	for gi, g := range c.SSOGroups {
+		if g == nil {
+			return fmt.Errorf("ssoGroups[%d]: null group", gi)
+		}
+		gid := strings.TrimSpace(g.ID)
+		if gid == "" {
+			return fmt.Errorf("ssoGroups[%d]: id is required", gi)
+		}
+		if groupIDs[gid] {
+			return fmt.Errorf("ssoGroups: duplicate id %q", gid)
+		}
+		groupIDs[gid] = true
+		if g.Type == "" {
+			g.Type = "oidc"
+		}
+		if g.Type != "oidc" {
+			return fmt.Errorf(
+				"ssoGroups[%s]: type %q is not allowed (use oidc; "+
+					"jwt providers stay standalone authProviders)",
+				gid, g.Type)
+		}
+		if len(g.Providers) == 0 {
+			return fmt.Errorf(
+				"ssoGroups[%s]: at least one provider is required", gid)
+		}
+		if len(g.Providers) > 1 {
+			if g.SessionStore == nil ||
+				strings.ToLower(strings.TrimSpace(g.SessionStore.Type)) != "redis" {
+				return fmt.Errorf(
+					"ssoGroups[%s]: a multi-domain group requires "+
+						"sessionStore.type \"redis\" so sessions and "+
+						"revocations are shared", gid)
+			}
+		}
+
+		domains := make(map[string]string, len(g.Providers))
+		providerIDs := make(map[string]bool, len(g.Providers))
+		for pi, p := range g.Providers {
+			if p == nil {
+				return fmt.Errorf(
+					"ssoGroups[%s].providers[%d]: null provider", gid, pi)
+			}
+			pid := strings.TrimSpace(p.ID)
+			if pid == "" {
+				return fmt.Errorf(
+					"ssoGroups[%s].providers[%d]: id is required", gid, pi)
+			}
+			if providerIDs[pid] {
+				return fmt.Errorf(
+					"ssoGroups[%s].providers: duplicate id %q", gid, pid)
+			}
+			providerIDs[pid] = true
+			domain := normalizeCookieDomain(p.CookieDomain)
+			if domain == "" {
+				return fmt.Errorf(
+					"ssoGroups[%s].providers[%s]: cookieDomain is required",
+					gid, pid)
+			}
+			if other, ok := domains[domain]; ok {
+				return fmt.Errorf(
+					"ssoGroups[%s].providers[%s]: cookieDomain %q already "+
+						"used by %q", gid, pid, domain, other)
+			}
+			for existing, other := range domains {
+				if cookieDomainsOverlap(existing, domain) {
+					return fmt.Errorf(
+						"ssoGroups[%s].providers[%s]: cookieDomain %q "+
+							"overlaps %q used by %q", gid, pid, domain,
+						existing, other)
+				}
+			}
+			domains[domain] = pid
+
+			loginBase := strings.TrimRight(strings.TrimSpace(p.LoginBaseURL), "/")
+			if loginBase == "" {
+				return fmt.Errorf(
+					"ssoGroups[%s].providers[%s]: loginBaseUrl is required",
+					gid, pid)
+			}
+			for field, raw := range map[string]string{
+				"loginBaseUrl": loginBase,
+				"loginUrl":     p.LoginURL,
+				"redirectUrl":  p.RedirectURL,
+			} {
+				if strings.TrimSpace(raw) == "" {
+					continue
+				}
+				u, err := url.Parse(raw)
+				if err != nil || u.Host == "" ||
+					(u.Scheme != "http" && u.Scheme != "https") {
+					return fmt.Errorf(
+						"ssoGroups[%s].providers[%s].%s %q: invalid http(s) URL",
+						gid, pid, field, raw)
+				}
+				if !hostCoveredByDomain(normalizeHostName(u.Host), domain) {
+					return fmt.Errorf(
+						"ssoGroups[%s].providers[%s].%s host %q is not "+
+							"covered by cookieDomain %q", gid, pid, field,
+						u.Hostname(), domain)
+				}
+			}
+
+			ap := &AuthProviderConfig{
+				ID:                    pid,
+				Type:                  "oidc",
+				LoginBaseURL:          loginBase,
+				LoginURL:              strings.TrimSpace(p.LoginURL),
+				Issuer:                strings.TrimSpace(g.Issuer),
+				CookieDomain:          domain,
+				CookieName:            strings.TrimSpace(p.CookieName),
+				ClientID:              strings.TrimSpace(g.ClientID),
+				ClientSecretEnv:       strings.TrimSpace(g.ClientSecretEnv),
+				Scopes:                append([]string(nil), g.Scopes...),
+				RedirectURL:           strings.TrimSpace(p.RedirectURL),
+				RoleClaims:            append([]string(nil), g.RoleClaims...),
+				ScopesClaim:           strings.TrimSpace(g.ScopesClaim),
+				SessionTTLSeconds:     g.SessionTTLSeconds,
+				SessionKeyEnv:         strings.TrimSpace(g.SessionKeyEnv),
+				SessionStore:          cloneSessionStoreConfig(g.SessionStore),
+				BackchannelLogout:     cloneBool(g.BackchannelLogout),
+				BackchannelForwardURL: strings.TrimSpace(g.BackchannelForwardURL),
+				RevocationTTLSeconds:  g.RevocationTTLSeconds,
+				LegacyTokenCookies:    g.LegacyTokenCookies,
+				Links:                 p.Links,
+				MCPAudience:           strings.TrimSpace(p.MCPAudience),
+			}
+			ap.ssoGroup = gid
+			c.AuthProviders = append(c.AuthProviders, ap)
+		}
+	}
+	return nil
+}
+
+// normalizeCookieDomain: lowercase, no leading/trailing dots.
+func normalizeCookieDomain(s string) string {
+	return strings.ToLower(strings.Trim(strings.TrimSpace(s), "."))
+}
+
+// cookieDomainsOverlap reports whether two cookie domains can match the
+// same host. Parent/child domains are ambiguous for host→provider
+// inference and are refused inside one SSO group.
+func cookieDomainsOverlap(a, b string) bool {
+	return a == b ||
+		strings.HasSuffix(a, "."+b) ||
+		strings.HasSuffix(b, "."+a)
+}
+
+// hostCoveredByDomain: host == domain or a subdomain of it.
+func hostCoveredByDomain(host, domain string) bool {
+	host = normalizeHostName(host)
+	domain = normalizeCookieDomain(domain)
+	if host == "" || domain == "" {
+		return false
+	}
+	return host == domain || strings.HasSuffix(host, "."+domain)
+}
+
+func cloneSessionStoreConfig(in *SessionStoreConfig) *SessionStoreConfig {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.SentinelAddrs = append([]string(nil), in.SentinelAddrs...)
+	return &out
+}
+
+func cloneBool(in *bool) *bool {
+	if in == nil {
+		return nil
+	}
+	v := *in
+	return &v
+}
+
+// expandRouteHosts expands routes[].hosts[] into one concrete route per
+// literal host. A route's auth.provider is inferred from the provider
+// whose cookieDomain covers the host; an explicit provider is kept and
+// checked against the same domain.
+func (c *Config) expandRouteHosts() error {
+	if len(c.Routes) == 0 {
+		return nil
+	}
+
+	taken := make(map[string]string, len(c.Routes))
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		if len(r.Hosts) > 0 || r.Host == "" {
+			continue
+		}
+		key := wildcardKey(r.Host, r.Path)
+		if prev, ok := taken[key]; ok {
+			return fmt.Errorf(
+				"route %s: host/path already declared by %s", r.Host, prev)
+		}
+		taken[key] = r.Host
+	}
+
+	expanded := make([]Route, 0, len(c.Routes))
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		if len(r.Hosts) == 0 {
+			expanded = append(expanded, *r)
+			continue
+		}
+		if r.Host != "" {
+			return fmt.Errorf(
+				"route: host and hosts are mutually exclusive")
+		}
+		if r.Wildcard != nil {
+			return fmt.Errorf(
+				"route: hosts and wildcard are mutually exclusive")
+		}
+		seen := make(map[string]bool, len(r.Hosts))
+		for _, raw := range r.Hosts {
+			if strings.ContainsAny(raw, "/*{}: \t\r\n") {
+				return fmt.Errorf(
+					"route hosts: invalid literal host %q", raw)
+			}
+			host := normalizeRouteHost(raw)
+			if host == "" {
+				return fmt.Errorf(
+					"route hosts: invalid literal host %q", raw)
+			}
+			if seen[host] {
+				return fmt.Errorf(
+					"route hosts: duplicate host %q", host)
+			}
+			seen[host] = true
+			key := wildcardKey(host, r.Path)
+			if prev, ok := taken[key]; ok {
+				return fmt.Errorf(
+					"route %s: expansion collides with an existing route %s",
+					host, prev)
+			}
+			taken[key] = host
+
+			e := *r
+			e.Host = host
+			e.Hosts = nil
+			e.Wildcard = nil
+			e.wildcardSrc = ""
+			if e.Auth != nil {
+				auth := *e.Auth
+				e.Auth = &auth
+				if auth.Provider == "" {
+					ap, err := c.inferProviderForHost(host)
+					if err != nil {
+						return fmt.Errorf("route %s: %w", host, err)
+					}
+					auth.Provider = ap.ID
+				} else {
+					ap := c.AuthProviderByID(auth.Provider)
+					if ap == nil {
+						return fmt.Errorf(
+							"route %s: auth.provider %q: unknown provider",
+							host, auth.Provider)
+					}
+					if ap.CookieDomain != "" &&
+						!hostCoveredByDomain(host, ap.CookieDomain) {
+						return fmt.Errorf(
+							"route %s: host is not covered by provider %q "+
+								"cookieDomain %q", host, ap.ID, ap.CookieDomain)
+					}
+				}
+			}
+			expanded = append(expanded, e)
+		}
+	}
+	c.Routes = expanded
+	return nil
+}
+
+// normalizeRouteHost: lowercase, no trailing dot, no port.
+func normalizeRouteHost(s string) string {
+	return strings.TrimSuffix(normalizeHostName(s), ".")
+}
+
+// inferProviderForHost finds the single interactive provider whose
+// cookieDomain covers host. It is used only by routes[].hosts[]; a
+// single-host route keeps the historical default-provider behavior.
+func (c *Config) inferProviderForHost(host string) (*AuthProviderConfig, error) {
+	var matches []*AuthProviderConfig
+	for _, ap := range c.AuthProviders {
+		if ap == nil || ap.CookieDomain == "" {
+			continue
+		}
+		if hostCoveredByDomain(host, ap.CookieDomain) {
+			matches = append(matches, ap)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return nil, fmt.Errorf(
+			"no auth provider with a cookieDomain covers this host " +
+				"(declare ssoGroups or set auth.provider)")
+	default:
+		ids := make([]string, 0, len(matches))
+		for _, ap := range matches {
+			ids = append(ids, ap.ID)
+		}
+		return nil, fmt.Errorf(
+			"host is covered by several providers (%s); "+
+				"set auth.provider explicitly", strings.Join(ids, ", "))
+	}
 }
 
 // wildcardKey: the collision key — normalized host + path.
@@ -1272,6 +1603,12 @@ type Config struct {
 	// Each route selects one with auth.provider; empty = the
 	// defaultAuthProvider.
 	AuthProviders []*AuthProviderConfig `json:"authProviders,omitempty"`
+
+	// SSOGroups: cross-domain SSO groups. Each group declares its
+	// shared OIDC/client/session settings once and one provider per
+	// application domain. They are expanded into AuthProviders at
+	// load; auth.provider still names the expanded provider.
+	SSOGroups []*SSOGroupConfig `json:"ssoGroups,omitempty"`
 
 	// DefaultAuthProvider: id used by routes that do not set
 	// auth.provider. Required when more than one provider is
@@ -1568,6 +1905,67 @@ type AuthProviderConfig struct {
 
 	// Dev configures the embedded provider.
 	Dev *DevAuthConfig `json:"dev,omitempty"`
+
+	// ssoGroup is the SSO group this provider was expanded from
+	// (empty for a standalone authProviders entry). It is metadata for
+	// diagnostics and host→provider inference; never serialized.
+	ssoGroup string
+}
+
+// SSOGroupID returns the SSO group that produced this provider, or
+// empty for a standalone authProviders entry.
+func (ap *AuthProviderConfig) SSOGroupID() string {
+	if ap == nil {
+		return ""
+	}
+	return ap.ssoGroup
+}
+
+// SSOGroupConfig is the shared configuration of one cross-domain SSO
+// group. All fields except providers[] are shared by every provider in
+// the group: they are copied at load, never duplicated in the file and
+// never allowed to diverge.
+type SSOGroupConfig struct {
+	ID string `json:"id"`
+
+	// Type is oidc. The group form is for interactive SSO; a JWT
+	// provider stays a standalone authProviders entry.
+	Type string `json:"type,omitempty"`
+
+	Issuer          string   `json:"issuer"`
+	ClientID        string   `json:"clientId"`
+	ClientSecretEnv string   `json:"clientSecretEnv,omitempty"`
+	Scopes          []string `json:"scopes,omitempty"`
+	RoleClaims      []string `json:"roleClaims,omitempty"`
+	ScopesClaim     string   `json:"scopesClaim,omitempty"`
+
+	SessionKeyEnv     string              `json:"sessionKeyEnv,omitempty"`
+	SessionStore      *SessionStoreConfig `json:"sessionStore,omitempty"`
+	SessionTTLSeconds int                 `json:"sessionTtlSeconds,omitempty"`
+
+	BackchannelLogout     *bool  `json:"backchannelLogout,omitempty"`
+	BackchannelForwardURL string `json:"backchannelForwardUrl,omitempty"`
+	RevocationTTLSeconds  int    `json:"revocationTtlSeconds,omitempty"`
+	LegacyTokenCookies    bool   `json:"legacyTokenCookies,omitempty"`
+
+	Providers []*SSOGroupProviderConfig `json:"providers"`
+}
+
+// SSOGroupProviderConfig is one domain/provider inside an SSO group.
+// Only fields that legitimately vary per domain are accepted; the
+// strict decoder rejects shared fields placed here.
+type SSOGroupProviderConfig struct {
+	ID           string `json:"id"`
+	LoginBaseURL string `json:"loginBaseUrl,omitempty"`
+	LoginURL     string `json:"loginUrl,omitempty"`
+	CookieDomain string `json:"cookieDomain"`
+	CookieName   string `json:"cookieName,omitempty"`
+	RedirectURL  string `json:"redirectUrl,omitempty"`
+
+	// Links and MCPAudience are resource-specific: they may differ per
+	// application domain.
+	Links       *AuthProviderLinks `json:"links,omitempty"`
+	MCPAudience string             `json:"mcpAudience,omitempty"`
 }
 
 // SessionStoreConfig selects the RP-side revocation store.
@@ -1831,6 +2229,12 @@ func LoadWithOptions(path string, opts LoadOptions) (*Config, error) {
 		return nil, err
 	}
 
+	// SSO groups are expanded before auth-provider resolution: their
+	// shared fields are copied into one concrete provider per domain.
+	if err := cfg.expandSSOGroups(); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
 	// Wildcard routes expanded AT LOAD into concrete routes (one per
 	// allow-listed label): the request path never sees a wildcard —
 	// findRoute, rewriteBody, redirects and the probe keep running on
@@ -1859,6 +2263,13 @@ func LoadWithOptions(path string, opts LoadOptions) (*Config, error) {
 	// legacy (oidc + auth-bridge) translation. Resolved before
 	// validation so LoginURLFor/AuthIssuer see the final values.
 	if err := cfg.resolveAuthProvider(opts.AuthBridgeURL); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
+	// Routes with hosts[] are expanded after the providers are
+	// resolved: each concrete host is bound to the provider whose
+	// cookieDomain covers it.
+	if err := cfg.expandRouteHosts(); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 
