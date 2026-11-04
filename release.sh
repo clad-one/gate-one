@@ -288,7 +288,8 @@ sha256sum -c SHA256SUMS
 
 Supported: Linux amd64/arm64, macOS amd64/arm64, Windows amd64
 (CGO disabled). Binaries are not committed to Git: attach this
-directory to the source tag \`v${VERSION}\`.
+directory to the source tag \`v${VERSION}\` under release label
+\`${release_label}\`.
 
 Source repository: https://github.com/clad-one/gate-one
 Documentation: https://github.com/clad-one/gate-one-doc
