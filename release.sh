@@ -235,10 +235,13 @@ rmdir "$DIST/stage" 2>/dev/null || true
 site_line=""
 if [ -n "$PRODUCT" ] && [ -x "$PRODUCT/scripts/build-site" ]; then
 	# The product site also publishes the schemas/examples it mounts.
-	( cd "$PRODUCT" && "$PRODUCT/scripts/build-site" >/dev/null )
+	# Build it with the URL under which the release folder is published so
+	# both the site archive and GitHub Pages use the same absolute links.
+	site_base_url="${SITE_BASE_URL:-https://clad-one.github.io/gate-one-doc/${release_label}/}"
+	( cd "$PRODUCT" && "$PRODUCT/scripts/build-site" --baseURL "$site_base_url" >/dev/null )
 	tar -czf "$DIST/gate-one_${release_label}_site.tar.gz" \
 		-C "$PRODUCT/public" .
-	site_line="- \`gate-one_${release_label}_site.tar.gz\` (static documentation)"
+	site_line="- \`gate-one_${release_label}_site.tar.gz\` (static documentation, published at $site_base_url)"
 fi
 
 if [ -f "$SRC/release/cosign.pub" ]; then
@@ -285,7 +288,10 @@ sha256sum -c SHA256SUMS
 
 Supported: Linux amd64/arm64, macOS amd64/arm64, Windows amd64
 (CGO disabled). Binaries are not committed to Git: attach this
-directory to the tag \`${product_tag:-v${VERSION}}\`.
+directory to the source tag \`v${VERSION}\`.
+
+Source repository: https://github.com/clad-one/gate-one
+Documentation: https://github.com/clad-one/gate-one-doc
 NOTES
 
 (

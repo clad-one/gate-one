@@ -475,8 +475,32 @@ archive, SBOMs, `RELEASE_MANIFEST.json`, `SHA256SUMS`,
 `SHA256SUMS.bundle` and `cosign.pub`. The script never pushes, tags or
 uploads anything.
 
+The site archive is built with the GitHub Pages base URL for the same
+release label (`https://clad-one.github.io/gate-one-doc/<label>/`).
+Override it with `SITE_BASE_URL` when publishing elsewhere.
+
 The verification key is committed as `release/cosign.pub`; the private
 key stays outside the repository.
+
+### Publishing
+
+The public source repository is
+<https://github.com/clad-one/gate-one>. It carries the source tags and
+the release assets:
+
+```bash
+git push origin main
+git push origin vX.Y.Z
+
+gh release create vX.Y.Z dist/* \
+  --title "Gate One vX.Y.Z" \
+  --notes-file dist/RELEASE_NOTES.md
+```
+
+The documentation source is a separate repository,
+<https://github.com/clad-one/gate-one-doc>. Release archives contain the
+documentation site, and the docs repository publishes the same static
+site under a versioned GitHub Pages folder.
 
 ## Releasing to the infrastructure repository
 
