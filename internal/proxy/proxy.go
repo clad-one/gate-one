@@ -1220,6 +1220,19 @@ func (g *Gateway) loginHandlerFor(host string) authn.LoginHandler {
 	return nil
 }
 
+// isLoginEndpoint lists the paths owned by the native login handlers.
+// They are intercepted even when the login host is also an application
+// host; every other path falls through to route matching.
+func isLoginEndpoint(path string) bool {
+	switch path {
+	case "/login", "/logout", "/auth/callback", "/auth/popup-done",
+		"/backchannel-logout", "/health":
+		return true
+	default:
+		return false
+	}
+}
+
 func isLoopbackAddr(addr string) bool {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
@@ -2096,16 +2109,28 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// virtual host served BEFORE route matching, exactly like the
 	// production login.<domain>. Per-route providers can each host
 	// their own login surface.
+	//
+	// A provider may also use the application host as its login host
+	// (single-host deployment, or a tunnel whose only hostname cannot
+	// expose two sibling names). In that case only the provider's
+	// login endpoints are intercepted; every other path follows the
+	// normal route table. A dedicated login host without an
+	// application route keeps its previous 404/landing behaviour.
 	if lh := g.loginHandlerFor(ctx.Host); lh != nil {
-		// A bare login-host root is not a login endpoint: it is the
-		// generic landing point for out-of-band links (email
-		// verification, account actions). See serveLoginLanding.
-		if ctx.Path == "/" {
-			g.serveLoginLanding(w, r)
+		if isLoginEndpoint(ctx.Path) {
+			lh.ServeLogin(w, r)
 			return
 		}
-		lh.ServeLogin(w, r)
-		return
+		if ctx.Path == "/" {
+			// A bare login-host root is not a login endpoint: it is
+			// the generic landing point for out-of-band links (email
+			// verification, account actions). If the same host also
+			// has an application route, serve the application instead.
+			if _, ok := g.findRoute(ctx); !ok {
+				g.serveLoginLanding(w, r)
+				return
+			}
+		}
 	}
 
 	// MCP OAuth protected-resource metadata (per access unit; the

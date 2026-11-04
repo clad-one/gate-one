@@ -164,3 +164,63 @@ func TestDevRefusesNonLoopback(t *testing.T) {
 		t.Fatalf("err = %v, want loopback-only refusal", err)
 	}
 }
+
+func TestDevLoginHostCanAlsoServeApplication(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html><body>app</body></html>"))
+		},
+	))
+	t.Cleanup(backend.Close)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfgJSON := `{
+		"authProvider": {
+			"type": "dev",
+			"loginBaseUrl": "http://app.dev.test:3000",
+			"cookieDomain": "dev.test"
+		},
+		"routes": [{
+			"host": "app.dev.test", "path": "/*", "frontend": true,
+			"backend": "` + backend.URL + `"
+		}]
+	}`
+	if err := os.WriteFile(path, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := core.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := New(cfg, WithListenAddr("127.0.0.1:0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
+	clearAuthCache()
+
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"/", "app"},
+		{"/page", "app"},
+		{"/login", "Connexion de développement"},
+		{"/health", `"provider":"dev"`},
+	} {
+		req := httptest.NewRequest(
+			http.MethodGet, "http://app.dev.test:3000"+tc.path, nil)
+		req.Host = "app.dev.test:3000"
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d: %s", tc.path, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), tc.want) {
+			t.Fatalf("%s body = %q, want %q",
+				tc.path, rec.Body.String(), tc.want)
+		}
+	}
+}
