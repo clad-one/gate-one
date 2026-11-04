@@ -104,6 +104,11 @@ Rules:
   host; `auth.provider` is inferred from the provider whose
   `cookieDomain` covers the host. `hosts` is mutually exclusive with
   `host` and `wildcard`;
+* a provider's `loginBaseUrl` may be the application host itself (for
+  example a single-host deployment or a Cloudflare quick-tunnel
+  hostname). Gate One intercepts only the login endpoints
+  (`/login`, `/logout`, `/auth/*`, `/backchannel-logout`, `/health`);
+  every other path follows the route table;
 * `ssoGroups` and the legacy singular `authProvider` are mutually
   exclusive. Standalone `authProviders` entries (for example JWT API
   providers) may coexist with `ssoGroups` if provider ids are unique.
