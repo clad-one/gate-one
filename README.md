@@ -500,7 +500,8 @@ gh release create vX.Y.Z dist/* \
 The documentation source is a separate repository,
 <https://github.com/clad-one/gate-one-doc>. Release archives contain the
 documentation site, and the docs repository publishes the same static
-site under a versioned GitHub Pages folder.
+site under a versioned GitHub Pages folder:
+<https://clad-one.github.io/gate-one-doc/>.
 
 ## Releasing to the infrastructure repository
 
