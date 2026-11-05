@@ -117,10 +117,14 @@ The zero-form behaviour relies on the IdP session: the second domain
 redirects to the same IdP, which already has a session, and returns a
 code without showing a login form. If the IdP session is expired, the
 normal interactive login is required. Register every
-`https://login.<domain>/auth/callback` (and back-channel logout URL) at
-the IdP. Gate One currently sends the provider's default prompt: the
-zero-form path depends on the IdP reusing its own session when one
-exists.
+`https://login.<domain>/auth/callback` at the IdP. A Keycloak client
+accepts only one back-channel logout URL: point it at one login host
+and keep the same issuer and Redis revocation prefix on every provider
+(the receiver writes the revocation to the shared store; the other
+domain checks it on the next request). Register one URL per client only
+if the IdP supports it and the stores are not shared. Gate One currently
+sends the provider's default prompt: the zero-form path depends on the
+IdP reusing its own session when one exists.
 
 For multi-instance or immediate revocation, set the OIDC revocation
 store to Redis:
