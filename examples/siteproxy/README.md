@@ -11,7 +11,7 @@ It is the Wikipedia+ demo, moved here from the deprecated
 ## Files
 
 - `routes.json` — one wildcard route for the language editions.
-- `injects/wikipedia-plus.json` — injection bundle.
+- `injects/bundle.json` — injection bundle.
 - `injects/wikipedia-plus.user.js` — canonical userscript, also
   installable in a userscript manager.
 - `injects/wikipedia-plus.html` — generated wrapper used by the bundle.

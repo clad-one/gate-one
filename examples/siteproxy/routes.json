@@ -19,12 +19,38 @@
           ]
         }
       },
-      "inject": "injects/wikipedia-plus.json",
+      "inject": "injects/bundle.json",
       "wildcard": {
         "lang": [
-          "en", "fr", "de", "ja", "zh", "ru", "es", "it", "pt", "pl",
-          "ar", "fa", "nl", "tr", "ko", "sv", "id", "uk", "simple", "he",
-          "vi", "cs", "fi", "ceb", "hu", "sr", "ca", "no", "ro"
+          "en",
+          "fr",
+          "de",
+          "ja",
+          "zh",
+          "ru",
+          "es",
+          "it",
+          "pt",
+          "pl",
+          "ar",
+          "fa",
+          "nl",
+          "tr",
+          "ko",
+          "sv",
+          "id",
+          "uk",
+          "simple",
+          "he",
+          "vi",
+          "cs",
+          "fi",
+          "ceb",
+          "hu",
+          "sr",
+          "ca",
+          "no",
+          "ro"
         ]
       }
     }
