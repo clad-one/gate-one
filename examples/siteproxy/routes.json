@@ -1,0 +1,32 @@
+{
+  "$schema": "../../testdata/api-routes.schema.json",
+  "routes": [
+    {
+      "host": "{lang}.wikipedia.demo.localhost",
+      "path": "/*",
+      "backend": "https://{lang}.wikipedia.org",
+      "frontend": true,
+      "upstream": {
+        "host": true,
+        "rewriteRedirects": true,
+        "rewriteBody": {
+          "enabled": true
+        },
+        "responseHeaders": {
+          "remove": [
+            "Content-Security-Policy",
+            "Content-Security-Policy-Report-Only"
+          ]
+        }
+      },
+      "inject": "injects/wikipedia-plus.json",
+      "wildcard": {
+        "lang": [
+          "en", "fr", "de", "ja", "zh", "ru", "es", "it", "pt", "pl",
+          "ar", "fa", "nl", "tr", "ko", "sv", "id", "uk", "simple", "he",
+          "vi", "cs", "fi", "ceb", "hu", "sr", "ca", "no", "ro"
+        ]
+      }
+    }
+  ]
+}

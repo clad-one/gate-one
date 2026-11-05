@@ -1,0 +1,11 @@
+{
+  "$schema": "../../../testdata/inject-bundle.schema.json",
+  "injects": [
+    {
+      "name": "wikipedia-plus",
+      "target": "head",
+      "order": 30,
+      "file": "./wikipedia-plus.html"
+    }
+  ]
+}
