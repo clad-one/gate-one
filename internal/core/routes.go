@@ -1145,6 +1145,7 @@ func (c *Config) expandSSOGroups() error {
 				Issuer:                strings.TrimSpace(g.Issuer),
 				CookieDomain:          domain,
 				CookieName:            strings.TrimSpace(p.CookieName),
+				DefaultAppURL:         strings.TrimSpace(p.DefaultAppURL),
 				ClientID:              strings.TrimSpace(g.ClientID),
 				ClientSecretEnv:       strings.TrimSpace(g.ClientSecretEnv),
 				Scopes:                append([]string(nil), g.Scopes...),
@@ -1843,6 +1844,12 @@ type AuthProviderConfig struct {
 	// (dev). e.g. demo.localhost.
 	CookieDomain string `json:"cookieDomain,omitempty"`
 
+	// DefaultAppURL: application to send a bare visit to this
+	// provider's login host root to. Overrides the global defaultAppUrl
+	// for this login host. The target must be a route host bound to
+	// this provider or a host covered by CookieDomain.
+	DefaultAppURL string `json:"defaultAppUrl,omitempty"`
+
 	// Endpoint overrides (type http). Defaults:
 	// BaseURL + /auth, /auth/mcp, /health.
 	VerifyURL    string `json:"verifyUrl,omitempty"`
@@ -1955,12 +1962,13 @@ type SSOGroupConfig struct {
 // Only fields that legitimately vary per domain are accepted; the
 // strict decoder rejects shared fields placed here.
 type SSOGroupProviderConfig struct {
-	ID           string `json:"id"`
-	LoginBaseURL string `json:"loginBaseUrl,omitempty"`
-	LoginURL     string `json:"loginUrl,omitempty"`
-	CookieDomain string `json:"cookieDomain"`
-	CookieName   string `json:"cookieName,omitempty"`
-	RedirectURL  string `json:"redirectUrl,omitempty"`
+	ID            string `json:"id"`
+	LoginBaseURL  string `json:"loginBaseUrl,omitempty"`
+	LoginURL      string `json:"loginUrl,omitempty"`
+	CookieDomain  string `json:"cookieDomain"`
+	CookieName    string `json:"cookieName,omitempty"`
+	RedirectURL   string `json:"redirectUrl,omitempty"`
+	DefaultAppURL string `json:"defaultAppUrl,omitempty"`
 
 	// Links and MCPAudience are resource-specific: they may differ per
 	// application domain.
@@ -2731,6 +2739,48 @@ func (c *Config) validateAuthProviders() error {
 	return nil
 }
 
+// validateProviderDefaultApps checks the per-login-host landing target.
+// It must be an application of that provider (a bound route host) or at
+// least a host covered by the provider's cookie domain. A provider must
+// never redirect its login host to another tenant's application.
+func (c *Config) validateProviderDefaultApps() error {
+	for _, ap := range c.AuthProviders {
+		if ap == nil || strings.TrimSpace(ap.DefaultAppURL) == "" {
+			continue
+		}
+		u, err := url.Parse(ap.DefaultAppURL)
+		if err != nil || u.Host == "" || u.User != nil ||
+			(u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf(
+				"authProviders[%s].defaultAppUrl %q: absolute http(s) URL required",
+				ap.ID, ap.DefaultAppURL)
+		}
+		host := normalizeHostName(u.Host)
+		allowed := false
+		for i := range c.Routes {
+			r := &c.Routes[i]
+			if c.AuthProviderFor(r) != ap {
+				continue
+			}
+			if normalizeHostName(r.Host) == host {
+				allowed = true
+				break
+			}
+		}
+		if !allowed && ap.CookieDomain != "" &&
+			hostCoveredByDomain(host, ap.CookieDomain) {
+			allowed = true
+		}
+		if !allowed {
+			return fmt.Errorf(
+				"authProviders[%s].defaultAppUrl host %q is not a route "+
+					"of this provider and is not covered by cookieDomain %q",
+				ap.ID, host, ap.CookieDomain)
+		}
+	}
+	return nil
+}
+
 // resolveUsage validates the usage-event bus configuration and resolves
 // its environment secrets. Presence of the block enables the bus.
 func (c *Config) resolveUsage(baseDir string) error {
@@ -2920,6 +2970,9 @@ func (c *Config) resolveUsage(baseDir string) error {
 
 func (c *Config) validate() error {
 	if err := c.validateAuthProviders(); err != nil {
+		return err
+	}
+	if err := c.validateProviderDefaultApps(); err != nil {
 		return err
 	}
 	if c.DefaultAppURL != "" {

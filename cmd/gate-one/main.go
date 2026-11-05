@@ -348,6 +348,9 @@ func printRoutes(cfg *core.Config) {
 			if group := ap.SSOGroupID(); group != "" {
 				fmt.Fprintf(out, " ssoGroup=%s", group)
 			}
+			if ap.DefaultAppURL != "" {
+				fmt.Fprintf(out, " defaultApp=%s", ap.DefaultAppURL)
+			}
 			fmt.Fprintln(out)
 		}
 	} else if ap := cfg.AuthProvider; ap != nil {

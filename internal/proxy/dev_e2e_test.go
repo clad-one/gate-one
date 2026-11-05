@@ -224,3 +224,53 @@ func TestDevLoginHostCanAlsoServeApplication(t *testing.T) {
 		}
 	}
 }
+
+func TestLoginHostUsesProviderDefaultApp(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("app"))
+		},
+	))
+	t.Cleanup(backend.Close)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routes.json")
+	cfgJSON := `{
+		"defaultAppUrl": "https://global.dev.test/",
+		"authProvider": {
+			"type": "dev",
+			"loginBaseUrl": "http://login.dev.test:3000",
+			"cookieDomain": "dev.test",
+			"defaultAppUrl": "http://app.dev.test/"
+		},
+		"routes": [{
+			"host": "app.dev.test", "path": "/*", "frontend": true,
+			"backend": "` + backend.URL + `"
+		}]
+	}`
+	if err := os.WriteFile(path, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := core.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := New(cfg, WithListenAddr("127.0.0.1:0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
+	clearAuthCache()
+
+	req := httptest.NewRequest(
+		http.MethodGet, "http://login.dev.test:3000/", nil)
+	req.Host = "login.dev.test:3000"
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Location"); got != "http://app.dev.test/" {
+		t.Fatalf("Location = %q, want provider default app", got)
+	}
+}

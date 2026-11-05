@@ -127,6 +127,10 @@
           "type": "string",
           "description": "Shared parent domain of the session cookie (dev), e.g. demo.localhost. Required for dev."
         },
+        "defaultAppUrl": {
+          "type": "string",
+          "description": "Application to send a bare visit to THIS provider's login host root to. Overrides the global defaultAppUrl for this login host. Must be a route host bound to this provider or a host covered by its cookieDomain."
+        },
         "verifyUrl": {
           "type": "string",
           "description": "Identity verification endpoint (type http-bridge). Default baseUrl + /auth."
@@ -427,7 +431,7 @@
     },
     "defaultAppUrl": {
       "type": "string",
-      "description": "Absolute http(s) URL where a bare visit to the login host root is redirected (302), preserving the query string. Email verification links (Firebase mode=verifyEmail&oobCode, Keycloak account links) land on https://login.<domain>/ and must reach the application that handles the code. Absent = the login host root stays 404."
+      "description": "Global fallback for a bare visit to a login host root (302), preserving the query string. A provider's own defaultAppUrl wins for its login host. Email verification/account links must carry a return target; use defaultAppUrl only as an operational fallback."
     },
     "oidc": {
       "type": "object",
@@ -2010,6 +2014,10 @@
         "mcpAudience": {
           "type": "string",
           "description": "MCP access-token audience policy. Empty = scope-only (compatible default). A literal value requires that value in aud. \"auto\" requires the endpoint's own protected-resource identifier (recommended, and used with Keycloak audience mappers)."
+        },
+        "defaultAppUrl": {
+          "type": "string",
+          "description": "Application to send a bare visit to this provider's login host root to. Must be a route host of this provider (or a host covered by its cookieDomain). Overrides the group/global fallback for this domain."
         }
       }
     }

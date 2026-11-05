@@ -1220,6 +1220,36 @@ func (g *Gateway) loginHandlerFor(host string) authn.LoginHandler {
 	return nil
 }
 
+// providerEntryForLoginHost returns the provider that owns this login
+// host, if any. The login handler map is already host-indexed; this
+// lookup is for provider-specific landing behavior.
+func (g *Gateway) providerEntryForLoginHost(host string) *providerEntry {
+	h := normalizeHost(host)
+	for _, p := range g.providers {
+		if p != nil && p.loginHost == h {
+			return p
+		}
+	}
+	if g.loginHost == h {
+		return g.defaultProvider
+	}
+	return nil
+}
+
+// providerDefaultAppURL returns the per-provider landing target. Empty
+// means "use the global defaultAppUrl".
+func (g *Gateway) providerDefaultAppURL(host string) string {
+	p := g.providerEntryForLoginHost(host)
+	if p == nil || g.config == nil {
+		return ""
+	}
+	ap := g.config.AuthProviderByID(p.id)
+	if ap == nil {
+		return ""
+	}
+	return strings.TrimSpace(ap.DefaultAppURL)
+}
+
 // isLoginEndpoint lists the paths owned by the native login handlers.
 // They are intercepted even when the login host is also an application
 // host; every other path falls through to route matching.

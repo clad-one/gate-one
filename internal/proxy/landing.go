@@ -61,6 +61,10 @@ func (g *Gateway) serveLoginLanding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if target := g.providerDefaultAppURL(r.Host); target != "" {
+		g.redirectLanding(w, r, target)
+		return
+	}
 	if g.config.DefaultAppURL != "" {
 		g.redirectLanding(w, r, g.config.DefaultAppURL)
 		return

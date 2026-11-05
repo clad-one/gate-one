@@ -23,12 +23,14 @@ func TestSSOGroupsExpandProvidersAndHosts(t *testing.T) {
 				{
 					"id": "app-a",
 					"loginBaseUrl": "https://login.app-a.test",
-					"cookieDomain": "app-a.test"
+					"cookieDomain": "app-a.test",
+					"defaultAppUrl": "https://app-a.test/"
 				},
 				{
 					"id": "app-b",
 					"loginBaseUrl": "https://login.app-b.test",
-					"cookieDomain": "app-b.test"
+					"cookieDomain": "app-b.test",
+					"defaultAppUrl": "https://app-b.test/"
 				}
 			]
 		}],
@@ -58,6 +60,11 @@ func TestSSOGroupsExpandProvidersAndHosts(t *testing.T) {
 	}
 	if a.SSOGroupID() != "acme" || b.SSOGroupID() != "acme" {
 		t.Fatalf("ssoGroup = %q/%q", a.SSOGroupID(), b.SSOGroupID())
+	}
+	if a.DefaultAppURL != "https://app-a.test/" ||
+		b.DefaultAppURL != "https://app-b.test/" {
+		t.Fatalf("defaultAppUrl = %q/%q",
+			a.DefaultAppURL, b.DefaultAppURL)
 	}
 	if len(cfg.Routes) != 2 {
 		t.Fatalf("routes = %d, want 2", len(cfg.Routes))
@@ -274,5 +281,23 @@ func TestSSOGroupsProviderIDsAreGlobal(t *testing.T) {
 	}`)
 	if err == nil || !strings.Contains(err.Error(), "duplicate id") {
 		t.Fatalf("err = %v, want duplicate id", err)
+	}
+}
+
+func TestProviderDefaultAppURLRejectsForeignHost(t *testing.T) {
+	_, err := loadAuthTest(t, `{
+		"authProvider": {
+			"type": "dev",
+			"loginBaseUrl": "http://login.dev.test:3000",
+			"cookieDomain": "dev.test",
+			"defaultAppUrl": "https://other.test/"
+		},
+		"routes": [{
+			"host": "app.dev.test", "path": "/*", "frontend": true,
+			"backend": "http://127.0.0.1:1"
+		}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "defaultAppUrl") {
+		t.Fatalf("err = %v, want defaultAppUrl coverage error", err)
 	}
 }
