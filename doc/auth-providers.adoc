@@ -68,12 +68,14 @@ load; `auth.provider` still names the concrete provider.
       {
         "id": "app-a",
         "loginBaseUrl": "https://login.app-a.com",
-        "cookieDomain": "app-a.com"
+        "cookieDomain": "app-a.com",
+        "defaultAppUrl": "https://app-a.com/"
       },
       {
         "id": "app-b",
         "loginBaseUrl": "https://login.app-b.fr",
-        "cookieDomain": "app-b.fr"
+        "cookieDomain": "app-b.fr",
+        "defaultAppUrl": "https://app-b.fr/"
       }
     ]
   }],
@@ -109,6 +111,10 @@ Rules:
   hostname). Gate One intercepts only the login endpoints
   (`/login`, `/logout`, `/auth/*`, `/backchannel-logout`, `/health`);
   every other path follows the route table;
+* a provider may declare its own `defaultAppUrl` for a bare visit to
+  its login host root; it overrides the global `defaultAppUrl`. The
+  target must be a route host bound to that provider or covered by its
+  `cookieDomain`;
 * `ssoGroups` and the legacy singular `authProvider` are mutually
   exclusive. Standalone `authProviders` entries (for example JWT API
   providers) may coexist with `ssoGroups` if provider ids are unique.
