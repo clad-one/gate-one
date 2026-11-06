@@ -191,7 +191,7 @@ for target in "${TARGETS[@]}"; do
 	[ "$os" = "windows" ] && { bin="gate-one.exe"; ext=".zip"; }
 
 	stage="$DIST/stage/gate-one_${VERSION}_${os}_${arch}"
-	mkdir -p "$stage/schemas" "$stage/examples" "$stage/doc"
+	mkdir -p "$stage/schemas" "$stage/examples"
 
 	echo "building ${os}/${arch}…"
 	(
@@ -214,7 +214,6 @@ for target in "${TARGETS[@]}"; do
 	else
 		cp -R "$SRC"/examples/. "$stage/examples/"
 	fi
-	cp "$SRC"/doc/*.adoc "$stage/doc/" 2>/dev/null || true
 	cp "$SRC"/LICENSE "$SRC"/LICENSE.fr.md "$SRC"/PLUGIN-LICENSING.md \
 		"$SRC"/README.md "$SRC"/VERSION "$stage/" 2>/dev/null || true
 

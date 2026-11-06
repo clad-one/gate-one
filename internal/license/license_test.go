@@ -2,12 +2,33 @@ package license
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// generateKeyForTest and signForTest are test-only. The public package
+// keeps only the verifier; licence minting lives in the private vendor
+// tooling (`gate-one-vendor`).
+func generateKeyForTest() (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	return ed25519.GenerateKey(rand.Reader)
+}
+
+func signForTest(priv ed25519.PrivateKey, c Claims) (string, error) {
+	payload, err := json.Marshal(c)
+	if err != nil {
+		return "", err
+	}
+	sig := ed25519.Sign(priv, payload)
+	return tokenVersion + "." +
+		base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString(sig), nil
+}
 
 func TestEvalMissing(t *testing.T) {
 	st := Eval(nil, time.Now())
@@ -21,12 +42,12 @@ func TestEvalMissing(t *testing.T) {
 }
 
 func TestEvalRegistered(t *testing.T) {
-	pub, priv, err := GenerateKey()
+	pub, priv, err := generateKeyForTest()
 	if err != nil {
 		t.Fatal(err)
 	}
 	exp := time.Now().Add(24 * time.Hour).Unix()
-	tok, err := Sign(priv, Claims{
+	tok, err := signForTest(priv, Claims{
 		Sub: "mycompany", Org: "MYCOMPANY", Email: "ops@mycompany.fr", Plan: "pro",
 		Exp: exp, Domains: []string{"mycompany.fr"}, Features: []string{"sso"},
 	})
@@ -49,8 +70,8 @@ func TestEvalRegistered(t *testing.T) {
 }
 
 func TestEvalExpired(t *testing.T) {
-	pub, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "MYCOMPANY", Exp: time.Now().Add(-time.Hour).Unix()})
+	pub, priv, _ := generateKeyForTest()
+	tok, _ := signForTest(priv, Claims{Org: "MYCOMPANY", Exp: time.Now().Add(-time.Hour).Unix()})
 	st := Eval(&Config{Token: tok, PublicKey: EncodePublicKey(pub)}, time.Now())
 	if st.State != "eval" || st.Reason != "expired" {
 		t.Fatalf("state=%s reason=%s, want eval/expired", st.State, st.Reason)
@@ -61,8 +82,8 @@ func TestEvalExpired(t *testing.T) {
 }
 
 func TestEvalTampered(t *testing.T) {
-	pub, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "MYCOMPANY"})
+	pub, priv, _ := generateKeyForTest()
+	tok, _ := signForTest(priv, Claims{Org: "MYCOMPANY"})
 	parts := strings.Split(tok, ".")
 	// flip a payload character (keep base64url alphabet valid)
 	payload := []byte(parts[1])
@@ -79,9 +100,9 @@ func TestEvalTampered(t *testing.T) {
 }
 
 func TestEvalWrongKey(t *testing.T) {
-	_, priv, _ := GenerateKey()
-	otherPub, _, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "MYCOMPANY"})
+	_, priv, _ := generateKeyForTest()
+	otherPub, _, _ := generateKeyForTest()
+	tok, _ := signForTest(priv, Claims{Org: "MYCOMPANY"})
 	st := Eval(&Config{Token: tok, PublicKey: EncodePublicKey(otherPub)}, time.Now())
 	if st.State != "eval" || st.Reason != "invalid" {
 		t.Fatalf("wrong key = %s/%s, want eval/invalid", st.State, st.Reason)
@@ -89,8 +110,8 @@ func TestEvalWrongKey(t *testing.T) {
 }
 
 func TestEvalNoKey(t *testing.T) {
-	_, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "MYCOMPANY"})
+	_, priv, _ := generateKeyForTest()
+	tok, _ := signForTest(priv, Claims{Org: "MYCOMPANY"})
 	st := Eval(&Config{Token: tok}, time.Now())
 	if st.State != "eval" || st.Reason != "no-key" {
 		t.Fatalf("no key = %s/%s, want eval/no-key", st.State, st.Reason)
@@ -98,7 +119,7 @@ func TestEvalNoKey(t *testing.T) {
 }
 
 func TestVerifyRejectsMalformed(t *testing.T) {
-	pub, _, _ := GenerateKey()
+	pub, _, _ := generateKeyForTest()
 	for _, tok := range []string{"", "v1", "v2.a.b", "v1.%%%.%%%"} {
 		if _, err := Verify(pub, tok); err == nil {
 			t.Fatalf("Verify(%q) should fail", tok)
@@ -107,7 +128,7 @@ func TestVerifyRejectsMalformed(t *testing.T) {
 }
 
 func TestDecodeKeyAcceptsEncodings(t *testing.T) {
-	pub, _, _ := GenerateKey()
+	pub, _, _ := generateKeyForTest()
 	for _, s := range []string{
 		EncodePublicKey(pub),
 		strings.TrimRight(EncodePublicKey(pub), "="),
@@ -120,8 +141,8 @@ func TestDecodeKeyAcceptsEncodings(t *testing.T) {
 }
 
 func TestEvalTokenFile(t *testing.T) {
-	pub, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "FILE", Exp: time.Now().Add(time.Hour).Unix()})
+	pub, priv, _ := generateKeyForTest()
+	tok, _ := signForTest(priv, Claims{Org: "FILE", Exp: time.Now().Add(time.Hour).Unix()})
 	f := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(f, []byte(tok+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -133,8 +154,8 @@ func TestEvalTokenFile(t *testing.T) {
 }
 
 func TestEvalTokenFileFallsBackToConfig(t *testing.T) {
-	pub, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "CFG", Exp: time.Now().Add(time.Hour).Unix()})
+	pub, priv, _ := generateKeyForTest()
+	tok, _ := signForTest(priv, Claims{Org: "CFG", Exp: time.Now().Add(time.Hour).Unix()})
 	missing := filepath.Join(t.TempDir(), "absent")
 	st := Eval(&Config{
 		TokenFile: missing, Token: tok, PublicKey: EncodePublicKey(pub),
@@ -145,9 +166,9 @@ func TestEvalTokenFileFallsBackToConfig(t *testing.T) {
 }
 
 func TestEvalEnvOverridesEverything(t *testing.T) {
-	pub, priv, _ := GenerateKey()
-	envTok, _ := Sign(priv, Claims{Org: "ENV", Exp: time.Now().Add(time.Hour).Unix()})
-	cfgTok, _ := Sign(priv, Claims{Org: "CFG", Exp: time.Now().Add(time.Hour).Unix()})
+	pub, priv, _ := generateKeyForTest()
+	envTok, _ := signForTest(priv, Claims{Org: "ENV", Exp: time.Now().Add(time.Hour).Unix()})
+	cfgTok, _ := signForTest(priv, Claims{Org: "CFG", Exp: time.Now().Add(time.Hour).Unix()})
 	t.Setenv(TokenEnv, envTok)
 
 	st := Eval(&Config{
@@ -160,8 +181,8 @@ func TestEvalEnvOverridesEverything(t *testing.T) {
 }
 
 func TestEvalMultiKey(t *testing.T) {
-	pubA, privA, _ := GenerateKey()
-	pubB, privB, _ := GenerateKey()
+	pubA, privA, _ := generateKeyForTest()
+	pubB, privB, _ := generateKeyForTest()
 	cfg := &Config{PublicKeys: map[string]string{
 		"a": EncodePublicKey(pubA),
 		"b": EncodePublicKey(pubB),
@@ -175,7 +196,7 @@ func TestEvalMultiKey(t *testing.T) {
 		{"b", "ORG-B", privB},
 	}
 	for _, tc := range cases {
-		tok, _ := Sign(tc.priv, Claims{
+		tok, _ := signForTest(tc.priv, Claims{
 			Kid: tc.kid, Org: tc.org, Exp: time.Now().Add(time.Hour).Unix(),
 		})
 		cfg.Token = tok
@@ -188,8 +209,8 @@ func TestEvalMultiKey(t *testing.T) {
 }
 
 func TestEvalUnknownKidRejectedNoFallback(t *testing.T) {
-	pub, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Kid: "c", Org: "X", Exp: time.Now().Add(time.Hour).Unix()})
+	pub, priv, _ := generateKeyForTest()
+	tok, _ := signForTest(priv, Claims{Kid: "c", Org: "X", Exp: time.Now().Add(time.Hour).Unix()})
 	cfg := &Config{
 		// legacy publicKey AND a key map: an unknown kid must NOT fall
 		// back to publicKey (silent fallback would defeat rotation).
@@ -204,8 +225,8 @@ func TestEvalUnknownKidRejectedNoFallback(t *testing.T) {
 }
 
 func TestEvalNoKidSingleKeyMap(t *testing.T) {
-	pub, priv, _ := GenerateKey()
-	tok, _ := Sign(priv, Claims{Org: "ONLY", Exp: time.Now().Add(time.Hour).Unix()})
+	pub, priv, _ := generateKeyForTest()
+	tok, _ := signForTest(priv, Claims{Org: "ONLY", Exp: time.Now().Add(time.Hour).Unix()})
 	cfg := &Config{
 		PublicKeys: map[string]string{"only": EncodePublicKey(pub)},
 		Token:      tok,
@@ -217,9 +238,9 @@ func TestEvalNoKidSingleKeyMap(t *testing.T) {
 }
 
 func TestEvalNoKidAmbiguousKeys(t *testing.T) {
-	pubA, privA, _ := GenerateKey()
-	pubB, _, _ := GenerateKey()
-	tok, _ := Sign(privA, Claims{Org: "AMB", Exp: time.Now().Add(time.Hour).Unix()})
+	pubA, privA, _ := generateKeyForTest()
+	pubB, _, _ := generateKeyForTest()
+	tok, _ := signForTest(privA, Claims{Org: "AMB", Exp: time.Now().Add(time.Hour).Unix()})
 	cfg := &Config{
 		PublicKeys: map[string]string{
 			"a": EncodePublicKey(pubA),

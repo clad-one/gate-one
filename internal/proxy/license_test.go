@@ -1,6 +1,9 @@
 package proxy
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
@@ -8,6 +11,22 @@ import (
 	"cladone/gate-one/internal/core"
 	"cladone/gate-one/internal/license"
 )
+
+// Test-only signer. Licence minting lives in the private vendor tooling;
+// the public package exposes only the verifier.
+func licenseTestKeypair() (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	return ed25519.GenerateKey(rand.Reader)
+}
+
+func licenseTestSign(priv ed25519.PrivateKey, c license.Claims) (string, error) {
+	payload, err := json.Marshal(c)
+	if err != nil {
+		return "", err
+	}
+	sig := ed25519.Sign(priv, payload)
+	return "v1." + base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString(sig), nil
+}
 
 // TestLicenseJSONEval: no licence block → eval/missing (the badge shows
 // the notice, the gateway still serves).
@@ -26,11 +45,11 @@ func TestLicenseJSONEval(t *testing.T) {
 // TestLicenseJSONRegistered: a valid signed token surfaces its claims to
 // the guard script.
 func TestLicenseJSONRegistered(t *testing.T) {
-	pub, priv, err := license.GenerateKey()
+	pub, priv, err := licenseTestKeypair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, err := license.Sign(priv, license.Claims{
+	tok, err := licenseTestSign(priv, license.Claims{
 		Org: "MYCOMPANY", Email: "ops@mycompany.fr", Plan: "pro",
 		Exp:     time.Now().Add(time.Hour).Unix(),
 		Domains: []string{"mycompany.fr"}, Features: []string{"sso"},

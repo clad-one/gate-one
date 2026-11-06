@@ -1,10 +1,5 @@
 {
   "$schema": "./api-routes.schema.json",
-  "license": {
-    "token": "***REMOVED-LICENCE-TOKEN***",
-    "publicKey": "***REMOVED-LICENCE-KEY***",
-    "url": "https://cladone.com/"
-  },
   "authProvider": {
     "type": "oidc",
     "issuer": "https://auth.cladone.com/realms/cladone",

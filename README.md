@@ -4,14 +4,20 @@ Config-driven reverse proxy written in Go: SSO delegation to
 auth-bridge, role guards, PWA wrapping, upstream proxying and
 userscript injection.
 
-This repository holds the **sources** of Gate One. Two sibling
-repositories complete the picture:
+This repository holds the **sources** of Gate One (public:
+<https://github.com/clad-one/gate-one>). Sibling repositories complete
+the picture:
 
-| Repository | Contents |
-|---|---|
-| `gate-one-src` (this one) | Go sources, unit tests, smoke tests, developer docs |
-| `gate-one` (public) | user documentation, demo, Dockerfile / compose examples |
-| `cladone-it-infra` | deployment stack: `compose/gate-one/` (prebuilt binary + live `api-routes.json`), Ansible, Keycloak |
+| Repository | Visibility | Contents |
+|---|---|---|
+| `gate-one` (this one) | public | Go sources, unit tests, smoke tests, developer docs, signed releases |
+| `gate-one-doc` | public | documentation site, examples, published JSON Schemas |
+| `gate-one-vendor` | private | licence issuance tooling and vendor operations |
+| `cladone-it-infra` | private | deployment stack: `compose/gate-one/` (prebuilt binary + live `api-routes.json`), Ansible, Keycloak |
+
+The gateway verifies licences offline with an Ed25519 **public** key; the
+signing key and the token-minting tooling are **not** part of this
+repository. See the *License* section below.
 
 The live production configuration lives in
 `cladone-it-infra/compose/gate-one/api-routes.json`.
@@ -521,7 +527,6 @@ Go toolchain on the server.
 ```
 cmd/gate-one/       entrypoint (flags, init/doctor, SIGHUP reload, shutdown)
 cmd/cladone-auth/   small multi-tenant OIDC broker (Google federation, JWKS, policy)
-cmd/gate-one-license/ vendor-side licence keygen/sign
 internal/authn/     provider SPI: dev IdP, http adapter, native OIDC, JWT/JWKS, bbolt store
 internal/broker/    OIDC issuer: tenants, Google adapter, policy, Ed25519 tokens
 internal/core/      config grammar + route loading/validation
@@ -591,10 +596,10 @@ the file/env/config, then `SIGHUP`.
 
 **Key rotation** (zero-downtime: several keys valid at once):
 
-1. `gate-one-license keygen` → new keypair + suggested `kid`;
+1. generate a new keypair with the vendor tooling and note its `kid`;
 2. add the new public key under `license.publicKeys["<kid>"]` on the gateways
    (normal deployment) — the old key stays valid;
-3. mint new tokens with `sign -kid <kid>`;
+3. mint new tokens with the new `kid`;
 4. keep the old key until the old tokens expire;
 5. remove the old entry.
 
@@ -602,10 +607,7 @@ A token carries its `kid` inside the **signed** payload; an unknown `kid` is
 rejected (no silent fallback to another key). The legacy `license.publicKey`
 (tokens without `kid`) still works.
 
-Mint tokens (vendor side; keep the private key offline):
-
-```bash
-go run ./cmd/gate-one-license keygen
-go run ./cmd/gate-one-license sign -key priv.b64 -org "MYCOMPANY" \
-  -email ops@mycompany.fr -plan pro -days 365 -domains mycompany.fr -features sso,mcp
-```
+Only the **verifier** ships in this repository. Licence issuance
+(key generation, token minting, key custody) is handled by the private
+vendor tooling in `gate-one-vendor` and the private signing key never
+ships. To obtain a licence, contact Cladone-IT.
