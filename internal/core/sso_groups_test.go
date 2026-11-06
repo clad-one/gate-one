@@ -9,9 +9,9 @@ func TestSSOGroupsExpandProvidersAndHosts(t *testing.T) {
 	t.Setenv("SSO_SESSION_KEY", "test-session-key")
 	cfg, err := loadAuthTest(t, `{
 		"ssoGroups": [{
-			"id": "acme",
+			"id": "mycompany",
 			"type": "oidc",
-			"issuer": "https://idp.test/realms/acme",
+			"issuer": "https://idp.test/realms/mycompany",
 			"clientId": "gate-one",
 			"sessionKeyEnv": "SSO_SESSION_KEY",
 			"sessionStore": {
@@ -58,7 +58,7 @@ func TestSSOGroupsExpandProvidersAndHosts(t *testing.T) {
 		a.SessionKeyEnv != b.SessionKeyEnv {
 		t.Fatalf("shared fields diverged: a=%+v b=%+v", a, b)
 	}
-	if a.SSOGroupID() != "acme" || b.SSOGroupID() != "acme" {
+	if a.SSOGroupID() != "mycompany" || b.SSOGroupID() != "mycompany" {
 		t.Fatalf("ssoGroup = %q/%q", a.SSOGroupID(), b.SSOGroupID())
 	}
 	if a.DefaultAppURL != "https://app-a.test/" ||
@@ -88,7 +88,7 @@ func TestSSOGroupsRejectSharedFieldInProvider(t *testing.T) {
 	t.Setenv("SSO_SESSION_KEY", "test-session-key")
 	_, err := loadAuthTest(t, `{
 		"ssoGroups": [{
-			"id": "acme",
+			"id": "mycompany",
 			"issuer": "https://idp.test",
 			"clientId": "gate-one",
 			"sessionKeyEnv": "SSO_SESSION_KEY",
@@ -110,7 +110,7 @@ func TestSSOGroupsRejectSharedFieldInProvider(t *testing.T) {
 func TestSSOGroupsRejectLoginHostOutsideCookieDomain(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"ssoGroups": [{
-			"id": "acme",
+			"id": "mycompany",
 			"issuer": "https://idp.test",
 			"clientId": "gate-one",
 			"providers": [{
@@ -130,7 +130,7 @@ func TestSSOGroupsRejectOverlappingCookieDomains(t *testing.T) {
 	t.Setenv("SSO_SESSION_KEY", "test-session-key")
 	_, err := loadAuthTest(t, `{
 		"ssoGroups": [{
-			"id": "acme",
+			"id": "mycompany",
 			"issuer": "https://idp.test",
 			"clientId": "gate-one",
 			"sessionKeyEnv": "SSO_SESSION_KEY",
@@ -150,7 +150,7 @@ func TestSSOGroupsRejectOverlappingCookieDomains(t *testing.T) {
 func TestSSOGroupsMultiProviderRequiresRedis(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"ssoGroups": [{
-			"id": "acme",
+			"id": "mycompany",
 			"issuer": "https://idp.test",
 			"clientId": "gate-one",
 			"sessionStore": {"type": "bolt", "path": "./state.db"},
@@ -170,7 +170,7 @@ func TestSSOGroupsRejectLegacyAuthProvider(t *testing.T) {
 	_, err := loadAuthTest(t, `{
 		"authProvider": {"type": "dev", "loginBaseUrl": "http://login.demo.localhost:3000", "cookieDomain": "demo.localhost"},
 		"ssoGroups": [{
-			"id": "acme",
+			"id": "mycompany",
 			"issuer": "https://idp.test",
 			"clientId": "gate-one",
 			"providers": [{"id": "a", "loginBaseUrl": "https://login.a.test", "cookieDomain": "a.test"}]
@@ -186,7 +186,7 @@ func TestRouteHostsRejectUncoveredHost(t *testing.T) {
 	t.Setenv("SSO_SESSION_KEY", "test-session-key")
 	_, err := loadAuthTest(t, `{
 		"ssoGroups": [{
-			"id": "acme",
+			"id": "mycompany",
 			"issuer": "https://idp.test",
 			"clientId": "gate-one",
 			"sessionKeyEnv": "SSO_SESSION_KEY",
@@ -210,7 +210,7 @@ func TestRouteHostsRejectExplicitProviderMismatch(t *testing.T) {
 	t.Setenv("SSO_SESSION_KEY", "test-session-key")
 	_, err := loadAuthTest(t, `{
 		"ssoGroups": [{
-			"id": "acme",
+			"id": "mycompany",
 			"issuer": "https://idp.test",
 			"clientId": "gate-one",
 			"sessionKeyEnv": "SSO_SESSION_KEY",
@@ -266,7 +266,7 @@ func TestSSOGroupsProviderIDsAreGlobal(t *testing.T) {
 	t.Setenv("SSO_SESSION_KEY", "test-session-key")
 	_, err := loadAuthTest(t, `{
 		"ssoGroups": [{
-			"id": "acme",
+			"id": "mycompany",
 			"issuer": "https://idp.test",
 			"clientId": "gate-one",
 			"sessionKeyEnv": "SSO_SESSION_KEY",
