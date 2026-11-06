@@ -24,6 +24,13 @@ import (
 	"cladone/gate-one/internal/ops"
 )
 
+// Set by the release build.
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -33,8 +40,11 @@ func main() {
 			os.Exit(runRevoke(os.Args[2:]))
 		case "user":
 			os.Exit(runUser(os.Args[2:]))
+		case "version", "-version", "--version":
+			fmt.Printf("cladone-auth %s (commit %s, built %s)\n", version, commit, date)
+			return
 		case "help", "-h", "--help":
-			fmt.Println("usage: cladone-auth [keygen|revoke|user] [-config ...]")
+			fmt.Println("usage: cladone-auth [keygen|revoke|user|version] [-config ...]")
 			return
 		}
 	}

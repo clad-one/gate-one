@@ -43,4 +43,24 @@ check: build ## Valide la config de référence sans démarrer
 release: ## Prépare les artefacts locaux dans dist/ (aucun push, aucun tag)
 	./release.sh
 
-.PHONY: build test test-auth test-auth-race test-e2e e2e-up e2e-down test-browser build-auth build-fake-google smoke run check release
+# --- Validation contre la pile Redis HA de cladone-it-infra ----------
+# Ces cibles ne font pas partie du déploiement : elles compilent du code
+# Gate One et s'exécutent contre la pile de validation de l'infra.
+INFRA_COMPOSE ?= ../cladone-it-infra/compose
+
+test-ha: ## E2E HA : login, bascule Sentinel, révocation (pile infra démarrée)
+	INFRA_DIR="$(abspath $(INFRA_COMPOSE)/..)" ./test/e2e/ha-e2e.sh
+
+probe-ha: ## Sonde Sentinel/TLS/ACL de la pile Redis HA (pile infra démarrée)
+	CGO_ENABLED=0 go build -o /tmp/redis-ha-probe ./cmd/redis-ha-probe
+	docker run --rm --network cladone-auth-ha \
+		-e REDIS_HA_APP_PASSWORD="$$(grep -E '^REDIS_HA_APP_PASSWORD=' '$(INFRA_COMPOSE)/.env' | cut -d= -f2-)" \
+		-e REDIS_HA_SENTINEL_PASSWORD="$$(grep -E '^REDIS_HA_SENTINEL_PASSWORD=' '$(INFRA_COMPOSE)/.env' | cut -d= -f2-)" \
+		-v /tmp/redis-ha-probe:/probe:ro \
+		-v "$(INFRA_COMPOSE)/redis-ha/certs/ca.crt:/tls/ca.crt:ro" \
+		alpine:3 /probe \
+		-sentinels redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379 \
+		-sentinel-password-env REDIS_HA_SENTINEL_PASSWORD \
+		-tls -tls-ca /tls/ca.crt -tls-server-name redis.cladone.internal
+
+.PHONY: build test test-auth test-auth-race test-e2e e2e-up e2e-down test-browser build-auth build-fake-google smoke run check release test-ha probe-ha

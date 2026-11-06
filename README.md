@@ -475,9 +475,9 @@ product site archive is included. Without the product repository, the
 release still builds the binaries with the source schemas/examples but
 omits the site archive and the product-only schemas.
 
-Artifacts land in `dist/`:
-`gate-one_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows), the site
-archive, SBOMs, `RELEASE_MANIFEST.json`, `SHA256SUMS`,
+Artifacts land in `dist/`: `gate-one_<version>_<os>_<arch>.tar.gz` and
+`cladone-auth_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows), the
+site archive, SBOMs, `RELEASE_MANIFEST.json`, `SHA256SUMS`,
 `SHA256SUMS.bundle` and `cosign.pub`. The script never pushes, tags or
 uploads anything.
 

@@ -227,6 +227,44 @@ for target in "${TARGETS[@]}"; do
 		--source-name "gate-one" --source-version "$VERSION" \
 		-o "spdx-json=$DIST/gate-one_${VERSION}_${os}_${arch}.spdx.json" >/dev/null
 	rm -rf "$stage"
+
+	# --- cladone-auth (broker) -------------------------------------
+	broker_bin="cladone-auth"
+	[ "$os" = "windows" ] && broker_bin="cladone-auth.exe"
+
+	broker_stage="$DIST/stage/cladone-auth_${VERSION}_${os}_${arch}"
+	mkdir -p "$broker_stage/schemas" "$broker_stage/examples"
+
+	echo "building cladone-auth ${os}/${arch}…"
+	(
+		cd "$SRC"
+		CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" "$go_bin" build \
+			-trimpath \
+			-ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+			-o "$broker_stage/$broker_bin" ./cmd/cladone-auth
+	)
+
+	if [ -n "$PRODUCT" ] && [ -f "$PRODUCT/schemas/broker.schema.json" ]; then
+		cp "$PRODUCT"/schemas/broker.schema.json "$broker_stage/schemas/"
+	fi
+	if [ -n "$PRODUCT" ] && [ -f "$PRODUCT/examples/embedded-iam/broker.json" ]; then
+		cp "$PRODUCT"/examples/embedded-iam/broker.json "$broker_stage/examples/"
+	elif [ -f "$SRC"/testdata/auth/broker.example.json ]; then
+		cp "$SRC"/testdata/auth/broker.example.json "$broker_stage/examples/"
+	fi
+	cp "$SRC"/LICENSE "$SRC"/LICENSE.fr.md "$SRC"/README.md "$SRC"/VERSION \
+		"$broker_stage/" 2>/dev/null || true
+
+	broker_archive="$DIST/cladone-auth_${VERSION}_${os}_${arch}${ext}"
+	if [ "$os" = "windows" ]; then
+		( cd "$broker_stage" && zip -qr "$broker_archive" . )
+	else
+		tar -czf "$broker_archive" -C "$broker_stage" .
+	fi
+	"$syft_bin" "dir:$broker_stage" \
+		--source-name "cladone-auth" --source-version "$VERSION" \
+		-o "spdx-json=$DIST/cladone-auth_${VERSION}_${os}_${arch}.spdx.json" >/dev/null
+	rm -rf "$broker_stage"
 done
 
 rmdir "$DIST/stage" 2>/dev/null || true
@@ -257,6 +295,7 @@ cat > "$DIST/RELEASE_MANIFEST.json" <<JSON
   "productCommit": "${PRODUCT_COMMIT}",
   "docsIndex": ${docs_index:-null},
   "builtAt": "${DATE}",
+  "binaries": ["gate-one", "cladone-auth"],
   "targets": ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"]
 }
 JSON
@@ -271,6 +310,7 @@ Product tag: \`${product_tag:-none}\`
 Artifacts:
 
 - \`gate-one_${VERSION}_<os>_<arch>.tar.gz\` (or \`.zip\` on Windows)
+- \`cladone-auth_${VERSION}_<os>_<arch>.tar.gz\` (or \`.zip\` on Windows)
 ${site_line}
 - \`RELEASE_MANIFEST.json\` (source/product tags and commits)
 - \`*.spdx.json\` (SBOM, syft)
