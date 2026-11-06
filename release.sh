@@ -236,7 +236,7 @@ if [ -n "$PRODUCT" ] && [ -x "$PRODUCT/scripts/build-site" ]; then
 	# The product site also publishes the schemas/examples it mounts.
 	# Build it with the URL under which the release folder is published so
 	# both the site archive and GitHub Pages use the same absolute links.
-	site_base_url="${SITE_BASE_URL:-https://clad-one.github.io/gate-one-doc/${release_label}/}"
+	site_base_url="${SITE_BASE_URL:-https://clad-one.github.io/gate-one-doc/v${release_label}/}"
 	( cd "$PRODUCT" && "$PRODUCT/scripts/build-site" --baseURL "$site_base_url" >/dev/null )
 	tar -czf "$DIST/gate-one_${release_label}_site.tar.gz" \
 		-C "$PRODUCT/public" .

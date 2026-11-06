@@ -482,8 +482,9 @@ archive, SBOMs, `RELEASE_MANIFEST.json`, `SHA256SUMS`,
 uploads anything.
 
 The site archive is built with the GitHub Pages base URL for the same
-release label (`https://clad-one.github.io/gate-one-doc/<label>/`).
-Override it with `SITE_BASE_URL` when publishing elsewhere.
+release (`https://clad-one.github.io/gate-one-doc/v<label>/`, the folder
+the documentation workflow publishes). Override it with `SITE_BASE_URL`
+when publishing elsewhere.
 
 The verification key is committed as `release/cosign.pub`; the private
 key stays outside the repository.
