@@ -34,6 +34,17 @@ func usageConfigJSON(dir, types, plugins string) string {
 	}`
 }
 
+// usageConfigJSONRequireSigned injects usage.requireSigned into the
+// shared fixture.
+func usageConfigJSONRequireSigned(dir, types, plugins string, requireSigned bool) string {
+	raw := usageConfigJSON(dir, types, plugins)
+	flag := ""
+	if requireSigned {
+		flag = `"requireSigned": true, `
+	}
+	return strings.Replace(raw, `"usage": {`, `"usage": { `+flag, 1)
+}
+
 func TestUsageConfigValid(t *testing.T) {
 	t.Setenv("TEST_SUBJECT_SECRET", "subject-secret")
 	t.Setenv("TEST_PLUGIN_SECRET", "plugin-secret")
@@ -114,6 +125,34 @@ func TestUsageConfigRejects(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, c.want)
 			}
 		})
+	}
+}
+
+func TestUsageConfigUnsignedAllowedByDefault(t *testing.T) {
+	t.Setenv("TEST_SUBJECT_SECRET", "s")
+	t.Setenv("TEST_PLUGIN_SECRET", "p")
+	cfg, err := loadAuthTest(t, usageConfigJSON(
+		"u", `{"error": {"shareBytes": 1000}}`,
+		`[{"name": "a", "url": "http://127.0.0.1:1", "types": ["error"]}]`,
+	))
+	if err != nil {
+		t.Fatalf("unsigned plugin should be allowed by default: %v", err)
+	}
+	if cfg.Usage.RequireSigned {
+		t.Fatal("requireSigned default should be false")
+	}
+}
+
+func TestUsageConfigRequireSignedRejectsUnsigned(t *testing.T) {
+	t.Setenv("TEST_SUBJECT_SECRET", "s")
+	t.Setenv("TEST_PLUGIN_SECRET", "p")
+	_, err := loadAuthTest(t, usageConfigJSONRequireSigned(
+		"u", `{"error": {"shareBytes": 1000}}`,
+		`[{"name": "a", "url": "http://127.0.0.1:1", "types": ["error"]}]`,
+		true,
+	))
+	if err == nil || !strings.Contains(err.Error(), "unsigned plugin refused") {
+		t.Fatalf("err = %v, want unsigned refused", err)
 	}
 }
 

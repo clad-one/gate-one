@@ -1675,6 +1675,10 @@ type UsageConfig struct {
 	// TrustStore is the path of the signed plugin trust store (required
 	// when a plugin declares a signed manifest).
 	TrustStore string `json:"trustStore,omitempty"`
+	// RequireSigned refuses any plugin without a signed manifest.
+	// Default false: an unsigned plugin is allowed for development and
+	// logged as a warning.
+	RequireSigned bool `json:"requireSigned,omitempty"`
 	// Plugins are the out-of-process event consumers.
 	Plugins []UsagePluginConfig `json:"plugins,omitempty"`
 
@@ -2933,6 +2937,22 @@ func (c *Config) resolveUsage(baseDir string) error {
 				}
 			}
 		} else {
+			// Unsigned plugin: allowed for development, but never
+			// silent. The operator is told it is unverified, and
+			// usage.requireSigned turns it into a hard error.
+			if u.RequireSigned {
+				return fmt.Errorf(
+					"usage.plugins[%s]: unsigned plugin refused: "+
+						"usage.requireSigned is set; provide manifest "+
+						"and artifact, or clear requireSigned",
+					p.Name)
+			}
+			log.Printf(
+				"CONFIG WARNING usage.plugins[%s]: unsigned plugin "+
+					"(no manifest) — events are delivered to an "+
+					"unverified service; set usage.requireSigned to "+
+					"refuse unsigned plugins",
+				p.Name)
 			if len(p.Types) == 0 {
 				return fmt.Errorf(
 					"usage.plugins[%s]: at least one event type is required",
