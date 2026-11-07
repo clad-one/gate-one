@@ -326,7 +326,7 @@
       "upstream": {
         "host": true,
         "stripCookies": "all",
-        "delegated": {
+        "tokenBroker": {
           "provider": "github"
         }
       }
@@ -337,7 +337,7 @@
       "backend": "https://api.github.com",
       "auth": {},
       "upstream": {
-        "delegated": {
+        "tokenBroker": {
           "provider": "github"
         }
       },
@@ -371,7 +371,7 @@
       "backend": "https://gitlab.com/api/v4",
       "auth": {},
       "upstream": {
-        "delegated": {
+        "tokenBroker": {
           "provider": "gitlab"
         }
       },

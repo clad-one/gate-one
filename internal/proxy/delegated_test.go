@@ -82,7 +82,7 @@ func TestDelegatedRESTInjectsToken(t *testing.T) {
 		"routes": [{
 			"host": "api.test", "path": "/*", "backend": %q,
 			"auth": {},
-			"upstream": {"delegated": {"provider": "github"}}
+			"upstream": {"tokenBroker": {"provider": "github"}}
 		}]
 	}`, broker.URL, backend.URL))
 
@@ -135,7 +135,7 @@ func TestDelegatedRESTNotConnected(t *testing.T) {
 		"routes": [{
 			"host": "api.test", "path": "/*", "backend": %q,
 			"auth": {},
-			"upstream": {"delegated": {"provider": "github"}}
+			"upstream": {"tokenBroker": {"provider": "github"}}
 		}]
 	}`, broker.URL, backend.URL))
 
@@ -196,7 +196,7 @@ func TestDelegatedPageRedirectsToConnect(t *testing.T) {
 		"routes": [{
 			"host": "page.test", "path": "/*", "backend": %q,
 			"frontend": true, "auth": {},
-			"upstream": {"delegated": {"provider": "github"}}
+			"upstream": {"tokenBroker": {"provider": "github"}}
 		}]
 	}`, broker.URL, backend.URL))
 
@@ -237,7 +237,7 @@ func TestDelegatedBrokerUnavailable(t *testing.T) {
 		"routes": [{
 			"host": "api.test", "path": "/*", "backend": %q,
 			"auth": {},
-			"upstream": {"delegated": {"provider": "github"}}
+			"upstream": {"tokenBroker": {"provider": "github"}}
 		}]
 	}`, broker.URL, backend.URL))
 
@@ -272,7 +272,7 @@ func TestDelegatedUnknownProviderRefusesStartup(t *testing.T) {
 		"routes": [{
 			"host": "api.test", "path": "/*", "backend": "http://backend",
 			"auth": {},
-			"upstream": {"delegated": {"provider": "gitlab"}}
+			"upstream": {"tokenBroker": {"provider": "gitlab"}}
 		}]
 	}`, broker.URL))
 
@@ -311,7 +311,7 @@ func TestDelegatedMCPConnectURLReturnsToConnections(t *testing.T) {
 			"host": "mcp.test", "path": "/mcp", "backend": %q,
 			"auth": {},
 			"mcp": {"enabled": true, "path": "/mcp", "upstream": {}},
-			"upstream": {"delegated": {"provider": "github"}}
+			"upstream": {"tokenBroker": {"provider": "github"}}
 		}]
 	}`, broker.URL, upstream.URL))
 
@@ -377,7 +377,7 @@ func TestDelegatedMCPInjectsToken(t *testing.T) {
 			"auth": {},
 			"mcp": {"enabled": true, "path": "/mcp", "scope": "mcp-tools",
 				"operations": [{"name":"get_item","operationId":"get_item"}]},
-			"upstream": {"delegated": {"provider": "github"}}
+			"upstream": {"tokenBroker": {"provider": "github"}}
 		}, {
 			"host": "gram.test", "path": "/*", "backend": %q,
 			"openapi": {"url": %q}

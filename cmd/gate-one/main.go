@@ -389,8 +389,8 @@ func printRoutes(cfg *core.Config) {
 		}
 		if r.Upstream != nil {
 			p = append(p, "upstream")
-			if d := r.DelegatedCredentials(); d != nil {
-				p = append(p, "delegated:"+d.Provider)
+			if d := r.UpstreamTokenBroker(); d != nil {
+				p = append(p, "tokenBroker:"+d.Provider)
 			}
 			if r.UpstreamRewriteBody() != nil {
 				p = append(p, "rewriteBody")

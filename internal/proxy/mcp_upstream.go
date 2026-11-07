@@ -54,7 +54,7 @@ type mcpUpstream struct {
 	// addition to filter (a tool must pass both).
 	memberTools []string
 	upstream    *core.UpstreamPolicy
-	delegated   *core.DelegatedCredentialPolicy
+	delegated   *core.TokenBrokerPolicy
 
 	// sessions binds upstream Mcp-Session-Id values to the Gate One
 	// user who created them. A downstream client cannot reuse another
@@ -96,7 +96,7 @@ func newMCPUpstream(route *core.Route) (*mcpUpstream, error) {
 		},
 		filter:    route.MCP.Upstream.Tools,
 		upstream:  route.Upstream,
-		delegated: route.DelegatedCredentials(),
+		delegated: route.UpstreamTokenBroker(),
 		sessions:  make(map[string]string),
 	}, nil
 }

@@ -25,7 +25,7 @@ func TestDelegatedConfigResolvesSecret(t *testing.T) {
 		"routes": [{
 			"host": "api.test", "path": "/*", "backend": "http://backend",
 			"auth": {},
-			"upstream": {"delegated": {"provider": "github"}}
+			"upstream": {"tokenBroker": {"provider": "github"}}
 		}]
 	}`)
 	if err != nil {
@@ -34,15 +34,15 @@ func TestDelegatedConfigResolvesSecret(t *testing.T) {
 	if cfg.TokenBroker.SecretValue != "s3cret" {
 		t.Fatalf("secret = %q", cfg.TokenBroker.SecretValue)
 	}
-	d := cfg.Routes[0].DelegatedCredentials()
+	d := cfg.Routes[0].UpstreamTokenBroker()
 	if d.HeaderValue() != "Authorization" {
 		t.Fatalf("header = %q", d.HeaderValue())
 	}
 	if d.PrefixValue() != "Bearer " {
 		t.Fatalf("prefix = %q", d.PrefixValue())
 	}
-	if cfg.Routes[0].Upstream.Delegated.Provider != "github" {
-		t.Fatalf("provider = %q", cfg.Routes[0].Upstream.Delegated.Provider)
+	if cfg.Routes[0].Upstream.TokenBroker.Provider != "github" {
+		t.Fatalf("provider = %q", cfg.Routes[0].Upstream.TokenBroker.Provider)
 	}
 }
 
@@ -54,13 +54,13 @@ func TestDelegatedConfigExplicitRawPrefix(t *testing.T) {
 		"routes": [{
 			"host": "api.test", "path": "/*", "backend": "http://backend",
 			"auth": {},
-			"upstream": {"delegated": {"provider": "github", "prefix": ""}}
+			"upstream": {"tokenBroker": {"provider": "github", "prefix": ""}}
 		}]
 	}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Routes[0].DelegatedCredentials().PrefixValue(); got != "" {
+	if got := cfg.Routes[0].UpstreamTokenBroker().PrefixValue(); got != "" {
 		t.Fatalf("prefix = %q, want explicit empty", got)
 	}
 	if cfg.TokenBroker.URL != "http://token-broker:4000" {
@@ -81,7 +81,7 @@ func TestDelegatedConfigRejects(t *testing.T) {
 			cfg: `{
 				"tokenBroker": {"secretEnv": "DELEGATED_CORE_SECRET"},
 				"routes": [{"host":"api.test","path":"/*","backend":"http://backend",
-					"upstream":{"delegated":{"provider":"github"}}}]
+					"upstream":{"tokenBroker":{"provider":"github"}}}]
 			}`,
 			want: "requires auth",
 		},
@@ -90,16 +90,16 @@ func TestDelegatedConfigRejects(t *testing.T) {
 			cfg: `{
 				"routes": [{"host":"api.test","path":"/*","backend":"http://backend",
 					"auth":{},
-					"upstream":{"delegated":{"provider":"github"}}}]
+					"upstream":{"tokenBroker":{"provider":"github"}}}]
 			}`,
-			want: "tokenBroker block required",
+			want: "requires the top-level tokenBroker block",
 		},
 		{
 			name: "bad provider",
 			cfg: `{
 				"tokenBroker": {"secretEnv": "DELEGATED_CORE_SECRET"},
 				"routes": [{"host":"api.test","path":"/*","backend":"http://backend",
-					"auth":{},"upstream":{"delegated":{"provider":"GitHub"}}}]
+					"auth":{},"upstream":{"tokenBroker":{"provider":"GitHub"}}}]
 			}`,
 			want: "provider",
 		},
@@ -108,7 +108,7 @@ func TestDelegatedConfigRejects(t *testing.T) {
 			cfg: `{
 				"tokenBroker": {"secretEnv": "DELEGATED_CORE_SECRET"},
 				"routes": [{"host":"api.test","path":"/*","backend":"http://backend",
-					"auth":{},"upstream":{"delegated":{"provider":"github","header":"X-User-Id"}}}]
+					"auth":{},"upstream":{"tokenBroker":{"provider":"github","header":"X-User-Id"}}}]
 			}`,
 			want: "reserved",
 		},
@@ -117,7 +117,7 @@ func TestDelegatedConfigRejects(t *testing.T) {
 			cfg: `{
 				"tokenBroker": {"secretEnv": "DELEGATED_CORE_SECRET"},
 				"routes": [{"host":"api.test","path":"/*","backend":"http://backend",
-					"auth":{},"upstream":{"delegated":{"provider":"github","header":"Bad Header"}}}]
+					"auth":{},"upstream":{"tokenBroker":{"provider":"github","header":"Bad Header"}}}]
 			}`,
 			want: "invalid header",
 		},
@@ -128,7 +128,7 @@ func TestDelegatedConfigRejects(t *testing.T) {
 				"routes": [{"host":"api.test","path":"/*","backend":"http://backend",
 					"auth":{},
 					"upstream":{"headers":{"Authorization":"Basic x"},
-						"delegated":{"provider":"github"}}}]
+						"tokenBroker":{"provider":"github"}}}]
 			}`,
 			want: "conflicts",
 		},
@@ -137,7 +137,7 @@ func TestDelegatedConfigRejects(t *testing.T) {
 			cfg: `{
 				"tokenBroker": {"secretEnv": "MISSING_DELEGATED_SECRET"},
 				"routes": [{"host":"api.test","path":"/*","backend":"http://backend",
-					"auth":{},"upstream":{"delegated":{"provider":"github"}}}]
+					"auth":{},"upstream":{"tokenBroker":{"provider":"github"}}}]
 			}`,
 			want: "MISSING_DELEGATED_SECRET",
 		},
@@ -146,7 +146,7 @@ func TestDelegatedConfigRejects(t *testing.T) {
 			cfg: `{
 				"tokenBroker": {"url":"ftp://broker","secretEnv":"DELEGATED_CORE_SECRET"},
 				"routes": [{"host":"api.test","path":"/*","backend":"http://backend",
-					"auth":{},"upstream":{"delegated":{"provider":"github"}}}]
+					"auth":{},"upstream":{"tokenBroker":{"provider":"github"}}}]
 			}`,
 			want: "scheme",
 		},

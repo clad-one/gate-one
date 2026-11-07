@@ -322,7 +322,7 @@ func TestMCPUpstreamProxyFilter(t *testing.T) {
 				"path": "/mcp",
 				"upstream": {"tools": {"exclude": ["delete_*"]}}
 			},
-			"upstream": {"delegated": {"provider": "github"}}
+			"upstream": {"tokenBroker": {"provider": "github"}}
 		}]
 	}`, broker.URL, upstream.URL))
 

@@ -70,7 +70,7 @@ type compiledRoute struct {
 
 	// delegated: per-user upstream credentials (nil = no broker
 	// call on this route).
-	delegated *core.DelegatedCredentialPolicy
+	delegated *core.TokenBrokerPolicy
 
 	// unit: MCP access unit owning this endpoint.
 	unit *accessUnit
@@ -130,7 +130,7 @@ type Gateway struct {
 	devRemote  bool
 
 	// tokenBroker is non-nil only when at least one route uses
-	// upstream.delegated.
+	// upstream.tokenBroker.
 	tokenBroker *tokenbroker.Client
 
 	// usage is the optional usage-event bus (WAL + out-of-process
@@ -355,7 +355,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 	needsDelegated := false
 	for i := range cfg.Routes {
-		if cfg.Routes[i].DelegatedCredentials() != nil &&
+		if cfg.Routes[i].UpstreamTokenBroker() != nil &&
 			routeExposed(&cfg.Routes[i], live) {
 			needsDelegated = true
 			break
@@ -366,7 +366,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			cfg.TokenBroker.URL == "" ||
 			cfg.TokenBroker.SecretValue == "" {
 			return nil, fmt.Errorf(
-				"upstream.delegated requires tokenBroker configuration")
+				"upstream.tokenBroker requires tokenBroker configuration")
 		}
 
 		c, err := tokenbroker.New(
@@ -388,7 +388,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 				"token broker provider validation: %w\n"+
 					"hint: the broker must be reachable at startup to validate "+
 					"delegated providers: start it (make broker-up) before Gate One, "+
-					"or remove the upstream.delegated routes and their mcpSets "+
+					"or remove the upstream.tokenBroker routes and their mcpSets "+
 					"members (docs/MCP.adoc#token-broker-provider)",
 				err)
 		}
@@ -399,10 +399,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		}
 		for i := range cfg.Routes {
 			r := &cfg.Routes[i]
-			d := r.DelegatedCredentials()
+			d := r.UpstreamTokenBroker()
 			if d != nil && !known[d.Provider] && routeExposed(r, live) {
 				return nil, fmt.Errorf(
-					"route %s: upstream.delegated.provider %q: unknown or disabled provider\n"+
+					"route %s: upstream.tokenBroker.provider %q: unknown or disabled provider\n"+
 						"hint: this route delegates the user's auth to the token broker: "+
 						"configure a %q provider (docs/MCP.adoc#token-broker-provider), "+
 						"or stop delegating / use a shared service token where supported "+
@@ -541,7 +541,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			prefix:      normalizePath(route.Path),
 			stripPrefix: stripPrefix,
 			pageRoute:   route.Frontend,
-			delegated:   route.DelegatedCredentials(),
+			delegated:   route.UpstreamTokenBroker(),
 			provider:    gw.providerEntryForRoute(cfg, route),
 		}
 
@@ -596,7 +596,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 				}
 
 				var delegated *mcpserver.DelegatedCredentials
-				if d := route.DelegatedCredentials(); d != nil {
+				if d := route.UpstreamTokenBroker(); d != nil {
 					delegated = &mcpserver.DelegatedCredentials{
 						Header: d.HeaderValue(),
 						Prefix: d.PrefixValue(),
@@ -730,7 +730,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			if svc.mcp != nil {
 				ops := filterMCPOperations(svc.mcpOps, member.Tools)
 				var delegated *mcpserver.DelegatedCredentials
-				if d := rr.DelegatedCredentials(); d != nil {
+				if d := rr.UpstreamTokenBroker(); d != nil {
 					delegated = &mcpserver.DelegatedCredentials{
 						Header: d.HeaderValue(),
 						Prefix: d.PrefixValue(),

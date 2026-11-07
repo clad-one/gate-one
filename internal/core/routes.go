@@ -486,19 +486,19 @@ type UpstreamPolicy struct {
 	// origin serves its assets with no Cache-Control (see
 	// BrowserCachePolicy). Default: headers preserved as-is.
 	BrowserCache *BrowserCachePolicy `json:"browserCache,omitempty"`
-	// Delegated: per-user credentials fetched from the token broker
+	// TokenBroker: per-user credentials fetched from the token broker
 	// for the authenticated caller and injected into the backend
 	// request. Provider names are broker-owned; Gate One never
 	// stores a provider secret. Requires route.auth (a user must be
 	// authenticated to have a delegated token).
-	Delegated *DelegatedCredentialPolicy `json:"delegated,omitempty"`
+	TokenBroker *TokenBrokerPolicy `json:"tokenBroker,omitempty"`
 }
 
-// DelegatedCredentialPolicy: how a per-user upstream token is
+// TokenBrokerPolicy: how a per-user upstream token is
 // obtained and injected. The token broker returns the access token
 // for the authenticated user; the gateway sets the configured header
 // on the backend request (default Authorization: Bearer …).
-type DelegatedCredentialPolicy struct {
+type TokenBrokerPolicy struct {
 	// Provider: broker provider name (e.g. "github"). Validated
 	// against GET /providers at startup.
 	Provider string `json:"provider"`
@@ -513,7 +513,7 @@ type DelegatedCredentialPolicy struct {
 
 // HeaderValue returns the normalized header name (default
 // Authorization).
-func (d *DelegatedCredentialPolicy) HeaderValue() string {
+func (d *TokenBrokerPolicy) HeaderValue() string {
 	if d == nil || d.Header == "" {
 		return "Authorization"
 	}
@@ -521,7 +521,7 @@ func (d *DelegatedCredentialPolicy) HeaderValue() string {
 }
 
 // PrefixValue returns the value prepended to the access token.
-func (d *DelegatedCredentialPolicy) PrefixValue() string {
+func (d *TokenBrokerPolicy) PrefixValue() string {
 	if d == nil || d.Prefix == nil {
 		return "Bearer "
 	}
@@ -603,7 +603,7 @@ type MCPPolicy struct {
 	// Upstream: proxy an EXTERNAL MCP server (Streamable HTTP)
 	// instead of deriving local REST tools. Tool names are filtered
 	// on both tools/list and tools/call; the upstream receives the
-	// per-user token of upstream.delegated (or static upstream
+	// per-user token of upstream.tokenBroker (or static upstream
 	// headers) — never the Gate One bearer.
 	Upstream *MCPUpstreamPolicy `json:"upstream,omitempty"`
 }
@@ -1627,7 +1627,7 @@ type Config struct {
 	DefaultAppURL string `json:"defaultAppUrl,omitempty"`
 
 	// TokenBroker: internal per-user credential broker, used only
-	// by routes declaring upstream.delegated. The shared secret is
+	// by routes declaring upstream.tokenBroker. The shared secret is
 	// read from the named environment variable at load; it is never
 	// serialized.
 	TokenBroker *TokenBrokerConfig `json:"tokenBroker,omitempty"`
@@ -2096,14 +2096,14 @@ func (r *Route) MCPActive() bool {
 	return r.MCP != nil && r.MCP.Enabled
 }
 
-// DelegatedCredentials returns the route's per-user upstream
-// credential policy, if any. Delegation is declared under upstream
-// because it describes how the backend is called.
-func (r *Route) DelegatedCredentials() *DelegatedCredentialPolicy {
+// UpstreamTokenBroker returns the route's per-user upstream
+// credential policy, if any. It is declared under upstream because it
+// describes how the backend is called.
+func (r *Route) UpstreamTokenBroker() *TokenBrokerPolicy {
 	if r == nil || r.Upstream == nil {
 		return nil
 	}
-	return r.Upstream.Delegated
+	return r.Upstream.TokenBroker
 }
 
 // AuthProviderFor returns the provider bound to a route: its explicit
@@ -4228,7 +4228,7 @@ func providerCookieSuffix(id string) string {
 func (c *Config) resolveTokenBroker() error {
 	needs := false
 	for i := range c.Routes {
-		if c.Routes[i].DelegatedCredentials() != nil {
+		if c.Routes[i].UpstreamTokenBroker() != nil {
 			needs = true
 			break
 		}
@@ -4239,7 +4239,7 @@ func (c *Config) resolveTokenBroker() error {
 
 	if c.TokenBroker == nil {
 		return fmt.Errorf(
-			"tokenBroker block required by upstream.delegated")
+			"upstream.tokenBroker requires the top-level tokenBroker block")
 	}
 	tb := c.TokenBroker
 
@@ -4322,28 +4322,28 @@ func validateAuth(route *Route) error {
 }
 
 // validateDelegatedCredentials normalizes and validates the
-// upstream.delegated policy. The constraints keep the gateway in
+// upstream.tokenBroker policy. The constraints keep the gateway in
 // control of its own identity headers and of hop-by-hop headers.
 func validateDelegatedCredentials(route *Route) error {
-	d := route.DelegatedCredentials()
+	d := route.UpstreamTokenBroker()
 	if d == nil {
 		return nil
 	}
 
 	if route.Auth == nil {
 		return fmt.Errorf(
-			"upstream.delegated requires auth (a user token is needed)")
+			"upstream.tokenBroker requires auth (a user token is needed)")
 	}
 	if !delegatedProviderName.MatchString(d.Provider) {
 		return fmt.Errorf(
-			"upstream.delegated.provider %q (expected lowercase name)",
+			"upstream.tokenBroker.provider %q (expected lowercase name)",
 			d.Provider)
 	}
 
 	header := d.HeaderValue()
 	if !headerFieldName.MatchString(header) {
 		return fmt.Errorf(
-			"upstream.delegated.header %q: invalid header name", header)
+			"upstream.tokenBroker.header %q: invalid header name", header)
 	}
 	header = http.CanonicalHeaderKey(header)
 	d.Header = header
@@ -4355,25 +4355,25 @@ func validateDelegatedCredentials(route *Route) error {
 		"te", "trailer", "upgrade", "keep-alive", "forwarded",
 		"x-user-id", "x-username", "x-email", "x-roles", "x-scopes":
 		return fmt.Errorf(
-			"upstream.delegated.header %q is reserved", header)
+			"upstream.tokenBroker.header %q is reserved", header)
 	}
 	if strings.HasPrefix(lower, "x-forwarded-") ||
 		strings.HasPrefix(lower, "x-gate-one-") {
 		return fmt.Errorf(
-			"upstream.delegated.header %q is reserved", header)
+			"upstream.tokenBroker.header %q is reserved", header)
 	}
 
 	for name := range route.Upstream.Headers {
 		if strings.EqualFold(name, header) {
 			return fmt.Errorf(
-				"upstream.headers[%q] conflicts with upstream.delegated.header",
+				"upstream.headers[%q] conflicts with upstream.tokenBroker.header",
 				name)
 		}
 	}
 
 	if strings.ContainsAny(d.PrefixValue(), "\r\n") {
 		return fmt.Errorf(
-			"upstream.delegated.prefix: control characters forbidden")
+			"upstream.tokenBroker.prefix: control characters forbidden")
 	}
 
 	return nil

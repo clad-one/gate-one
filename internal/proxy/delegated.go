@@ -16,7 +16,7 @@ import (
 func (g *Gateway) fetchDelegatedToken(
 	r *http.Request,
 	ctx *RequestContext,
-	d *core.DelegatedCredentialPolicy,
+	d *core.TokenBrokerPolicy,
 ) (string, error) {
 	if g.tokenBroker == nil {
 		return "", &tokenbroker.Error{
@@ -38,7 +38,7 @@ func (g *Gateway) fetchDelegatedToken(
 func (g *Gateway) injectDelegated(
 	r *http.Request,
 	ctx *RequestContext,
-	d *core.DelegatedCredentialPolicy,
+	d *core.TokenBrokerPolicy,
 ) error {
 	token, err := g.fetchDelegatedToken(r, ctx, d)
 	if err != nil {

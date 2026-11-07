@@ -450,7 +450,7 @@
     },
     "tokenBroker": {
       "type": "object",
-      "description": "Internal per-user credential broker. Required only when a route declares upstream.delegated. The shared secret is read from the named environment variable at load (never from this file) and is never logged.",
+      "description": "Internal per-user credential broker. Required only when a route declares upstream.tokenBroker. The shared secret is read from the named environment variable at load (never from this file) and is never logged.",
       "additionalProperties": false,
       "properties": {
         "url": {
@@ -463,7 +463,7 @@
         },
         "links": {
           "type": "object",
-          "description": "Links owned by the token broker, displayed in the user badge. services is the connections page (auth-bridge proxies it today): it is rendered only when an exposed route declares upstream.delegated (computed by the gateway).",
+          "description": "Links owned by the token broker, displayed in the user badge. services is the connections page (auth-bridge proxies it today): it is rendered only when an exposed route declares upstream.tokenBroker (computed by the gateway).",
           "additionalProperties": false,
           "properties": {
             "services": {
@@ -1249,7 +1249,7 @@
     },
     "mcpUpstreamPolicy": {
       "type": "object",
-      "description": "Proxy an external MCP server over Streamable HTTP instead of deriving local REST tools. The upstream receives the per-user token of upstream.delegated (or static upstream.headers), never the Gate One bearer. Tool filtering is enforced on both tools/list and tools/call.",
+      "description": "Proxy an external MCP server over Streamable HTTP instead of deriving local REST tools. The upstream receives the per-user token of upstream.tokenBroker (or static upstream.headers), never the Gate One bearer. Tool filtering is enforced on both tools/list and tools/call.",
       "additionalProperties": false,
       "properties": {
         "url": {
@@ -1578,14 +1578,14 @@
         "browserCache": {
           "$ref": "#/definitions/browserCachePolicy"
         },
-        "delegated": {
-          "$ref": "#/definitions/delegatedCredentialPolicy"
+        "tokenBroker": {
+          "$ref": "#/definitions/tokenBrokerPolicy"
         }
       }
     },
-    "delegatedCredentialPolicy": {
+    "tokenBrokerPolicy": {
       "type": "object",
-      "description": "Per-user credentials supplied by the token broker for the authenticated caller. Requires route.auth (the broker needs an authenticated user id). A missing connection produces a 401/409 with a connect_url (or a redirect for frontend routes), never a request without credentials. The same policy applies to REST tool calls produced by an MCP route.",
+      "description": "Per-user credentials supplied by the token broker for the authenticated caller. Requires the top-level tokenBroker block and route.auth (the broker needs an authenticated user id). A missing connection produces a 401/409 with a connect_url (or a redirect for frontend routes), never a request without credentials. The same policy applies to REST tool calls produced by an MCP route.",
       "additionalProperties": false,
       "required": [
         "provider"

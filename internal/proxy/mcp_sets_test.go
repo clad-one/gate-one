@@ -367,7 +367,7 @@ func TestProviderUnknownErrorIsActionable(t *testing.T) {
 		"routes": [{
 			"host": "mcp.test", "path": "/internal-gitlab",
 			"backend": "https://gitlab.example/api/v4", "auth": {},
-			"upstream": {"delegated": {"provider": "gitlab"}},
+			"upstream": {"tokenBroker": {"provider": "gitlab"}},
 			"mcp": {"enabled": true, "name": "gitlab",
 				"standalone": false, "operations": []}
 		}],
@@ -401,7 +401,7 @@ func TestDisabledMemberIsNotCompiledNorProviderChecked(t *testing.T) {
 		"routes": [{
 			"host": "mcp.test", "path": "/internal-gitlab",
 			"backend": "https://gitlab.example/api/v4", "auth": {},
-			"upstream": {"delegated": {"provider": "gitlab"}},
+			"upstream": {"tokenBroker": {"provider": "gitlab"}},
 			"openapi": {"url": "http://127.0.0.1:1/openapi.json"},
 			"mcp": {"enabled": true, "name": "gitlab", "standalone": false,
 				"operations": [{"name":"list","operationId":"list"}]}

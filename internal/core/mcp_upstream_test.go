@@ -88,7 +88,7 @@ func TestMCPUpstreamWithDelegatedLoads(t *testing.T) {
 			"host": "mcp.test", "path": "/mcp", "backend": "https://up.example/mcp",
 			"auth": {},
 			"mcp": {"enabled": true, "upstream": {"tools": {"exclude": ["delete_*"]}}},
-			"upstream": {"delegated": {"provider": "github"}}
+			"upstream": {"tokenBroker": {"provider": "github"}}
 		}]
 	}`)
 	if err != nil {

@@ -382,7 +382,7 @@ secrets never enter Gate One.
     "auth": {},
     "upstream": {
       "host": true,
-      "delegated": { "provider": "github" }
+      "tokenBroker": { "provider": "github" }
     }
   }]
 }
@@ -429,7 +429,7 @@ tool names:
     }
   },
   "upstream": {
-    "delegated": { "provider": "github" }
+    "tokenBroker": { "provider": "github" }
   }
 }
 ```
