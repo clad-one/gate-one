@@ -101,7 +101,12 @@
     "action": {
       "type": "string",
       "maxLength": 64,
-      "description": "Auth action: login, login_failed, logout, backchannel_logout, revocation."
+      "description": "Auth action: login, login_failed, logout, backchannel_logout, revocation. Audit action: reload, reload_failed, plugin_load."
+    },
+    "detail": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Free-text context for audit events (plugin name, reload error). Never PII."
     },
     "sessionId": {
       "type": "string",

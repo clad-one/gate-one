@@ -96,6 +96,7 @@ func newUsageRuntime(
 		epoch:         time.Now().UTC().Format(time.RFC3339Nano),
 		types:         hasType,
 	}
+	loaded := make([]string, 0, len(cfg.Plugins))
 	for _, pc := range cfg.Plugins {
 		name := pc.Name
 		types := pc.Types
@@ -181,9 +182,13 @@ func newUsageRuntime(
 			_ = u.close()
 			return nil, fmt.Errorf("usage: %w", err)
 		}
+		loaded = append(loaded, name)
 		for _, typ := range pts {
 			u.subs = append(u.subs, usageSub{typ: typ, filters: filters})
 		}
+	}
+	for _, name := range loaded {
+		u.auditEvent("plugin_load", name, http.StatusOK)
 	}
 	return u, nil
 }
@@ -378,6 +383,41 @@ func (u *usageRuntime) authEvent(
 		return err
 	}
 	return nil
+}
+
+// auditEvent appends a control-plane audit event (reload, plugin
+// lifecycle). It is BEST EFFORT by design: it never blocks or fails the
+// operation it records. When the audit type is not configured, no
+// subscriber matches, or the WAL is full, the event is dropped (logged).
+func (u *usageRuntime) auditEvent(action, detail string, status int) {
+	if u == nil || !u.types[usage.TypeAudit] {
+		return
+	}
+	if !u.match(usage.TypeAudit, "", "", "", 0) {
+		return
+	}
+	if len(detail) > 256 {
+		detail = detail[:256]
+	}
+	tk, err := u.store.Reserve(usage.TypeAudit, usageMaxRecordBytes)
+	if err != nil {
+		log.Printf("usage: audit %s dropped: %v", action, err)
+		return
+	}
+	ev := usage.Event{
+		SchemaVersion: usage.SchemaVersion,
+		Type:          usage.TypeAudit,
+		Timestamp:     time.Now().UTC(),
+		InstanceID:    u.nodeID,
+		Epoch:         u.epoch,
+		Action:        action,
+		Detail:        detail,
+		Status:        status,
+	}
+	if _, err := u.store.Append(tk, &ev); err != nil {
+		log.Printf("usage: audit %s: %v", action, err)
+		u.store.Release(tk)
+	}
 }
 
 func (g *Gateway) authEventSink(

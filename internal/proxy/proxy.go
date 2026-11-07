@@ -250,6 +250,21 @@ func (h *Reloadable) Close() error {
 	return nil
 }
 
+// Audit records a best-effort control-plane audit event (reload, plugin
+// lifecycle) on the current gateway's usage bus. It is a no-op when the
+// usage bus or the audit event type is not configured.
+func (h *Reloadable) Audit(action, detail string, status int) {
+	if gw := h.current.Load(); gw != nil {
+		gw.auditEvent(action, detail, status)
+	}
+}
+
+func (g *Gateway) auditEvent(action, detail string, status int) {
+	if g != nil && g.usage != nil {
+		g.usage.auditEvent(action, detail, status)
+	}
+}
+
 // Close waits for in-flight requests (bounded), then closes every
 // provider that owns resources (future out-of-process plugins). The
 // shared bbolt store is process-lifetime by design (OpenBoltShared)

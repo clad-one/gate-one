@@ -280,9 +280,12 @@ func main() {
 					"SIGHUP: reload REFUSED (%v) — the previous config stays active",
 					err,
 				)
+				handler.Audit("reload_failed", err.Error(),
+					http.StatusInternalServerError)
 				continue
 			}
 			log.Printf("SIGHUP: configuration reloaded")
+			handler.Audit("reload", "", http.StatusOK)
 		}
 	}()
 
