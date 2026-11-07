@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"cladone/gate-one/pkg/signing"
 )
@@ -157,12 +158,90 @@ func docBinding(doc map[string]any) string {
 	return d
 }
 
+// signDoc sets the signature member of doc and signs it. binding is the
+// extra payload suffix ("" for a feed, the artefact digest for a manifest).
+func signDoc(doc map[string]any, keyID string, priv ed25519.PrivateKey, binding string) error {
+	doc["signature"] = map[string]any{"alg": "ed25519", "keyId": keyID, "value": ""}
+	body, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	payload, err := signing.Payload(body, binding)
+	if err != nil {
+		return err
+	}
+	doc["signature"].(map[string]any)["value"] = b64(ed25519.Sign(priv, payload))
+	return nil
+}
+
+// updateFeed upserts the signed plugin into a publisher feed and re-signs
+// it, so a registry page can link the author and the distribution URL.
+func updateFeed(
+	path string, manifest map[string]any, k keyFile,
+	priv ed25519.PrivateKey, publisher, distribution string,
+) error {
+	feed := map[string]any{
+		"schemaVersion": 1,
+		"kind":          "publisher-feed",
+		"generatedAt":   time.Now().UTC().Format(time.RFC3339),
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&feed); err != nil {
+			return err
+		}
+	}
+	if publisher != "" {
+		feed["publisher"] = publisher
+	}
+	name, _ := manifest["name"].(string)
+	version, _ := manifest["version"].(string)
+	entry := map[string]any{
+		"name": name, "version": version,
+		"digest": docBinding(manifest), "status": "active",
+	}
+	if publisher != "" {
+		entry["publisher"] = publisher
+	}
+	if distribution != "" {
+		entry["distribution"] = distribution
+	}
+	if h, ok := manifest["hostAPI"].(string); ok && h != "" {
+		entry["hostAPI"] = h
+	}
+	var plugins []any
+	if v, ok := feed["plugins"].([]any); ok {
+		plugins = v
+	}
+	replaced := false
+	for i, p := range plugins {
+		pm, _ := p.(map[string]any)
+		if pm != nil && pm["name"] == name && pm["version"] == version {
+			plugins[i] = entry
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		plugins = append(plugins, entry)
+	}
+	feed["plugins"] = plugins
+	if err := signDoc(feed, k.KeyID, priv, ""); err != nil {
+		return err
+	}
+	return writeDoc(path, feed)
+}
+
 func runSign(args []string) int {
 	fs := flag.NewFlagSet("sign", flag.ContinueOnError)
 	in := fs.String("in", "", "document to sign (manifest or feed JSON)")
 	keyPath := fs.String("key", "", "private key file from `gate-one keygen`")
 	artifact := fs.String("artifact", "", "artefact whose digest is bound into the signature")
 	out := fs.String("out", "", "output file (default: stdout)")
+	feedPath := fs.String("feed", "", "publisher feed to update with this plugin (registry)")
+	publisher := fs.String("publisher", "", "author/company recorded in the feed entry")
+	distribution := fs.String("distribution", "", "URL where the plugin is distributed (feed entry)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -204,26 +283,22 @@ func runSign(args []string) int {
 	} else {
 		binding = docBinding(doc)
 	}
-	doc["signature"] = map[string]any{
-		"alg":   "ed25519",
-		"keyId": k.KeyID,
-		"value": "",
-	}
-	body, err := json.Marshal(doc)
-	if err != nil {
+	if err := signDoc(doc, k.KeyID, priv, binding); err != nil {
 		fmt.Fprintln(os.Stderr, "sign:", err)
 		return 1
 	}
-	payload, err := signing.Payload(body, binding)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "sign:", err)
-		return 1
-	}
-	sig := ed25519.Sign(priv, payload)
-	doc["signature"].(map[string]any)["value"] = b64(sig)
 	if err := writeDoc(*out, doc); err != nil {
 		fmt.Fprintln(os.Stderr, "sign:", err)
 		return 1
+	}
+	if *feedPath != "" {
+		if err := updateFeed(
+			*feedPath, doc, k, priv, *publisher, *distribution,
+		); err != nil {
+			fmt.Fprintln(os.Stderr, "sign:", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "feed: updated %s\n", *feedPath)
 	}
 	return 0
 }

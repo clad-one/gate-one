@@ -46,6 +46,8 @@ type Plugin struct {
 	Name         string            `json:"name"`
 	Version      string            `json:"version,omitempty"`
 	Digest       string            `json:"digest,omitempty"`
+	Publisher    string            `json:"publisher,omitempty"`
+	Distribution string            `json:"distribution,omitempty"`
 	HostAPI      string            `json:"hostAPI,omitempty"`
 	Capabilities []string          `json:"capabilities,omitempty"`
 	Status       string            `json:"status,omitempty"` // active | deprecated | revoked

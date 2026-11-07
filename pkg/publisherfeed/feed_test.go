@@ -87,12 +87,12 @@ func TestFeedParseRejectsUnknown(t *testing.T) {
 
 func TestPluginStatus(t *testing.T) {
 	f := &Feed{Plugins: []Plugin{
-		{Name: "com.acme.audit", Version: "1.0.0", Status: "revoked"},
+		{Name: "com.company.audit", Version: "1.0.0", Status: "revoked"},
 	}}
-	if s, ok := f.PluginStatus("com.acme.audit", "1.0.0", ""); !ok || s != "revoked" {
+	if s, ok := f.PluginStatus("com.company.audit", "1.0.0", ""); !ok || s != "revoked" {
 		t.Fatalf("status = %q, ok = %v", s, ok)
 	}
-	if _, ok := f.PluginStatus("com.acme.other", "", ""); ok {
+	if _, ok := f.PluginStatus("com.company.other", "", ""); ok {
 		t.Fatal("unknown plugin must not match")
 	}
 }
