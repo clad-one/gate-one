@@ -37,14 +37,19 @@ import (
 )
 
 const (
-	mycompanyDomain    = "mycompany.test"
-	contosoDomain = "contoso.test"
+	mycompanyDomain = "mycompany.test"
+	contosoDomain   = "contoso.test"
 
 	sessionKeyEnv   = "E2E_SESSION_KEY"
 	clientSecretEnv = "E2E_OIDC_SECRET"
 	sessionKey      = "e2e-session-key-0123456789"
 	clientSecret    = "e2e-client-secret"
 	authPrefix      = "e2e:auth:v1:"
+
+	subjectSecretEnv = "E2E_SUBJECT_SECRET"
+	pluginSecretEnv  = "E2E_PLUGIN_SECRET"
+	e2ePluginName    = "e2e"
+	e2ePluginSecret  = "e2e-plugin-secret-0123456789abcdef"
 )
 
 type stackOptions struct {
@@ -63,6 +68,11 @@ type stackOptions struct {
 	// (TLS + ACL). Used by the e2e_ha build tag against the local
 	// Redis HA stack.
 	redisHA *redisHAConfig
+
+	// usagePluginURL, when set, enables the usage bus on BOTH replicas,
+	// each with its own WAL dir and nodeId (gw-1/gw-2), delivering to
+	// this plugin.
+	usagePluginURL string
 }
 
 // redisHAConfig is the Sentinel-mode store used by the HA E2E test.
@@ -136,7 +146,7 @@ type Stack struct {
 
 	// Set when the mycompany broker sits behind a stable proxy (key
 	// rotation test).
-	brokerProxy *netchaos.HTTPProxy
+	brokerProxy      *netchaos.HTTPProxy
 	mycompanyKeyFile string
 
 	redisProxy *netchaos.DelayProxy
@@ -163,6 +173,11 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 	t.Setenv(clientSecretEnv, clientSecret)
 
 	s := &Stack{t: t}
+
+	if opts.usagePluginURL != "" {
+		t.Setenv(subjectSecretEnv, "e2e-subject-secret")
+		t.Setenv(pluginSecretEnv, e2ePluginSecret)
+	}
 
 	s.redis = miniredis.RunT(t)
 
@@ -267,7 +282,35 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		mycompanyIssuer = s.brokerProxy.URL()
 	}
 
-	cfg := loadConfig(t, fmt.Sprintf(`{
+	// usageJSON renders the per-node usage block (its own WAL dir and
+	// nodeId) or "" when the bus is disabled.
+	usageJSON := func(nodeID, dir string) string {
+		if opts.usagePluginURL == "" {
+			return ""
+		}
+		return fmt.Sprintf(`
+		"usage": {
+			"dir": %q,
+			"nodeId": %q,
+			"subjectSecretEnv": %q,
+			"pluginSecretEnv": %q,
+			"budgetBytes": 1048576,
+			"types": {
+				"request": {"shareBytes": 524288, "fsync": "none"},
+				"error":   {"shareBytes": 524288, "fsync": "none"}
+			},
+			"plugins": [{
+				"name": %q, "url": %q, "types": ["request", "error"]
+			}]
+		},`, dir, nodeID, subjectSecretEnv, pluginSecretEnv,
+			e2ePluginName, opts.usagePluginURL)
+	}
+	buildCfg := func(nodeID string) *core.Config {
+		dir := filepath.Join(t.TempDir(), "usage")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return loadConfig(t, fmt.Sprintf(`{%s
 		"authProviders": [
 			{
 				"id": "mycompany", "type": "oidc",
@@ -314,19 +357,26 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 			{"host": "denied.mycompany.test", "path": "/*", "frontend": true,
 			 "backend": %q, "auth": {"provider": "mycompany",
 			  "identity": {"roles": ["superusers"]}}},
+			{"host": "quiet.mycompany.test", "path": "/*", "frontend": true,
+			 "backend": %q, "auth": {"provider": "mycompany"}, "usage": false},
 			{"host": "app.contoso.test", "path": "/*", "frontend": true,
 			 "backend": %q, "auth": {"provider": "contoso"}}
 		]
 	}`,
-		mycompanyIssuer+"/t/mycompany", clientSecretEnv, mycompanyDomain,
-		sessionStore, sessionKeyEnv,
-		s.contosoSrv.URL+"/t/contoso", clientSecretEnv, contosoDomain,
-		sessionStore, sessionKeyEnv,
-		s.backend.URL(), s.backend.URL(), s.backend.URL(),
-		s.backend.URL(), s.backend.URL(), s.backend.URL(),
-	))
+			usageJSON(nodeID, dir),
+			mycompanyIssuer+"/t/mycompany", clientSecretEnv, mycompanyDomain,
+			sessionStore, sessionKeyEnv,
+			s.contosoSrv.URL+"/t/contoso", clientSecretEnv, contosoDomain,
+			sessionStore, sessionKeyEnv,
+			s.backend.URL(), s.backend.URL(), s.backend.URL(),
+			s.backend.URL(), s.backend.URL(), s.backend.URL(),
+			s.backend.URL(),
+		))
+	}
+	cfg1 := buildCfg("gw-1")
+	cfg2 := buildCfg("gw-2")
 
-	gw1, err := proxy.New(cfg)
+	gw1, err := proxy.New(cfg1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +387,7 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		_ = gw1.Close()
 	})
 
-	gw2, err := proxy.New(cfg)
+	gw2, err := proxy.New(cfg2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,14 +399,15 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 	})
 
 	hosts := map[string]*httptest.Server{
-		"app.mycompany.test":      s.gw1Srv,
-		"app2.mycompany.test":     s.gw2Srv,
-		"login.mycompany.test":    s.gw1Srv,
-		"api.mycompany.test":      s.gw1Srv,
-		"public.mycompany.test":   s.gw1Srv,
-		"denied.mycompany.test":   s.gw1Srv,
-		"app.contoso.test":   s.gw1Srv,
-		"login.contoso.test": s.gw1Srv,
+		"app.mycompany.test":    s.gw1Srv,
+		"app2.mycompany.test":   s.gw2Srv,
+		"login.mycompany.test":  s.gw1Srv,
+		"api.mycompany.test":    s.gw1Srv,
+		"public.mycompany.test": s.gw1Srv,
+		"denied.mycompany.test": s.gw1Srv,
+		"quiet.mycompany.test":  s.gw1Srv,
+		"app.contoso.test":      s.gw1Srv,
+		"login.contoso.test":    s.gw1Srv,
 	}
 
 	base := http.DefaultTransport.(*http.Transport).Clone()
