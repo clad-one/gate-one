@@ -346,12 +346,18 @@ NOTES
 )
 
 if [ -n "${COSIGN_KEY:-}" ]; then
+	# Offline signing: release/signing-config.json carries no Rekor
+	# transparency-log or TSA service, so the signature is produced
+	# without any external dependency. The pinned public key is the
+	# trust anchor; verification is key-based (see release/README.md).
+	signing_config="$SRC/release/signing-config.json"
 	"$cosign_bin" sign-blob --yes --key "$COSIGN_KEY" \
+		--signing-config "$signing_config" \
 		--bundle "$DIST/SHA256SUMS.bundle" \
 		"$DIST/SHA256SUMS"
 	pub="${COSIGN_PUB:-${COSIGN_KEY%.key}.pub}"
 	if [ -f "$pub" ]; then
-		"$cosign_bin" verify-blob --key "$pub" \
+		"$cosign_bin" verify-blob --key "$pub" --insecure-ignore-tlog \
 			--bundle "$DIST/SHA256SUMS.bundle" "$DIST/SHA256SUMS"
 	fi
 	chmod 644 "$DIST/SHA256SUMS.bundle"
