@@ -182,8 +182,7 @@ func (m *Manifest) Verify(trust TrustStore, artifact []byte) error {
 // validateEvents enforces the extension/event subscription invariants.
 func (m *Manifest) validateEvents() error {
 	knownCaps := map[string]bool{
-		"events": true, "handler": true, "inject": true,
-		"assets": true, "guard": true, "auth": true,
+		"events": true, "inject": true, "auth": true,
 	}
 	for _, c := range m.Capabilities {
 		if !knownCaps[c] {
