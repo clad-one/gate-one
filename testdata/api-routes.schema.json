@@ -491,6 +491,38 @@
         "$ref": "#/definitions/mcpSet"
       }
     },
+    "publisherFeed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "keys"
+      ],
+      "description": "Optional signed publisher feed: compatible Gate One versions, external components and plugins, with their revocation status. Loaded and verified at startup; the operator's trust store stays authoritative. Absent = no feed is consulted.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Feed path, relative to the config file."
+        },
+        "keys": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Feed signing keys: key id -> base64 Ed25519 public key. The feed's signature key id must be present. Provisioned out-of-band."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "warn",
+            "enforce"
+          ],
+          "description": "warn (default): report revocations and incompatibilities only. enforce: apply the feed's revocations (digest and key) to the plugin trust store, so a revoked plugin refuses to load."
+        }
+      }
+    },
     "usage": {
       "type": "object",
       "description": "Out-of-process usage-event bus (WAL + extension plugins). Presence enables it. Events are produced only for the subscribed types; a full durable share is answered with a targeted 503 (health/readyz/auth-probe exempt).",
