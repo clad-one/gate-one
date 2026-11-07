@@ -2359,7 +2359,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// context for the deferred event.
 	usageBaseCtx := ctx
 	var usageAdm *usageAdmission
-	if g.usage != nil {
+	if g.usage != nil && route.UsageEnabled() {
 		var full usage.EventType
 		usageAdm, full = g.usage.admit(route, ctx, g.providerFor(cr))
 		if full != "" {

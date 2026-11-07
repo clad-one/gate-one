@@ -888,6 +888,13 @@ type Route struct {
 	Frontend bool   `json:"frontend,omitempty"`
 	Backend  string `json:"backend"`
 
+	// Usage: emit usage events for this route (default true). Set
+	// "usage": false to serve the route WITHOUT producing any usage
+	// event — no WAL reservation and no admission 503 on this route.
+	// Use it for control/monitoring routes (a status page, an events
+	// viewer) that must not pollute, or depend on, the event bus.
+	Usage *bool `json:"usage,omitempty"`
+
 	// StripPrefix: exact public path prefix removed from the request
 	// before it reaches the backend. "/api" turns "/api/foo" into
 	// "/foo"; the backend base path is then prepended as usual.
@@ -2094,6 +2101,12 @@ func (r *Route) ForbiddenPolicy() *AuthGuardForbiddenPolicy {
 // MCPActive: does the route expose an MCP server?
 func (r *Route) MCPActive() bool {
 	return r.MCP != nil && r.MCP.Enabled
+}
+
+// UsageEnabled reports whether this route produces usage events
+// (default true; `"usage": false` opts the route out).
+func (r *Route) UsageEnabled() bool {
+	return r == nil || r.Usage == nil || *r.Usage
 }
 
 // UpstreamTokenBroker returns the route's per-user upstream

@@ -1755,6 +1755,10 @@
           "type": "boolean",
           "description": "Page route: auth failure → 302 to the login (API routes get a JSON 401); eligible for the guard script and the pwa policy."
         },
+        "usage": {
+          "type": "boolean",
+          "description": "Emit usage events for this route. Default true; set false to serve the route without producing ANY usage event — no WAL reservation and no admission 503 on this route. Use it for control or monitoring routes (a status page, an events viewer) that must not pollute, or depend on, the event bus."
+        },
         "autoHead": {
           "type": "boolean",
           "description": "HEAD requests are served as GET, body removed."

@@ -241,3 +241,22 @@ func TestUsageConfigManifestRequiresTrustStore(t *testing.T) {
 		t.Fatalf("err = %v, want trustStore", err)
 	}
 }
+
+func TestRouteUsageOptOut(t *testing.T) {
+	cfg, err := loadAuthTest(t, `{
+		"authProvider": {"type":"dev","loginBaseUrl":"http://login.dev.test:3000","cookieDomain":"dev.test"},
+		"routes": [
+			{"host":"a.test","path":"/*","backend":"http://b","auth":{},"usage":false},
+			{"host":"b.test","path":"/*","backend":"http://b","auth":{}}
+		]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Routes[0].UsageEnabled() {
+		t.Fatal(`"usage": false must opt the route out`)
+	}
+	if !cfg.Routes[1].UsageEnabled() {
+		t.Fatal("usage must default to enabled")
+	}
+}
