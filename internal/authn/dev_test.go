@@ -58,7 +58,7 @@ func TestDevLoginFormAndSession(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /login = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Connexion de développement") {
+	if !strings.Contains(rec.Body.String(), "Development sign-in") {
 		t.Errorf("login page missing its title: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "alice") ||

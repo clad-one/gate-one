@@ -333,7 +333,7 @@ func (d *Dev) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !d.checkCSRF(r) {
-		d.renderLogin(w, r, "Session expirée, merci de réessayer.", http.StatusForbidden)
+		d.renderLogin(w, r, "Session expired, please try again.", http.StatusForbidden)
 		return
 	}
 	username := strings.TrimSpace(r.FormValue("username"))
@@ -341,7 +341,7 @@ func (d *Dev) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	returnTo := d.safeReturnTo(r.FormValue("returnTo"))
 
 	if d.tooManyFailures(username, r.RemoteAddr) {
-		d.renderLogin(w, r, "Trop de tentatives, patientez quelques minutes.", http.StatusTooManyRequests)
+		d.renderLogin(w, r, "Too many attempts, please wait a few minutes.", http.StatusTooManyRequests)
 		return
 	}
 
@@ -349,7 +349,7 @@ func (d *Dev) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	if !ok || subtle.ConstantTimeCompare(
 		[]byte(user.Password), []byte(password)) != 1 {
 		d.recordFailure(username, r.RemoteAddr)
-		d.renderLogin(w, r, "Identifiants invalides.", http.StatusUnauthorized)
+		d.renderLogin(w, r, "Invalid credentials.", http.StatusUnauthorized)
 		return
 	}
 
@@ -487,11 +487,11 @@ func cloneClaims(in map[string]any) map[string]any {
 }
 
 const devLoginHTML = `<!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Gate One — développement</title>
+<title>Gate One — development</title>
 <style>
 :root{color-scheme:light dark}
 *{box-sizing:border-box}
@@ -529,29 +529,29 @@ code{background:#24282e}
 <body>
 <main class="card">
 <span class="badge">Dev auth</span>
-<h1>Connexion de développement</h1>
-<p class="sub">IdP embarqué — accessible uniquement en local.</p>
+<h1>Development sign-in</h1>
+<p class="sub">Embedded IdP — reachable on loopback only.</p>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
 <form method="post" action="/login" autocomplete="on">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="returnTo" value="{{.ReturnTo}}">
-<label for="username">Utilisateur</label>
+<label for="username">Username</label>
 <input id="username" name="username" autocomplete="username" required autofocus>
-<label for="password">Mot de passe</label>
+<label for="password">Password</label>
 <input id="password" name="password" type="password" autocomplete="current-password" required>
-<button type="submit">Se connecter</button>
+<button type="submit">Sign in</button>
 </form>
-<p class="accounts">Comptes de démonstration :
+<p class="accounts">Demo accounts:
 {{range $i, $u := .Users}}{{if $i}}, {{end}}<code>{{$u}}</code>{{end}}
-(mot de passe = nom d'utilisateur).</p>
+(password = username).</p>
 </main>
 </body>
 </html>`
 
 const devPopupDoneHTML = `<!doctype html>
-<html lang="fr"><head><meta charset="utf-8"><title>Connecté</title></head>
+<html lang="en"><head><meta charset="utf-8"><title>Signed in</title></head>
 <body style="font:15px system-ui;padding:24px">
-<p>Connexion réussie. Cette fenêtre va se fermer.</p>
+<p>Signed in successfully. This window will close.</p>
 <script>
 (function(){
   var origin = {{if .Origin}}"{{.Origin}}"{{else}}""{{end}};

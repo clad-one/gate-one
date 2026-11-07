@@ -39,8 +39,8 @@ func (b *Broker) loginPage(
 		return
 	}
 	if f == nil || b.now().After(f.Expires) {
-		writeAccountPage(w, http.StatusBadRequest, "Session expirée",
-			"Recommencez la connexion depuis l'application.")
+		writeAccountPage(w, http.StatusBadRequest, "Session expired",
+			"Please restart the sign-in from the application.")
 		return
 	}
 	writeLoginPage(w, http.StatusOK, b.issuer(rt)+"/login",
@@ -62,8 +62,8 @@ func (b *Broker) loginSubmit(
 		return
 	}
 	if f == nil || b.now().After(f.Expires) {
-		writeAccountPage(w, http.StatusBadRequest, "Session expirée",
-			"Recommencez la connexion depuis l'application.")
+		writeAccountPage(w, http.StatusBadRequest, "Session expired",
+			"Please restart the sign-in from the application.")
 		return
 	}
 
@@ -74,7 +74,7 @@ func (b *Broker) loginSubmit(
 	if !csrfOK {
 		_ = b.store.PutFlow(r.Context(), rt.cfg.ID, flowID, f, 10*time.Minute)
 		writeLoginPage(w, http.StatusBadRequest, action,
-			f.CSRF, flowID, back, "Session invalide. Réessayez.")
+			f.CSRF, flowID, back, "Invalid session. Please try again.")
 		return
 	}
 
@@ -92,7 +92,7 @@ func (b *Broker) loginSubmit(
 		_ = b.store.PutFlow(r.Context(), rt.cfg.ID, flowID, f, 10*time.Minute)
 		writeLoginPage(w, http.StatusUnauthorized, action,
 			f.CSRF, flowID, back,
-			"Identifiants invalides ou adresse e-mail non vérifiée.")
+			"Invalid credentials or unverified email address.")
 		return
 	}
 
@@ -133,18 +133,18 @@ func writeLoginPage(
 	var backHTML string
 	if backURL != "" {
 		backHTML = fmt.Sprintf(`<p class="back"><a href="%s">`+
-			`← Choisir une autre méthode</a></p>`,
+			`← Choose another sign-in method</a></p>`,
 			html.EscapeString(backURL))
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Connexion</title>
+<title>Sign in</title>
 <style>
 :root{color-scheme:light dark}
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f4f5f7;color:#1c1f26;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
@@ -163,19 +163,19 @@ p.back a{color:#2563eb;text-decoration:none}
 </head>
 <body>
 <main>
-<h1>Connexion — compte local</h1>
-<p class="note">Ce formulaire est réservé aux comptes locaux.
-Pour Google ou Microsoft, revenez au choix de la méthode.</p>
+<h1>Sign in — local account</h1>
+<p class="note">This form is for local accounts only.
+For Google or Microsoft, go back and choose another method.</p>
 %s
 %s
 <form method="post" action="%s">
 <input type="hidden" name="flow" value="%s">
 <input type="hidden" name="csrf" value="%s">
-<label for="email">Adresse e-mail</label>
+<label for="email">Email address</label>
 <input id="email" name="email" type="email" autocomplete="username" required>
-<label for="password">Mot de passe</label>
+<label for="password">Password</label>
 <input id="password" name="password" type="password" autocomplete="current-password" required>
-<button type="submit">Se connecter</button>
+<button type="submit">Sign in</button>
 </form>
 </main>
 </body>

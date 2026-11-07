@@ -629,14 +629,14 @@ func (o *OIDC) writeTxExpired(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusBadRequest)
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
-<html lang="fr"><head><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Session expirée</title>
+<title>Session expired</title>
 <style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f4f5f7;color:#1c1f26;font:16px/1.5 system-ui,sans-serif}main{max-width:32em;margin:2rem;padding:2rem;background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08)}h1{margin:0 0 .6rem;font-size:1.3rem}p{margin:0 0 1rem;color:#444}a.btn{display:inline-block;padding:.6rem 1rem;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;font-weight:600}</style>
 </head><body><main>
-<h1>Session de connexion expirée</h1>
-<p>Le délai de connexion est dépassé (ou la page a été rechargée).</p>
-<p><a class="btn" href="%s">Recommencer la connexion</a></p>
+<h1>Login session expired</h1>
+<p>The sign-in window has passed (or the page was reloaded).</p>
+<p><a class="btn" href="%s">Restart the sign-in</a></p>
 </main></body></html>`, html.EscapeString(login))
 }
 

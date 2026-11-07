@@ -77,7 +77,7 @@ func TestDevProviderEndToEnd(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET login = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Connexion de développement") {
+	if !strings.Contains(rec.Body.String(), "Development sign-in") {
 		t.Fatalf("login page not served: %s", rec.Body.String())
 	}
 	var csrf string
@@ -207,7 +207,7 @@ func TestDevLoginHostCanAlsoServeApplication(t *testing.T) {
 	}{
 		{"/", "app"},
 		{"/page", "app"},
-		{"/login", "Connexion de développement"},
+		{"/login", "Development sign-in"},
 		{"/health", `"provider":"dev"`},
 	} {
 		req := httptest.NewRequest(

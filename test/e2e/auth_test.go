@@ -394,8 +394,8 @@ func TestE2E_LoginHostLanding(t *testing.T) {
 	}
 	page := string(body)
 	for _, want := range []string{
-		"Lien incomplet", "application de retour absente",
-		"continueUrl", "returnTo", "Référence",
+		"Incomplete link", "return application missing",
+		"continueUrl", "returnTo", "Reference",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("fallback page missing %q:\n%s", want, page)
@@ -413,7 +413,7 @@ func TestE2E_LoginHostLanding(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("open redirect accepted: %d", resp.StatusCode)
 	}
-	if !strings.Contains(string(body), "hôte non autorisé") {
+	if !strings.Contains(string(body), "host not allowed") {
 		t.Fatalf("unexpected page: %s", body)
 	}
 

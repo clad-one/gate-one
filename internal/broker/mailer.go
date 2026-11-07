@@ -34,10 +34,10 @@ func (m *smtpMailer) SendVerification(
 	}
 
 	const subject = "Verify your email address"
-	body := "Bonjour,\r\n\r\n" +
-		"Confirmez votre adresse e-mail en ouvrant ce lien :\r\n\r\n" +
+	body := "Hello,\r\n\r\n" +
+		"Confirm your email address by opening this link:\r\n\r\n" +
 		link + "\r\n\r\n" +
-		"Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.\r\n"
+		"If you did not request this, you can ignore this message.\r\n"
 
 	msg := strings.Join([]string{
 		"From: " + m.cfg.From,

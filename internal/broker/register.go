@@ -168,30 +168,30 @@ func (b *Broker) verifyEmail(
 	}
 	raw := strings.TrimSpace(r.URL.Query().Get("token"))
 	if raw == "" {
-		writeAccountPage(w, http.StatusBadRequest, "Lien invalide",
-			"Ce lien de vérification est incomplet.")
+		writeAccountPage(w, http.StatusBadRequest, "Invalid link",
+			"This verification link is incomplete.")
 		return
 	}
 
 	vt, err := b.accounts.TakeVerifyToken(
 		r.Context(), rt.cfg.ID, verifyTokenHash(raw))
 	if err != nil {
-		writeAccountPage(w, http.StatusBadRequest, "Lien expiré",
-			"Ce lien de vérification est invalide, expiré ou déjà utilisé.")
+		writeAccountPage(w, http.StatusBadRequest, "Expired link",
+			"This verification link is invalid, expired or already used.")
 		return
 	}
 
 	user, err := b.accounts.GetUserByEmail(r.Context(), rt.cfg.ID, vt.Email)
 	if err != nil {
-		writeAccountPage(w, http.StatusBadRequest, "Compte introuvable",
-			"Le compte associé à ce lien n'existe plus.")
+		writeAccountPage(w, http.StatusBadRequest, "Account not found",
+			"The account linked to this verification no longer exists.")
 		return
 	}
 	if err := b.accounts.SetUserVerified(
 		r.Context(), rt.cfg.ID, user.ID,
 	); err != nil {
-		writeAccountPage(w, http.StatusBadGateway, "Erreur",
-			"Impossible de finaliser la vérification. Réessayez plus tard.")
+		writeAccountPage(w, http.StatusBadGateway, "Error",
+			"Unable to complete the verification. Please try again later.")
 		return
 	}
 
@@ -209,8 +209,8 @@ func (b *Broker) verifyEmail(
 		return
 	}
 
-	writeAccountPage(w, http.StatusOK, "Adresse vérifiée",
-		"Votre adresse e-mail est confirmée. Vous pouvez fermer cette page.")
+	writeAccountPage(w, http.StatusOK, "Email verified",
+		"Your email address is confirmed. You can close this page.")
 }
 
 // writeAccountPage is a minimal self-contained page for the account
@@ -223,7 +223,7 @@ func writeRestartPage(
 		link = rt.cfg.AppOrigins[0]
 	}
 	writeAccountPageLink(w, http.StatusBadRequest,
-		"Session de connexion expirée", message, link)
+		"Login session expired", message, link)
 }
 
 func writeAccountPage(
@@ -238,14 +238,14 @@ func writeAccountPageLink(
 	var action string
 	if link != "" {
 		action = fmt.Sprintf(
-			"<p><a class=\"btn\" href=\"%s\">Recommencer depuis l'application</a></p>",
+			"<p><a class=\"btn\" href=\"%s\">Restart from the application</a></p>",
 			html.EscapeString(link))
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

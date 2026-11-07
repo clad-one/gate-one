@@ -144,7 +144,7 @@ func TestLocalLoginFlow(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong password = %d, want 401", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Identifiants invalides") {
+	if !strings.Contains(rec.Body.String(), "Invalid credentials") {
 		t.Fatalf("unexpected error page: %s", rec.Body.String())
 	}
 
@@ -250,8 +250,8 @@ func TestIdPChooser(t *testing.T) {
 	}
 	page := rec.Body.String()
 	for _, want := range []string{
-		"Choisissez votre méthode",
-		"Compte local (e-mail / mot de passe)",
+		"Choose your sign-in method",
+		"Local account (email / password)",
 		"Google",
 		"Microsoft",
 		"idp=local", "idp=google", "idp=microsoft",

@@ -16,8 +16,8 @@ func (b *Broker) writeChooser(
 	methods []string,
 ) {
 	if len(methods) == 0 {
-		writeAccountPage(w, http.StatusBadRequest, "Connexion indisponible",
-			"Aucune méthode de connexion n'est configurée pour ce service.")
+		writeAccountPage(w, http.StatusBadRequest, "Sign-in unavailable",
+			"No sign-in method is configured for this service.")
 		return
 	}
 
@@ -27,7 +27,7 @@ func (b *Broker) writeChooser(
 		label := id
 		switch id {
 		case "local":
-			label = "Compte local (e-mail / mot de passe)"
+			label = "Local account (email / password)"
 		default:
 			if up, ok := rt.cfg.Upstreams[id]; ok && up.DisplayName != "" {
 				label = up.DisplayName
@@ -50,11 +50,11 @@ func (b *Broker) writeChooser(
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Connexion</title>
+<title>Sign in</title>
 <style>
 :root{color-scheme:light dark}
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f4f5f7;color:#1c1f26;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
@@ -70,8 +70,8 @@ a.btn:first-of-type:hover{background:#1d4ed8}
 </head>
 <body>
 <main>
-<h1>Connexion</h1>
-<p>Choisissez votre méthode de connexion.</p>
+<h1>Sign in</h1>
+<p>Choose your sign-in method.</p>
 %s</main>
 </body>
 </html>`, buttons.String())

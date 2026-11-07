@@ -51,13 +51,13 @@ func (g *Gateway) serveLoginLanding(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		g.writeLandingFallback(
-			w, r, q, "returnTo/continueUrl refusé (hôte non autorisé)")
+			w, r, q, "returnTo/continueUrl rejected (host not allowed)")
 		return
 	}
 
 	if names := landingActionParamsPresent(q); len(names) > 0 {
 		g.writeLandingFallback(
-			w, r, q, "application de retour absente du lien")
+			w, r, q, "return application missing from the link")
 		return
 	}
 
@@ -71,7 +71,7 @@ func (g *Gateway) serveLoginLanding(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g.writeLandingFallback(
-		w, r, q, "aucune application par défaut n'est configurée")
+		w, r, q, "no default application is configured")
 }
 
 // landingTargetAllowed validates an application return target: an
@@ -208,8 +208,8 @@ func landingFallbackHTML(
 	var received string
 	if len(params) > 0 {
 		received = fmt.Sprintf(
-			"<p class=\"hint\">Paramètres reçus : <code>%s</code> "+
-				"(valeurs masquées).</p>",
+			"<p class=\"hint\">Parameters received: <code>%s</code> "+
+				"(values hidden).</p>",
 			html.EscapeString(strings.Join(params, ", ")))
 	}
 
@@ -217,19 +217,19 @@ func landingFallbackHTML(
 	if defaultApp != "" {
 		action = fmt.Sprintf(
 			"<p><a class=\"btn\" href=\"%s\">"+
-				"Continuer vers l'application</a></p>",
+				"Continue to the application</a></p>",
 			html.EscapeString(defaultApp))
 	} else {
-		action = "<p class=\"hint\">Aucune application par défaut " +
-			"n'est configurée. Contactez l'administrateur.</p>"
+		action = "<p class=\"hint\">No default application " +
+			"is configured. Contact your administrator.</p>"
 	}
 
 	return `<!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lien incomplet</title>
+<title>Incomplete link</title>
 <style>
 :root{color-scheme:light dark}
 body{margin:0;min-height:100vh;display:flex;align-items:center;` +
@@ -259,18 +259,18 @@ p.ref{margin-top:1.2rem;font-size:.8rem;color:#888}
 </head>
 <body>
 <main>
-<h1>Lien incomplet</h1>
-<p>Ce lien ne précise pas vers quelle application revenir.</p>
+<h1>Incomplete link</h1>
+<p>This link does not say which application to return to.</p>
 <p><strong>Cause :</strong> ` + html.EscapeString(reason) + `.</p>
-<p>L'émetteur du lien doit fournir :</p>
+<p>The link issuer must provide:</p>
 <ul>
 <li>Firebase : <code>ActionCodeSettings.url</code> (<code>continueUrl</code>)</li>
 <li>OIDC / Keycloak : <code>redirect_uri</code> + <code>state</code></li>
-<li>Lien personnalisé : <code>returnTo</code></li>
+<li>Custom link: <code>returnTo</code></li>
 </ul>
 ` + received + `
 ` + action + `
-<p class="ref">Référence : ` + html.EscapeString(ref) + `</p>
+<p class="ref">Reference: ` + html.EscapeString(ref) + `</p>
 </main>
 </body>
 </html>`

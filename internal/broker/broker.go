@@ -723,7 +723,7 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 		log.Printf("broker: callback expired/unknown state tenant=%s state=%q",
 			rt.cfg.ID, state)
 		writeRestartPage(w, rt,
-			"La session de connexion a expiré ou a déjà été utilisée.")
+			"The login session has expired or was already used.")
 		return
 	}
 	if e := q.Get("error"); e != "" {
@@ -1216,8 +1216,8 @@ func (b *Broker) logoutDone(
 		http.Redirect(w, r, rt.cfg.AppOrigins[0], http.StatusFound)
 		return
 	}
-	writeAccountPage(w, http.StatusOK, "Déconnecté",
-		"Vous êtes déconnecté. Vous pouvez fermer cette page.")
+	writeAccountPage(w, http.StatusOK, "Signed out",
+		"You are signed out. You can close this page.")
 }
 
 func (rt *tenantRuntime) defaultAudience() string {
