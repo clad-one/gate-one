@@ -1,0 +1,11 @@
+{
+  "name": "auth-bridge",
+  "type": "module",
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^4.19.2",
+    "jose": "^6.2.3",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^4.0.1"
+  }
+}

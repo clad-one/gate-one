@@ -269,6 +269,16 @@ done
 
 rmdir "$DIST/stage" 2>/dev/null || true
 
+# --- companion services (source) ----------------------------------
+# The token broker and auth-bridge are not part of the gate-one
+# binary: they ship as source, built into their own images.
+services_archive="$DIST/services_${VERSION}_src.tar.gz"
+tar -czf "$services_archive" -C "$SRC" \
+	--exclude='services/*/node_modules' services
+"$syft_bin" "dir:$SRC/services" \
+	--source-name "gate-one-services" --source-version "$VERSION" \
+	-o "spdx-json=$DIST/services_${VERSION}_src.spdx.json" >/dev/null
+
 site_line=""
 if [ -n "$PRODUCT" ] && [ -x "$PRODUCT/scripts/build-site" ]; then
 	# The product site also publishes the schemas/examples it mounts.
@@ -296,6 +306,7 @@ cat > "$DIST/RELEASE_MANIFEST.json" <<JSON
   "docsIndex": ${docs_index:-null},
   "builtAt": "${DATE}",
   "binaries": ["gate-one", "cladone-auth"],
+  "services": ["token-broker", "auth-bridge"],
   "targets": ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"]
 }
 JSON
@@ -311,6 +322,7 @@ Artifacts:
 
 - \`gate-one_${VERSION}_<os>_<arch>.tar.gz\` (or \`.zip\` on Windows)
 - \`cladone-auth_${VERSION}_<os>_<arch>.tar.gz\` (or \`.zip\` on Windows)
+- \`services_${VERSION}_src.tar.gz\` (token-broker and auth-bridge sources)
 ${site_line}
 - \`RELEASE_MANIFEST.json\` (source/product tags and commits)
 - \`*.spdx.json\` (SBOM, syft)
