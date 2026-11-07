@@ -1707,6 +1707,11 @@ type UsageConfig struct {
 	// Default false: an unsigned plugin is allowed for development and
 	// logged as a warning.
 	RequireSigned bool `json:"requireSigned,omitempty"`
+	// PluginsDir is a directory scanned for plugin descriptors: every
+	// *.json file is a UsagePluginConfig, merged with Plugins. Manifest
+	// and artifact paths in a descriptor are relative to that file, so a
+	// plugin directory is self-contained. Rescanned on SIGHUP.
+	PluginsDir string `json:"pluginsDir,omitempty"`
 	// Plugins are the out-of-process event consumers.
 	Plugins []UsagePluginConfig `json:"plugins,omitempty"`
 
@@ -2948,6 +2953,43 @@ func (c *Config) VerifyPluginManifests() error {
 	return nil
 }
 
+// loadPluginsDir reads every *.json plugin descriptor in dir (sorted,
+// dotfiles and subdirectories skipped) and returns them as plugin
+// entries. Manifest and artifact paths are resolved relative to the
+// descriptor, so each plugin directory is self-contained. Signature
+// verification is unchanged: a descriptor with a manifest goes through
+// the same trust-store and requireSigned checks as an inline plugin.
+func loadPluginsDir(dir string) ([]UsagePluginConfig, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("usage.pluginsDir: %w", err)
+	}
+	var out []UsagePluginConfig
+	for _, ent := range entries {
+		name := ent.Name()
+		if ent.IsDir() || strings.HasPrefix(name, ".") ||
+			!strings.HasSuffix(name, ".json") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("usage.pluginsDir: %s: %w", name, err)
+		}
+		var p UsagePluginConfig
+		if err := strictUnmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("usage.pluginsDir: %s: %w", name, err)
+		}
+		for _, f := range []*string{&p.Manifest, &p.Artifact} {
+			if *f != "" && !filepath.IsAbs(*f) {
+				*f = filepath.Join(dir, *f)
+			}
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 func (c *Config) resolveUsage(baseDir string) error {
 	u := c.Usage
 	if u == nil {
@@ -3048,6 +3090,16 @@ func (c *Config) resolveUsage(baseDir string) error {
 			return fmt.Errorf("usage.trustStore: %w", err)
 		}
 		u.Trust = ts
+	}
+	if u.PluginsDir != "" {
+		if !filepath.IsAbs(u.PluginsDir) {
+			u.PluginsDir = filepath.Join(baseDir, u.PluginsDir)
+		}
+		discovered, err := loadPluginsDir(u.PluginsDir)
+		if err != nil {
+			return err
+		}
+		u.Plugins = append(u.Plugins, discovered...)
 	}
 	if len(u.Plugins) == 0 {
 		return fmt.Errorf("usage: at least one plugin is required")

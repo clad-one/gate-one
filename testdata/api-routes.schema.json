@@ -557,6 +557,10 @@
           "type": "boolean",
           "description": "Refuse any plugin without a signed manifest. Default false: an unsigned plugin is allowed for development and logged as a warning."
         },
+        "pluginsDir": {
+          "type": "string",
+          "description": "Directory scanned for plugin descriptors: every *.json file is a plugin entry (same shape as usage.plugins[]). Manifest and artifact paths are relative to the descriptor. Merged with usage.plugins; duplicate names are refused. Rescanned on SIGHUP."
+        },
         "types": {
           "type": "object",
           "minProperties": 1,
