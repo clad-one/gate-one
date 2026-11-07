@@ -62,6 +62,22 @@ func (w *statsWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Flush keeps streaming responses (SSE, chunked) working through the
+// wrapper: Go's ReverseProxy flushes immediately for text/event-stream,
+// and that flush must reach the underlying writer.
+func (w *statsWriter) Flush() {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer
+// (deadlines, flushing) — required by Go's ReverseProxy.
+func (w *statsWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // serveStats answers /__gate-one/stats.
 func serveStats(w http.ResponseWriter, r *http.Request) {
 	statsMu.Lock()

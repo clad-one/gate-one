@@ -124,12 +124,12 @@ header{padding:.6rem 1rem;border-bottom:1px solid #2c4038;color:#a3b8ae}
 <header>Gate One — last 20 events (live)</header>
 <pre id="log"></pre>
 <script>
-var log=document.getElementById('log');
-function render(lines){log.textContent=(lines||[]).join('\n');
-  log.scrollTop=log.scrollHeight;}
-function poll(){fetch('/tail',{cache:'no-store'})
-  .then(function(r){return r.json();}).then(render).catch(function(){});}
-poll();setInterval(poll,1500);
+var log=document.getElementById('log'),MAX=20,lines=[];
+function render(){log.textContent=lines.join('\n');log.scrollTop=log.scrollHeight;}
+function push(t){lines.push(t);if(lines.length>MAX)lines.shift();render();}
+var es=new EventSource('/stream');
+es.onmessage=function(e){push(e.data);};
+es.onerror=function(){/* EventSource reconnects automatically */};
 </script>
 </body>
 </html>`
