@@ -272,6 +272,11 @@ func runDoctor(args []string) int {
 		return 1
 	}
 	fmt.Println("config: OK")
+	if cfg.Feed != nil {
+		fmt.Printf("publisher feed: %s key=%s (%d plugins, %d revocations)\n",
+			cfg.Feed.Publisher, cfg.Feed.Signature.KeyID,
+			len(cfg.Feed.Plugins), len(cfg.Feed.Revocations))
+	}
 
 	gw, err := newGateway(cfg, *authBridge, *addr, false)
 	if err != nil {

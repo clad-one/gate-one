@@ -59,6 +59,12 @@ func LoadTrustStore(data []byte) (TrustStore, error) {
 }
 
 func decodeKey(s string) (ed25519.PublicKey, error) {
+	return DecodePublicKey(s)
+}
+
+// DecodePublicKey decodes an Ed25519 public key from base64 (raw URL,
+// URL, raw standard or standard).
+func DecodePublicKey(s string) (ed25519.PublicKey, error) {
 	s = strings.TrimSpace(s)
 	for _, enc := range []*base64.Encoding{
 		base64.RawURLEncoding, base64.URLEncoding,

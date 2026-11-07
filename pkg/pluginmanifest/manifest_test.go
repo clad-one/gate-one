@@ -9,6 +9,16 @@ import (
 	"testing"
 )
 
+// rawOf marshals a manifest to the JSON the signature covers.
+func rawOf(t *testing.T, m *Manifest) []byte {
+	t.Helper()
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -45,7 +55,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 		CoreVersion: "1.5.0",
 	}
 	sign := func(m *Manifest) *Manifest {
-		payload, err := SigningPayload(m)
+		payload, err := SigningPayload(rawOf(t, m), m.Artifact.Digest)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +68,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 	}
 
 	valid := sign(copyManifest(base))
-	if err := valid.Verify(trust, artifact); err != nil {
+	if err := valid.Verify(trust, rawOf(t, valid), artifact); err != nil {
 		t.Fatalf("valid manifest: %v", err)
 	}
 
@@ -66,7 +76,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 		m := sign(copyManifest(base))
 		m.Signature.Value = base64.RawURLEncoding.EncodeToString(
 			make([]byte, ed25519.SignatureSize))
-		if err := m.Verify(trust, artifact); !errors.Is(err, ErrBadSignature) {
+		if err := m.Verify(trust, rawOf(t, m), artifact); !errors.Is(err, ErrBadSignature) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -74,7 +84,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 		m := sign(copyManifest(base))
 		m.KeyID = "unknown"
 		m.Signature.KeyID = "unknown"
-		if err := m.Verify(trust, artifact); !errors.Is(err, ErrUntrustedKey) {
+		if err := m.Verify(trust, rawOf(t, m), artifact); !errors.Is(err, ErrUntrustedKey) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -82,7 +92,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 		m := sign(copyManifest(base))
 		m.Artifact.Digest = Digest([]byte("other"))
 		sign(m)
-		if err := m.Verify(trust, artifact); !errors.Is(err, ErrDigestMismatch) {
+		if err := m.Verify(trust, rawOf(t, m), artifact); !errors.Is(err, ErrDigestMismatch) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -90,7 +100,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 		m := sign(copyManifest(base))
 		tr := trust
 		tr.RevokedDigests = map[string]bool{m.Artifact.Digest: true}
-		if err := m.Verify(tr, artifact); !errors.Is(err, ErrRevoked) {
+		if err := m.Verify(tr, rawOf(t, m), artifact); !errors.Is(err, ErrRevoked) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -98,7 +108,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 		m := sign(copyManifest(base))
 		m.HostAPI = ">=2.0 <3.0"
 		sign(m)
-		if err := m.Verify(trust, artifact); !errors.Is(err, ErrIncompatibleAPI) {
+		if err := m.Verify(trust, rawOf(t, m), artifact); !errors.Is(err, ErrIncompatibleAPI) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -108,7 +118,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 			Name: "com.evil.dep", Version: "1.0.0", Digest: "sha256:00",
 		})
 		sign(m)
-		if err := m.Verify(trust, artifact); !errors.Is(err, ErrUntrustedDependency) {
+		if err := m.Verify(trust, rawOf(t, m), artifact); !errors.Is(err, ErrUntrustedDependency) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -116,7 +126,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 		m := sign(copyManifest(base))
 		tr := trust
 		tr.AllowAuth = false
-		if err := m.Verify(tr, artifact); !errors.Is(err, ErrAuthKindDenied) {
+		if err := m.Verify(tr, rawOf(t, m), artifact); !errors.Is(err, ErrAuthKindDenied) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -124,7 +134,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 		m := sign(copyManifest(base))
 		m.Name = "com.evil.plugin"
 		sign(m)
-		if err := m.Verify(trust, artifact); !errors.Is(err, ErrUntrustedKey) {
+		if err := m.Verify(trust, rawOf(t, m), artifact); !errors.Is(err, ErrUntrustedKey) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -132,7 +142,7 @@ func TestAC_AUTH_16_PluginManifestV2(t *testing.T) {
 		m := sign(copyManifest(base))
 		m.Artifact.Size = 999
 		sign(m)
-		if err := m.Verify(trust, artifact); !errors.Is(err, ErrDigestMismatch) {
+		if err := m.Verify(trust, rawOf(t, m), artifact); !errors.Is(err, ErrDigestMismatch) {
 			t.Fatalf("err = %v", err)
 		}
 	})

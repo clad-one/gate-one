@@ -265,7 +265,11 @@ func writeSignedPlugin(
 			OnMaxLag: "block",
 		},
 	}
-	payload, err := pluginmanifest.SigningPayload(m)
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := pluginmanifest.SigningPayload(raw, m.Artifact.Digest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +278,7 @@ func writeSignedPlugin(
 		Value: base64.RawURLEncoding.EncodeToString(
 			ed25519.Sign(priv, payload)),
 	}
-	raw, err := json.Marshal(m)
+	raw, err = json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}

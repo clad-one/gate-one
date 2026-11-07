@@ -121,7 +121,7 @@ func newUsageRuntime(
 				return nil, fmt.Errorf("usage: %s: artifact: %w",
 					pc.Name, err)
 			}
-			if err := m.Verify(cfg.Trust, artifact); err != nil {
+			if err := m.Verify(cfg.Trust, raw, artifact); err != nil {
 				_ = u.close()
 				return nil, fmt.Errorf("usage: %s: %w", pc.Name, err)
 			}

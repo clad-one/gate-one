@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"cladone/gate-one/pkg/signing"
 	"cladone/gate-one/pkg/usage"
 )
 
@@ -118,8 +119,9 @@ func Parse(data []byte) (*Manifest, error) {
 }
 
 // Verify checks the signature, artefact, dependencies, revocation and
-// host API compatibility.
-func (m *Manifest) Verify(trust TrustStore, artifact []byte) error {
+// host API compatibility. raw is the manifest JSON as written (the
+// signature covers its JCS canonical form).
+func (m *Manifest) Verify(trust TrustStore, raw []byte, artifact []byte) error {
 	if m == nil {
 		return ErrManifestInvalid
 	}
@@ -168,7 +170,7 @@ func (m *Manifest) Verify(trust TrustStore, artifact []byte) error {
 			return fmt.Errorf("%w: %s@%s", ErrUntrustedDependency, dep.Name, dep.Version)
 		}
 	}
-	payload, err := signingPayload(m)
+	payload, err := SigningPayload(raw, m.Artifact.Digest)
 	if err != nil {
 		return err
 	}
@@ -241,18 +243,12 @@ func containsString(items []string, want string) bool {
 	return false
 }
 
-// SigningPayload is exported for the signing CLI/tests; it must match
-// Verify exactly.
-func SigningPayload(m *Manifest) ([]byte, error) { return signingPayload(m) }
-
-func signingPayload(m *Manifest) ([]byte, error) {
-	cp := *m
-	cp.Signature = Signature{}
-	body, err := json.Marshal(cp)
-	if err != nil {
-		return nil, err
-	}
-	return append(body, []byte("\n"+m.Artifact.Digest)...), nil
+// SigningPayload returns the bytes to sign for a raw manifest JSON: the
+// JCS (RFC 8785) canonical form with the signature member removed,
+// followed by a newline and the artefact digest. Exported for the
+// signing CLI/tests; it must match Verify exactly.
+func SigningPayload(raw []byte, digest string) ([]byte, error) {
+	return signing.Payload(raw, digest)
 }
 
 // Digest returns the canonical sha256:<hex> form.

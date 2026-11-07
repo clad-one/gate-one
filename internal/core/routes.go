@@ -13,9 +13,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"cladone/gate-one/internal/license"
 	"cladone/gate-one/pkg/pluginmanifest"
+	"cladone/gate-one/pkg/publisherfeed"
 	"cladone/gate-one/pkg/usage"
 )
 
@@ -1654,7 +1656,26 @@ type Config struct {
 	// plugins). Absent = no events are produced.
 	Usage *UsageConfig `json:"usage,omitempty"`
 
+	// PublisherFeed is the optional signed publisher feed (compatible
+	// components + revocations). Absent = no feed is consulted.
+	PublisherFeed *PublisherFeedConfig `json:"publisherFeed,omitempty"`
+
+	// Feed is the parsed, verified feed (nil when absent).
+	Feed *publisherfeed.Feed `json:"-"`
+
 	Routes []Route `json:"routes"`
+}
+
+// PublisherFeedConfig configures the signed publisher feed.
+type PublisherFeedConfig struct {
+	// File is the feed path, relative to the config file.
+	File string `json:"file"`
+	// Keys maps a feed key id to its base64 Ed25519 public key. The
+	// feed signature key id must be present. Provisioned out-of-band.
+	Keys map[string]string `json:"keys"`
+	// Mode is "warn" (default: report only) or "enforce" (apply
+	// revocations).
+	Mode string `json:"mode,omitempty"`
 }
 
 // UsageConfig configures the usage-event bus. Presence of the block
@@ -2289,6 +2310,12 @@ func LoadWithOptions(path string, opts LoadOptions) (*Config, error) {
 	if err := cfg.resolveUsage(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
+
+	// Publisher feed: verified and applied (revocations in enforce mode)
+	// after the trust store is loaded.
+	if err := cfg.resolvePublisherFeed(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
 	// The bbolt state file is relative to the config file, not to the
 	// process working directory (predictable in Docker and systemd).
 	for _, ap := range cfg.AuthProviders {
@@ -2787,6 +2814,127 @@ func (c *Config) validateProviderDefaultApps() error {
 
 // resolveUsage validates the usage-event bus configuration and resolves
 // its environment secrets. Presence of the block enables the bus.
+// resolvePublisherFeed loads and verifies the signed publisher feed,
+// then applies it. In "enforce" mode the feed's revocations are merged
+// into the usage trust store (a revoked digest refuses the plugin); in
+// "warn" mode (default) they are only reported.
+func (c *Config) resolvePublisherFeed(baseDir string) error {
+	pf := c.PublisherFeed
+	if pf == nil {
+		return nil
+	}
+	pf.File = strings.TrimSpace(pf.File)
+	if pf.File == "" {
+		return fmt.Errorf("publisherFeed: file is required")
+	}
+	switch pf.Mode {
+	case "", "warn", "enforce":
+	default:
+		return fmt.Errorf("publisherFeed: mode must be warn or enforce")
+	}
+	if len(pf.Keys) == 0 {
+		return fmt.Errorf("publisherFeed: at least one key is required")
+	}
+	path := pf.File
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(baseDir, path)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("publisherFeed: %w", err)
+	}
+	feed, err := publisherfeed.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("publisherFeed: %w", err)
+	}
+	keyID := strings.TrimSpace(feed.Signature.KeyID)
+	encoded, ok := pf.Keys[keyID]
+	if !ok {
+		return fmt.Errorf(
+			"publisherFeed: signature key %q is not trusted", keyID)
+	}
+	pub, err := pluginmanifest.DecodePublicKey(encoded)
+	if err != nil {
+		return fmt.Errorf("publisherFeed: key %q: %w", keyID, err)
+	}
+	if err := feed.Verify(pub, raw); err != nil {
+		return fmt.Errorf("publisherFeed: %w", err)
+	}
+	expired := feed.Expired(time.Now())
+	if expired && pf.Mode == "enforce" {
+		return fmt.Errorf(
+			"publisherFeed: feed expired at %s", feed.ValidUntil)
+	}
+	mode := pf.Mode
+	if mode == "" {
+		mode = "warn"
+	}
+	if mode == "enforce" && c.Usage != nil {
+		if c.Usage.Trust.RevokedDigests == nil {
+			c.Usage.Trust.RevokedDigests = map[string]bool{}
+		}
+		for d := range feed.RevokedDigests() {
+			c.Usage.Trust.RevokedDigests[d] = true
+		}
+		for k := range feed.RevokedKeys() {
+			delete(c.Usage.Trust.Keys, k)
+		}
+		for _, p := range feed.Plugins {
+			if p.Status != "revoked" {
+				continue
+			}
+			if p.Digest != "" {
+				c.Usage.Trust.RevokedDigests[p.Digest] = true
+			} else {
+				log.Printf(
+					"publisher feed: plugin %s is revoked but has no "+
+						"digest; add its digest to revoke it", p.Name)
+			}
+		}
+	}
+	note := ""
+	if expired {
+		note = " (EXPIRED)"
+	}
+	log.Printf(
+		"publisher feed: %s key=%s generated=%s validUntil=%s mode=%s: "+
+			"%d plugin(s), %d revocation(s)%s",
+		feed.Publisher, keyID, feed.GeneratedAt, feed.ValidUntil, mode,
+		len(feed.Plugins), len(feed.Revocations), note)
+	c.Feed = feed
+	return nil
+}
+
+// VerifyPluginManifests verifies every signed plugin manifest against
+// the (possibly feed-augmented) trust store. Used by `-check`.
+func (c *Config) VerifyPluginManifests() error {
+	if c.Usage == nil {
+		return nil
+	}
+	for i := range c.Usage.Plugins {
+		p := &c.Usage.Plugins[i]
+		if p.Manifest == "" {
+			continue
+		}
+		raw, err := os.ReadFile(p.Manifest)
+		if err != nil {
+			return fmt.Errorf("usage.plugins[%s]: %w", p.Name, err)
+		}
+		m, err := pluginmanifest.Parse(raw)
+		if err != nil {
+			return fmt.Errorf("usage.plugins[%s]: %w", p.Name, err)
+		}
+		artifact, err := os.ReadFile(p.Artifact)
+		if err != nil {
+			return fmt.Errorf("usage.plugins[%s]: %w", p.Name, err)
+		}
+		if err := m.Verify(c.Usage.Trust, raw, artifact); err != nil {
+			return fmt.Errorf("usage.plugins[%s]: %w", p.Name, err)
+		}
+	}
+	return nil
+}
+
 func (c *Config) resolveUsage(baseDir string) error {
 	u := c.Usage
 	if u == nil {

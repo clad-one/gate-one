@@ -92,6 +92,12 @@ func main() {
 		case "version":
 			printVersion()
 			return
+		case "keygen":
+			os.Exit(runKeygen(os.Args[2:]))
+		case "sign":
+			os.Exit(runSign(os.Args[2:]))
+		case "verify":
+			os.Exit(runVerify(os.Args[2:]))
 		}
 	}
 
@@ -182,6 +188,10 @@ func main() {
 	printRoutes(cfg)
 
 	if *check {
+		if err := cfg.VerifyPluginManifests(); err != nil {
+			fmt.Fprintf(os.Stderr, "check: %v\n", err)
+			os.Exit(1)
+		}
 		checkOIDCRefreshTTL(os.Stdout, cfg)
 		fmt.Println("Cladone G.O. Gate One: configuration is valid")
 		return
@@ -424,6 +434,12 @@ func printRoutes(cfg *core.Config) {
 			fmt.Fprintf(out, "  [wildcard %s]", src)
 		}
 		fmt.Fprintln(out)
+	}
+	if f := cfg.Feed; f != nil {
+		fmt.Fprintf(out,
+			"PUBLISHER FEED %s key=%s validUntil=%s plugins=%d revocations=%d\n",
+			f.Publisher, f.Signature.KeyID, f.ValidUntil,
+			len(f.Plugins), len(f.Revocations))
 	}
 	fmt.Fprint(os.Stdout, out.String())
 }
