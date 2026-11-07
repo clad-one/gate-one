@@ -68,6 +68,7 @@ type Event struct {
 	Tenant         string    `json:"tenant,omitempty"`
 	SubjectID      string    `json:"subjectId,omitempty"`
 	Route          string    `json:"route,omitempty"`
+	Host           string    `json:"host,omitempty"`
 	Method         string    `json:"method,omitempty"`
 	Status         int       `json:"status,omitempty"`
 	DurationMS     int64     `json:"durationMs,omitempty"`

@@ -122,6 +122,9 @@ func TestUsageMultiNodeDeliversBothAndOptOut(t *testing.T) {
 		if ev.Route == "/quiet1" || ev.Route == "/quiet2" {
 			t.Fatalf("opt-out route emitted an event: %+v", ev)
 		}
+		if ev.Host != "app.dev.test" {
+			t.Fatalf("host = %q, want app.dev.test", ev.Host)
+		}
 	}
 	if nodes["gw-1"] != "/node1" || nodes["gw-2"] != "/node2" {
 		t.Fatalf("per-node delivery wrong: %+v", nodes)

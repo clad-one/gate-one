@@ -308,6 +308,7 @@ func (u *usageRuntime) emit(
 			Tenant:        tenant,
 			SubjectID:     u.subjectID(providerIssuer(p), ctx.UserID),
 			Route:         routeName,
+			Host:          route.Host,
 			Method:        ctx.Method,
 			Status:        status,
 			DurationMS:    dur.Milliseconds(),
@@ -368,6 +369,7 @@ func (u *usageRuntime) authEvent(
 		SubjectID:     u.subjectID(issuer, ev.UserID),
 		Action:        ev.Action,
 		SessionID:     ev.SessionID,
+		Host:          ev.Host,
 		Status:        status,
 		AuthResult:    result,
 	}

@@ -14,6 +14,7 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -656,15 +657,26 @@ func (o *OIDC) emitAuth(ev AuthEvent) error {
 	return o.eventSink(ev)
 }
 
-func (o *OIDC) auditFailure(result string) {
-	_ = o.emitAuth(AuthEvent{Action: "login_failed", Result: result})
+func (o *OIDC) auditFailure(result, host string) {
+	_ = o.emitAuth(AuthEvent{Action: "login_failed", Result: result, Host: host})
+}
+
+// hostOnly strips an optional :port from a request Host header.
+func hostOnly(h string) string {
+	if h == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		return host
+	}
+	return h
 }
 
 func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	tx, ok := o.tx.read(r)
 	if !ok {
 		log.Printf("OIDC: login transaction expired/missing host=%s", r.Host)
-		o.auditFailure("failed")
+		o.auditFailure("failed", hostOnly(r.Host))
 		o.writeTxExpired(w)
 		return
 	}
@@ -677,20 +689,20 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 		if e == "access_denied" {
 			result = "denied"
 		}
-		o.auditFailure(result)
+		o.auditFailure(result, hostOnly(r.Host))
 		http.Error(w, "authentication refused: "+e, http.StatusUnauthorized)
 		return
 	}
 	state := r.URL.Query().Get("state")
 	if subtle.ConstantTimeCompare(
 		[]byte(tx.State), []byte(state)) != 1 {
-		o.auditFailure("failed")
+		o.auditFailure("failed", hostOnly(r.Host))
 		http.Error(w, "invalid login state", http.StatusBadRequest)
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		o.auditFailure("failed")
+		o.auditFailure("failed", hostOnly(r.Host))
 		http.Error(w, "missing authorization code", http.StatusBadRequest)
 		return
 	}
@@ -702,14 +714,14 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 		exctx, code, oauth2.VerifierOption(tx.Verifier))
 	if err != nil {
 		log.Printf("OIDC token exchange failed: %v", err)
-		o.auditFailure("failed")
+		o.auditFailure("failed", hostOnly(r.Host))
 		http.Error(w, "authentication failed", http.StatusBadGateway)
 		return
 	}
 	rawID, ok := token.Extra("id_token").(string)
 	if !ok || rawID == "" {
 		log.Printf("OIDC token exchange returned no id_token")
-		o.auditFailure("failed")
+		o.auditFailure("failed", hostOnly(r.Host))
 		http.Error(w, "authentication failed", http.StatusBadGateway)
 		return
 	}
@@ -718,14 +730,14 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	idToken, err := o.verifier.Verify(vctx, rawID)
 	if err != nil {
 		log.Printf("OIDC id_token verification failed: %v", err)
-		o.auditFailure("failed")
+		o.auditFailure("failed", hostOnly(r.Host))
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
 	if subtle.ConstantTimeCompare(
 		[]byte(idToken.Nonce), []byte(tx.Nonce)) != 1 {
 		log.Printf("OIDC nonce mismatch")
-		o.auditFailure("failed")
+		o.auditFailure("failed", hostOnly(r.Host))
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
@@ -733,7 +745,7 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	var claims map[string]any
 	if err := idToken.Claims(&claims); err != nil {
 		log.Printf("OIDC claims: %v", err)
-		o.auditFailure("failed")
+		o.auditFailure("failed", hostOnly(r.Host))
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
@@ -765,6 +777,7 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if err := o.emitAuth(AuthEvent{
 		Action: "login", Result: "ok",
 		Provider: o.providerID, Issuer: o.issuer,
+		Host:   hostOnly(r.Host),
 		UserID: id.UserID, Username: id.Username, Email: id.Email,
 		SessionID: id.SessionID,
 	}); err != nil {
@@ -807,6 +820,7 @@ func (o *OIDC) handleLogout(w http.ResponseWriter, r *http.Request) {
 	_ = o.emitAuth(AuthEvent{
 		Action: "logout", Result: result,
 		Provider: o.providerID, Issuer: o.issuer,
+		Host:   hostOnly(r.Host),
 		UserID: id.UserID, Username: id.Username, Email: id.Email,
 		SessionID: id.SessionID,
 	})
@@ -980,6 +994,7 @@ func (o *OIDC) handleBackchannelLogout(
 	_ = o.emitAuth(AuthEvent{
 		Action: "backchannel_logout", Result: "ok",
 		Provider: o.providerID, Issuer: o.issuer,
+		Host:   hostOnly(r.Host),
 		UserID: sub, SessionID: sid, At: now,
 	})
 	w.WriteHeader(http.StatusOK)

@@ -90,6 +90,9 @@ func (v *viewer) unsubscribe(ch chan string) {
 func renderLine(e usage.Event) string {
 	line := fmt.Sprintf("%s %-7s %-6s %3d %s",
 		e.Timestamp.Format("15:04:05"), e.Type, e.Method, e.Status, e.Route)
+	if e.Host != "" {
+		line += " host=" + e.Host
+	}
 	if e.Tenant != "" {
 		line += " tenant=" + e.Tenant
 	}
@@ -176,9 +179,9 @@ func main() {
 		}
 		for _, e := range batch {
 			log.Printf(
-				"event type=%s tenant=%q route=%q method=%q status=%d "+
+				"event type=%s tenant=%q host=%q route=%q method=%q status=%d "+
 					"auth=%q units=%d/%s subject=%q request=%q",
-				e.Event.Type, e.Event.Tenant, e.Event.Route,
+				e.Event.Type, e.Event.Tenant, e.Event.Host, e.Event.Route,
 				e.Event.Method, e.Event.Status, e.Event.AuthResult,
 				e.Event.Units, e.Event.UnitType, e.Event.SubjectID,
 				e.Event.RequestID)

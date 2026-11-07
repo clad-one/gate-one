@@ -139,6 +139,9 @@ func TestUsageRuntimeEmitsErrorEvent(t *testing.T) {
 			if ev.RequestID != "req-1" || ev.InstanceID != "gw-1" {
 				t.Fatalf("event ids = %+v", ev)
 			}
+			if ev.Host != "app.test" {
+				t.Fatalf("host = %q, want app.test", ev.Host)
+			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -206,7 +209,7 @@ func TestUsageRuntimeAuthEvent(t *testing.T) {
 		"mycompany", "https://issuer.test",
 		authn.AuthEvent{
 			Action: "login", Result: "ok",
-			UserID: "sub-1", SessionID: "sid-1",
+			UserID: "sub-1", SessionID: "sid-1", Host: "login.test",
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -219,6 +222,9 @@ func TestUsageRuntimeAuthEvent(t *testing.T) {
 			if ev.Type != usage.TypeAuth || ev.Action != "login" ||
 				ev.SessionID != "sid-1" || ev.Status != 200 {
 				t.Fatalf("event = %+v", ev)
+			}
+			if ev.Host != "login.test" {
+				t.Fatalf("host = %q, want login.test", ev.Host)
 			}
 			if ev.SubjectID == "" ||
 				!strings.HasPrefix(ev.SubjectID, "v1.") {

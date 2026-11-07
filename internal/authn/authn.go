@@ -123,6 +123,7 @@ type AuthEvent struct {
 	Result    string // ok | failed | denied | no_session
 	Provider  string
 	Issuer    string
+	Host      string // host of the request (login host)
 	UserID    string
 	Username  string
 	Email     string

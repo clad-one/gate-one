@@ -61,6 +61,11 @@
       "maxLength": 512,
       "description": "Normalized route pattern, never the raw URL/query."
     },
+    "host": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Request host, without port. Routes are keyed by (host, path): this disambiguates the same path served on several hosts."
+    },
     "method": {
       "type": "string",
       "maxLength": 16,

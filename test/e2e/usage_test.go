@@ -102,8 +102,10 @@ func TestE2E_Usage_MultiNode(t *testing.T) {
 	}
 
 	byNode := map[string][]string{}
+	hostByNode := map[string]string{}
 	for _, ev := range got {
 		byNode[ev.InstanceID] = append(byNode[ev.InstanceID], ev.Route)
+		hostByNode[ev.InstanceID] = ev.Host
 		if ev.Route == "/quiet" {
 			t.Fatalf("opt-out route emitted an event: %+v", ev)
 		}
@@ -113,5 +115,10 @@ func TestE2E_Usage_MultiNode(t *testing.T) {
 	}
 	if len(byNode["gw-2"]) != 1 || byNode["gw-2"][0] != "/from-node2" {
 		t.Fatalf("gw-2 events = %v, want [/from-node2]", byNode["gw-2"])
+	}
+	if hostByNode["gw-1"] != "app.mycompany.test" ||
+		hostByNode["gw-2"] != "app2.mycompany.test" {
+		t.Fatalf("hosts = %v, want app.mycompany.test / app2.mycompany.test",
+			hostByNode)
 	}
 }
