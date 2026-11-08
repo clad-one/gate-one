@@ -40,6 +40,7 @@ type Plugin struct {
 
 // Filters narrows the events delivered to a plugin. Empty = all.
 type Filters struct {
+	Hosts         []string
 	Routes        []string
 	Tenants       []string
 	Methods       []string
@@ -337,6 +338,9 @@ func (f *Filters) matches(ev usage.Event) bool {
 	if f == nil {
 		return true
 	}
+	if len(f.Hosts) > 0 && !matchHost(f.Hosts, ev.Host) {
+		return false
+	}
 	if len(f.Tenants) > 0 && !matchAny(f.Tenants, ev.Tenant) {
 		return false
 	}
@@ -382,6 +386,22 @@ func matchRoute(patterns []string, route string) bool {
 		}
 		if strings.HasSuffix(p, "*") &&
 			strings.HasPrefix(route, strings.TrimSuffix(p, "*")) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchHost matches a host against exact names or glob patterns
+// (path.Match), case-insensitively.
+func matchHost(patterns []string, host string) bool {
+	host = strings.ToLower(host)
+	for _, p := range patterns {
+		p = strings.ToLower(p)
+		if p == host {
+			return true
+		}
+		if ok, _ := path.Match(p, host); ok {
 			return true
 		}
 	}

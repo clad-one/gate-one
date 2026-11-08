@@ -126,7 +126,7 @@ func TestUsageRuntimeEmitsErrorEvent(t *testing.T) {
 		t.Fatalf("admit = %v, %q", adm, full)
 	}
 	u.emit(adm, route, ctx, nil, http.StatusUnauthorized,
-		5*time.Millisecond, 12, "req-1")
+		5*time.Millisecond, 12, nil, "req-1")
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

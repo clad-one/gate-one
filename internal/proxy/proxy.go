@@ -682,6 +682,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		)
 		rp.ModifyResponse = func(resp *http.Response) error {
 			resp.Header.Del(GatewayForbiddenHeader)
+			if st, _ := resp.Request.Context().
+				Value(usageReqKey{}).(*usageReqState); st != nil {
+				st.readResponse(resp)
+			}
 			return chain(resp)
 		}
 
@@ -2374,7 +2378,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// context for the deferred event.
 	usageBaseCtx := ctx
 	var usageAdm *usageAdmission
+	var usageState *usageReqState
 	if g.usage != nil && route.UsageEnabled() {
+		usageState = &usageReqState{}
+		r = r.WithContext(
+			context.WithValue(r.Context(), usageReqKey{}, usageState))
 		var full usage.EventType
 		usageAdm, full = g.usage.admit(route, ctx, g.providerFor(cr))
 		if full != "" {
@@ -2396,7 +2404,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			g.usage.emit(
 				usageAdm, route, eventCtx, g.providerFor(cr),
-				sw.status, time.Since(start), sw.bytes, requestID)
+				sw.status, time.Since(start), sw.bytes, usageState,
+				requestID)
 		}
 	}()
 
@@ -2522,6 +2531,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Set("X-Username", ctx.Username)
 	r.Header.Set("X-Email", ctx.Email)
 	r.Header.Set("X-Roles", strings.Join(ctx.Roles, ","))
+	// Billing hints are trusted only from the BACKEND response; never
+	// forward a client-supplied value.
+	r.Header.Del(headerBillUnits)
+	r.Header.Del(headerBillUnit)
+	r.Header.Del(headerBillable)
 	if g.usage != nil {
 		g.usage.setSubjectHeader(r, ctx, g.providerFor(cr))
 	}

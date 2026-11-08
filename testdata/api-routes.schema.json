@@ -599,6 +599,69 @@
             }
           }
         },
+        "capture": {
+          "type": "array",
+          "description": "Opt-in capture of allow-listed query parameters and JSON body fields into matching events (default: billing). Scoped by host/route/method; values are capped and sensitive names skipped.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hosts": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Request hosts or glob patterns to capture. Empty = all hosts."
+              },
+              "routes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Request path patterns to capture. Empty = all paths."
+              },
+              "methods": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "HTTP methods to capture. Empty = all methods."
+              },
+              "types": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Event types to attach attrs to. Default: [billing]."
+              },
+              "query": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Allow-listed query parameter names whose values are copied as q.<name>. Sensitive names are skipped."
+              },
+              "body": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": ["json"],
+                    "description": "Body parser; only json is supported."
+                  },
+                  "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Dotted JSON paths ($.a.b or a.b) whose scalar values are copied as b.<path>."
+                  },
+                  "maxBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Skip body capture when the raw body is larger. 0 = no limit."
+                  }
+                },
+                "description": "Optional JSON-body extraction."
+              },
+              "maxAttrsBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2048,
+                "description": "Total attrs budget in bytes. Default 1024, clamped to 2048."
+              }
+            }
+          }
+        },
         "plugins": {
           "type": "array",
           "minItems": 1,
@@ -646,6 +709,13 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
+                  "hosts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Request hosts or glob patterns to include (e.g. app.example.com, *.example.com). Empty = all hosts."
+                  },
                   "routes": {
                     "type": "array",
                     "items": {
@@ -681,7 +751,7 @@
                     "description": "Sampling rate for matching events, 0..1. Default 1.0."
                   }
                 },
-                "description": "Narrow the subscription by route, tenant, method, status class or sample rate."
+                "description": "Narrow the subscription by host, route, tenant, method, status class or sample rate. Route patterns match the path only, so use hosts to avoid matching the same path on every host."
               },
               "maxLagBytes": {
                 "type": "integer",

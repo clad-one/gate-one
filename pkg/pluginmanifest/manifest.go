@@ -53,6 +53,7 @@ type EventSubscription struct {
 
 // EventFilters narrows the subscription; empty fields mean "all".
 type EventFilters struct {
+	Hosts         []string `json:"hosts,omitempty"`
 	Routes        []string `json:"routes,omitempty"`
 	Tenants       []string `json:"tenants,omitempty"`
 	Methods       []string `json:"methods,omitempty"`

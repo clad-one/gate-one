@@ -108,6 +108,22 @@
       "maxLength": 256,
       "description": "Free-text context for audit events (plugin name, reload error). Never PII."
     },
+    "attrs": {
+      "type": "object",
+      "maxProperties": 8,
+      "propertyNames": {
+        "maxLength": 32
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "description": "Bounded billing attributes captured from allow-listed query/body fields (or backend hints). Sensitive names are skipped; values are capped."
+    },
+    "attrsTruncated": {
+      "type": "boolean",
+      "description": "True when attrs were capped (too many keys, or a key/value/total exceeded the limit)."
+    },
     "sessionId": {
       "type": "string",
       "maxLength": 128,

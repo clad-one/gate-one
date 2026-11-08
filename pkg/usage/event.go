@@ -60,28 +60,30 @@ const (
 
 // Event is the flat usage record emitted to subscribers.
 type Event struct {
-	SchemaVersion  int       `json:"schemaVersion"`
-	Type           EventType `json:"type"`
-	Timestamp      time.Time `json:"ts"`
-	InstanceID     string    `json:"instanceId"`
-	Epoch          string    `json:"epoch"`
-	Tenant         string    `json:"tenant,omitempty"`
-	SubjectID      string    `json:"subjectId,omitempty"`
-	Route          string    `json:"route,omitempty"`
-	Host           string    `json:"host,omitempty"`
-	Method         string    `json:"method,omitempty"`
-	Status         int       `json:"status,omitempty"`
-	DurationMS     int64     `json:"durationMs,omitempty"`
-	Bytes          int64     `json:"bytes,omitempty"`
-	AuthResult     string    `json:"authResult,omitempty"`
-	MCPTool        string    `json:"mcpTool,omitempty"`
-	Action         string    `json:"action,omitempty"`
-	Detail         string    `json:"detail,omitempty"`
-	SessionID      string    `json:"sessionId,omitempty"`
-	Units          int64     `json:"units,omitempty"`
-	UnitType       UnitType  `json:"unitType,omitempty"`
-	RequestID      string    `json:"requestId,omitempty"`
-	IdempotencyKey string    `json:"idempotencyKey,omitempty"`
+	SchemaVersion  int               `json:"schemaVersion"`
+	Type           EventType         `json:"type"`
+	Timestamp      time.Time         `json:"ts"`
+	InstanceID     string            `json:"instanceId"`
+	Epoch          string            `json:"epoch"`
+	Tenant         string            `json:"tenant,omitempty"`
+	SubjectID      string            `json:"subjectId,omitempty"`
+	Route          string            `json:"route,omitempty"`
+	Host           string            `json:"host,omitempty"`
+	Method         string            `json:"method,omitempty"`
+	Status         int               `json:"status,omitempty"`
+	DurationMS     int64             `json:"durationMs,omitempty"`
+	Bytes          int64             `json:"bytes,omitempty"`
+	AuthResult     string            `json:"authResult,omitempty"`
+	MCPTool        string            `json:"mcpTool,omitempty"`
+	Action         string            `json:"action,omitempty"`
+	Detail         string            `json:"detail,omitempty"`
+	Attrs          map[string]string `json:"attrs,omitempty"`
+	AttrsTruncated bool              `json:"attrsTruncated,omitempty"`
+	SessionID      string            `json:"sessionId,omitempty"`
+	Units          int64             `json:"units,omitempty"`
+	UnitType       UnitType          `json:"unitType,omitempty"`
+	RequestID      string            `json:"requestId,omitempty"`
+	IdempotencyKey string            `json:"idempotencyKey,omitempty"`
 }
 
 // SubjectID derives the opaque, deployment-scoped user identifier:

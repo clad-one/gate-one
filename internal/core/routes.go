@@ -1714,6 +1714,10 @@ type UsageConfig struct {
 	PluginsDir string `json:"pluginsDir,omitempty"`
 	// Plugins are the out-of-process event consumers.
 	Plugins []UsagePluginConfig `json:"plugins,omitempty"`
+	// Capture selects which query parameters and JSON body fields are
+	// copied into matching events (default: billing), scoped by
+	// host/route/method. Values are capped and sensitive names skipped.
+	Capture []UsageCapture `json:"capture,omitempty"`
 
 	// Trust is the parsed trust store.
 	Trust pluginmanifest.TrustStore `json:"-"`
@@ -1748,8 +1752,28 @@ type UsagePluginConfig struct {
 	Artifact string `json:"artifact,omitempty"`
 }
 
+// UsageCapture opts a matching request into extra event attributes. It
+// is scoped by host/route/method and normally applies to billing events.
+type UsageCapture struct {
+	Hosts         []string          `json:"hosts,omitempty"`
+	Routes        []string          `json:"routes,omitempty"`
+	Methods       []string          `json:"methods,omitempty"`
+	Types         []string          `json:"types,omitempty"` // default: billing
+	Query         []string          `json:"query,omitempty"` // allow-list of names (values copied)
+	Body          *UsageBodyCapture `json:"body,omitempty"`
+	MaxAttrsBytes int               `json:"maxAttrsBytes,omitempty"` // default 1024, max 2048
+}
+
+// UsageBodyCapture is the optional JSON-body part of a capture rule.
+type UsageBodyCapture struct {
+	Format   string   `json:"format,omitempty"` // json (default)
+	Paths    []string `json:"paths,omitempty"`  // $.a.b or a.b
+	MaxBytes int      `json:"maxBytes,omitempty"`
+}
+
 // UsageFilters narrows a plugin subscription. Empty = all.
 type UsageFilters struct {
+	Hosts         []string `json:"hosts,omitempty"`
 	Routes        []string `json:"routes,omitempty"`
 	Tenants       []string `json:"tenants,omitempty"`
 	Methods       []string `json:"methods,omitempty"`
@@ -3196,6 +3220,48 @@ func (c *Config) resolveUsage(baseDir string) error {
 			return fmt.Errorf(
 				"usage.plugins[%s]: filters.sampleRate must be 0..1",
 				p.Name)
+		}
+	}
+	for i := range u.Capture {
+		c := &u.Capture[i]
+		if len(c.Types) == 0 {
+			c.Types = []string{string(usage.TypeBilling)}
+		}
+		for _, t := range c.Types {
+			if !usage.ValidEventType(usage.EventType(t)) {
+				return fmt.Errorf("usage.capture[%d]: unknown type %q", i, t)
+			}
+			if _, ok := u.Types[t]; !ok {
+				return fmt.Errorf(
+					"usage.capture[%d]: type %q is not configured in usage.types",
+					i, t)
+			}
+		}
+		if c.Body != nil {
+			if c.Body.Format != "" && c.Body.Format != "json" {
+				return fmt.Errorf(
+					"usage.capture[%d].body.format must be json", i)
+			}
+			if c.Body.MaxBytes < 0 {
+				return fmt.Errorf(
+					"usage.capture[%d].body.maxBytes must be >= 0", i)
+			}
+		}
+		if c.MaxAttrsBytes < 0 {
+			return fmt.Errorf(
+				"usage.capture[%d].maxAttrsBytes must be >= 0", i)
+		}
+		if c.MaxAttrsBytes == 0 {
+			c.MaxAttrsBytes = 1024
+		}
+		if c.MaxAttrsBytes > 2048 {
+			c.MaxAttrsBytes = 2048
+		}
+		for _, q := range c.Query {
+			if strings.TrimSpace(q) == "" {
+				return fmt.Errorf(
+					"usage.capture[%d].query: empty parameter name", i)
+			}
 		}
 	}
 	return nil
