@@ -771,6 +771,20 @@
     var body = badgeEl.lastChild;
     body.textContent = "";
     var hasChips = false;
+    // roles / scopes chips (USERBADGE.roles / .scopes) FIRST: the
+    // compact hover view is clipped by max-height, so the chips must be
+    // at the top to stay visible (the claims follow). Same data the
+    // when.conditions and the data-gtw-roles gating see — read once from
+    // the /__gate-one/auth probe.
+    if (sessionRoles.length) {
+      var rl = badgeItems(USERBADGE.roles, sessionRoles);
+      if (rl.length) { body.appendChild(chipsRow("roles", rl)); hasChips = true; }
+    }
+    if (sessionScopes.length) {
+      var sc = badgeItems(USERBADGE.scopes, sessionScopes);
+      if (sc.length) { body.appendChild(chipsRow("scopes", sc)); hasChips = true; }
+    }
+    badgeEl.classList.toggle("cladone-userbadge-with-chips", hasChips);
     // claims: true = every claim the probe returned; false = none;
     // a list = only those (missing omitted) — the historical form.
     var claimNames = badgeItems(
@@ -784,18 +798,6 @@
       row.textContent = claimNames[i] + ": " + String(v);
       body.appendChild(row);
     }
-    // roles / scopes chips (USERBADGE.roles / .scopes): the same
-    // data the when.conditions and the data-gtw-roles gating see —
-    // read once from the /__gate-one/auth probe.
-    if (sessionRoles.length) {
-      var rl = badgeItems(USERBADGE.roles, sessionRoles);
-      if (rl.length) { body.appendChild(chipsRow("roles", rl)); hasChips = true; }
-    }
-    if (sessionScopes.length) {
-      var sc = badgeItems(USERBADGE.scopes, sessionScopes);
-      if (sc.length) { body.appendChild(chipsRow("scopes", sc)); hasChips = true; }
-    }
-    badgeEl.classList.toggle("cladone-userbadge-with-chips", hasChips);
     // Links: the FINAL list merged by the gateway (account, services
     // when the deployment delegates, then app-specific). The guard
     // does not know the connectors and never merges/dedups.

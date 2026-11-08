@@ -43,7 +43,6 @@ func TestGuardUsesClassesNotInlineStyles(t *testing.T) {
 		".cladone-badge-logout",
 		".cladone-badge-links",
 		".cladone-badge-link",
-		".cladone-userbadge-with-chips",
 		".cladone-userbadge-snoozed",
 		":hover:not(.cladone-userbadge-open)",
 		"white-space:normal",
@@ -52,6 +51,20 @@ func TestGuardUsesClassesNotInlineStyles(t *testing.T) {
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("guard stylesheet missing %q", want)
+		}
+	}
+
+	// The compact hover view must clip with max-height only. Hiding
+	// content (display:none) shrinks the box under the cursor, flips
+	// :hover in a loop and makes the badge flicker when the click lands
+	// in the lower part (regression guard).
+	for _, bad := range []string{
+		":not(.cladone-userbadge-open) .cladone-badge-claim",
+		":not(.cladone-userbadge-open) .cladone-badge-links",
+		":not(.cladone-userbadge-open) .cladone-badge-logout",
+	} {
+		if strings.Contains(css, bad) {
+			t.Errorf("compact hover hides content (%q): the badge would flicker", bad)
 		}
 	}
 }

@@ -16,14 +16,12 @@ html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}
 .cladone-userbadge.cladone-userbadge-open .cladone-userbadge-body{max-height:calc(34em - 2.3em);overflow-y:auto}
 .cladone-userbadge-login{cursor:pointer}
 .cladone-userbadge-near,.cladone-userbadge-reveal{opacity:1;pointer-events:auto}
+/* Compact preview on hover/focus: clip with max-height only. Do NOT
+   hide content here (display:none): shrinking the box under the cursor
+   flips :hover in a loop and the badge flickers when the click lands in
+   the lower part. */
 .cladone-userbadge:hover:not(.cladone-userbadge-open),
 .cladone-userbadge:focus-within:not(.cladone-userbadge-open){max-height:6.6em !important}
-.cladone-userbadge:hover:not(.cladone-userbadge-open) .cladone-badge-links,
-.cladone-userbadge:hover:not(.cladone-userbadge-open) .cladone-badge-logout,
-.cladone-userbadge:focus-within:not(.cladone-userbadge-open) .cladone-badge-links,
-.cladone-userbadge:focus-within:not(.cladone-userbadge-open) .cladone-badge-logout{display:none}
-.cladone-userbadge:hover:not(.cladone-userbadge-open).cladone-userbadge-with-chips .cladone-badge-claim,
-.cladone-userbadge:focus-within:not(.cladone-userbadge-open).cladone-userbadge-with-chips .cladone-badge-claim{display:none}
 .cladone-userbadge.cladone-userbadge-snoozed{opacity:0 !important;max-height:0 !important;pointer-events:none !important;border:0}
 .cladone-userbadge-body{padding:.46em 0 .15em 0}
 .cladone-badge-row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
