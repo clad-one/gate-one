@@ -62,8 +62,12 @@ make init           # generates the secrets and renders config/
 make up             # Traefik + Gate One + broker + backend
 ```
 
-`make init` creates `config/broker.json`, `config/routes.json`,
-`config/routes.ha.json`, `config/idp.json` and a broker signing key.
+`make init` creates `config/broker.json` (Google), `config/broker.demo.json`
+(Google + demo IdP), `config/routes.json`, `config/routes.ha.json`,
+`config/idp.json` and a broker signing key.
+
+`make up` needs Google credentials: the broker refuses to start without at
+least one usable upstream, and says so. That is why the demo comes first.
 
 ## 4. Smoke test with the demo IdP
 

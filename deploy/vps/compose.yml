@@ -23,6 +23,7 @@ x-go-tool: &go-tool
     - ${BIN_DIR:-./bin}/cladone-auth:/bin/cladone-auth:ro
     - ${BIN_DIR:-./bin}/demo-idp:/bin/demo-idp:ro
     - ./config:/config:ro
+    - gate-one-state:/state
 
 services:
   traefik:
@@ -55,7 +56,7 @@ services:
   broker:
     <<: *go-tool
     entrypoint: ["/bin/cladone-auth"]
-    command: ["-config", "/config/broker.json"]
+    command: ["-config", "${BROKER_CONFIG:-/config/broker.json}"]
     environment:
       GATE_ONE_OIDC_CLIENT_SECRET: ${GATE_ONE_OIDC_CLIENT_SECRET}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -193,3 +194,6 @@ networks:
     name: gate-one-vps_proxy
   internal:
     name: gate-one-vps_internal
+
+volumes:
+  gate-one-state:

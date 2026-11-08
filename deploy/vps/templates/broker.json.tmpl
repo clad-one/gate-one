@@ -20,17 +20,14 @@
           "clientSecretEnv": "GOOGLE_CLIENT_SECRET",
           "displayName": "Google",
           "optional": true
-        },
-        "demo": {
-          "issuer": "https://idp.__DOMAIN__",
-          "clientIdEnv": "DEMO_IDP_CLIENT_ID",
-          "clientSecretEnv": "DEMO_IDP_CLIENT_SECRET",
-          "displayName": "Demo IdP",
-          "optional": true
         }
       },
-      "keyFiles": ["/config/broker.key"],
-      "defaultRoles": ["user"],
+      "keyFiles": [
+        "/config/broker.key"
+      ],
+      "defaultRoles": [
+        "user"
+      ],
       "sessionTtlSeconds": 43200
     }
   ]

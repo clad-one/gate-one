@@ -29,6 +29,7 @@ render() {
 }
 
 render templates/broker.json.tmpl config/broker.json
+render templates/broker.demo.json.tmpl config/broker.demo.json
 render templates/routes.json.tmpl config/routes.json
 render templates/routes.ha.json.tmpl config/routes.ha.json
 cp templates/idp.json config/idp.json

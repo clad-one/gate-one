@@ -7,6 +7,10 @@
     "loginBaseUrl": "https://login.__DOMAIN__",
     "cookieDomain": "__DOMAIN__",
     "roleClaims": ["roles", "groups"],
+    "sessionStore": {
+      "type": "bolt",
+      "path": "/state/gate-one-state.db"
+    },
     "sessionKeyEnv": "GATE_ONE_SESSION_KEY",
     "sessionTtlSeconds": 43200,
     "revocationTtlSeconds": 2592000
