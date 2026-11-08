@@ -133,6 +133,12 @@ type Gateway struct {
 	// upstream.tokenBroker.
 	tokenBroker *tokenbroker.Client
 
+	// tbBrowser proxies the token broker's browser routes
+	// (/connections, /connect/*, /oauth/*/callback) on tbBrowserHost,
+	// injecting the authenticated identity. nil = disabled.
+	tbBrowser     *httputil.ReverseProxy
+	tbBrowserHost string
+
 	// usage is the optional usage-event bus (WAL + out-of-process
 	// extension plugins). nil = no events produced.
 	usage *usageRuntime
@@ -774,6 +780,16 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 	gw.routes = routes
 	gw.config = cfg
 	gw.tokenBroker = broker
+	if broker != nil && cfg.TokenBroker != nil && cfg.TokenBroker.BrowserHost != "" {
+		rp, err := newTokenBrokerBrowser(
+			cfg.TokenBroker.URL, cfg.TokenBroker.SecretValue,
+			cfg.TokenBroker.BrowserHost)
+		if err != nil {
+			return nil, err
+		}
+		gw.tbBrowser = rp
+		gw.tbBrowserHost = strings.ToLower(strings.TrimSpace(cfg.TokenBroker.BrowserHost))
+	}
 
 	if cfg.Usage != nil {
 		ur, err := newUsageRuntime(cfg.Usage, cfg.License)
@@ -2180,6 +2196,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	// Token broker browser routes (Services page, connect, OAuth
+	// callback): served by Gate One when tokenBroker.browserHost is set,
+	// authenticated via the provider that owns the host.
+	if g.serveTokenBrokerBrowser(w, r, ctx) {
+		return
 	}
 
 	// MCP OAuth protected-resource metadata (per access unit; the

@@ -463,13 +463,17 @@
         },
         "links": {
           "type": "object",
-          "description": "Links owned by the token broker, displayed in the user badge. services is the connections page (auth-bridge proxies it today): it is rendered only when an exposed route declares upstream.tokenBroker (computed by the gateway).",
+          "description": "Links owned by the token broker, displayed in the user badge. services is the connections page: it is rendered only when an exposed route declares upstream.tokenBroker (computed by the gateway).",
           "additionalProperties": false,
           "properties": {
             "services": {
               "$ref": "#/definitions/userLink"
             }
           }
+        },
+        "browserHost": {
+          "type": "string",
+          "description": "Host on which Gate One serves the token broker's browser routes (/connections, /connect/*, /oauth/*/callback), injecting the authenticated identity. Empty = derived from links.services.url; if that is absent too, Gate One does not serve them (the auth layer may, as auth-bridge does)."
         }
       }
     },

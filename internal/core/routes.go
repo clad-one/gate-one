@@ -1853,6 +1853,12 @@ type TokenBrokerConfig struct {
 	// badge. services is only rendered when an exposed route delegates
 	// (computed by the gateway).
 	Links *TokenBrokerLinks `json:"links,omitempty"`
+	// BrowserHost: the host on which Gate One serves the token broker's
+	// browser routes (/connections, /connect/*, /oauth/*/callback) with
+	// the authenticated identity injected. Empty = derived from
+	// links.services.url; if that is absent too, Gate One does not serve
+	// them (the auth layer may, as auth-bridge does).
+	BrowserHost string `json:"browserHost,omitempty"`
 }
 
 // OIDCConfig: the platform's IdP (top-level block). loginUrl =
@@ -4408,6 +4414,17 @@ func (c *Config) resolveTokenBroker() error {
 			tb.SecretEnv)
 	}
 	tb.SecretValue = secret
+
+	// BrowserHost: where Gate One serves the token broker's browser
+	// routes. Derived from the Services link when unset.
+	tb.BrowserHost = strings.TrimSpace(tb.BrowserHost)
+	if tb.BrowserHost == "" && tb.Links != nil && tb.Links.Services != nil {
+		if lu, err := url.Parse(strings.TrimSpace(tb.Links.Services.URL)); err == nil &&
+			lu.Host != "" {
+			tb.BrowserHost = lu.Hostname()
+		}
+	}
+	tb.BrowserHost = strings.ToLower(strings.TrimSpace(tb.BrowserHost))
 	return nil
 }
 
