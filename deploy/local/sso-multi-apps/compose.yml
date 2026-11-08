@@ -13,6 +13,7 @@ x-go-tool: &go-tool
     - ${BIN_DIR:-./bin}/gate-one:/bin/gate-one:ro
     - ${BIN_DIR:-./bin}/demo-idp:/bin/demo-idp:ro
     - ${DEMO_CONFIG_DIR:-./config}:/config:ro
+    - gate-one-state:/state
 
 x-backend: &backend
   image: python:3.12-alpine
@@ -91,3 +92,6 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+
+volumes:
+  gate-one-state:

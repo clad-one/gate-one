@@ -36,9 +36,6 @@
       "allowedDomains": [
         "contoso.test"
       ],
-      "adminEmails": [
-        "bob@contoso.test"
-      ],
       "groupRoles": {
         "users": [
           "user"

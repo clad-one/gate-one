@@ -6,9 +6,15 @@
     "clientSecretEnv": "DEMO_OIDC_SECRET",
     "loginBaseUrl": "http://login.demo.localhost:8080",
     "cookieDomain": "demo.localhost",
-    "roleClaims": ["groups"],
+    "roleClaims": [
+      "groups"
+    ],
     "sessionKeyEnv": "GATE_ONE_SESSION_KEY",
-    "sessionTtlSeconds": 1800
+    "sessionTtlSeconds": 1800,
+    "sessionStore": {
+      "type": "bolt",
+      "path": "/state/gate-one-state.db"
+    }
   },
   "routes": [
     {
@@ -19,7 +25,10 @@
       "auth": {},
       "userBadge": {
         "position": "right",
-        "claims": ["preferred_username", "email"],
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
         "roles": true,
         "logoutLabel": "Sign out"
       }

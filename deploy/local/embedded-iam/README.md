@@ -76,8 +76,13 @@ user, then edit the grants while it runs:
 
 ```bash
 ./run.sh user list -tenant demo
-./run.sh user set  -tenant demo -email alice@demo.test -roles admin,editor
+./run.sh user set  -tenant demo \
+    -issuer http://idp.demo.localhost:9000 -sub idp-alice \
+    -roles admin,editor
 ```
+
+A federated user is looked up by issuer and subject (both shown by
+`user list`) or by `-id`; `-email` targets local accounts.
 
 Sign out and back in, and the backend shows the new roles. Grants are
 stored on the user and apply to local accounts too.

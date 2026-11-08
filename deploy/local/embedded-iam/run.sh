@@ -44,7 +44,9 @@ X-Email, X-Roles, ...). Rights come from two places:
   * per-user grants, editable live after the first sign-in:
 
       ./run.sh user list -tenant demo
-      ./run.sh user set  -tenant demo -email alice@demo.test -roles admin,editor
+      ./run.sh user set  -tenant demo \
+          -issuer http://idp.demo.localhost:9000 -sub idp-alice \
+          -roles admin,editor
 
     Sign out and back in to see the new roles.
 

@@ -133,8 +133,11 @@ bbolt store for a single replica.
 ```bash
 docker compose exec broker cladone-auth user list -tenant main
 docker compose exec broker cladone-auth user set  -tenant main \
-    -email alice@example.com -roles admin
+    -issuer https://accounts.google.com -sub '<google-sub>' -roles admin
 ```
+
+A federated user is looked up by issuer and subject (both shown by
+`user list`) or by `-id`; `-email` targets local accounts.
 
 Grant changes apply at the next login. A federated user appears after
 their first sign-in.
