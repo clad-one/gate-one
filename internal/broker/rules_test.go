@@ -98,6 +98,27 @@ func TestRuleAND(t *testing.T) {
 	}
 }
 
+func TestKeepTransform(t *testing.T) {
+	cases := []struct{ in, spec, want string }{
+		{"a@b@c", "keep:@:0", "a"},
+		{"a@b@c", "keep:@:1", "b"},
+		{"a@b@c", "keep:@:-1", "c"},
+		{"a@b@c", "keep:@:0:-2", "a@b"},
+		{"a@b@c", "keep:@:1:", "b@c"},
+		{"a@b@c", "keep:@:0:-1", "a@b@c"},
+		{"a@b@c", "keep:@:0:9", "a@b@c"}, // to clamped
+		{"a@b@c", "keep:@:5", ""},        // from out of range
+		{"team-support", "keep:-:-1", "support"},
+		{"alice@example.com", "keep:@:-1", "example.com"},
+	}
+	for _, c := range cases {
+		if got := applyTransform(c.in, c.spec); got != c.want {
+			t.Errorf("applyTransform(%q,%q) = %q, want %q",
+				c.in, c.spec, got, c.want)
+		}
+	}
+}
+
 func TestRuleWhenParsesArray(t *testing.T) {
 	var r Rule
 	if err := json.Unmarshal([]byte(

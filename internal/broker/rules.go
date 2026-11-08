@@ -216,30 +216,61 @@ func applyTransform(v, t string) string {
 		}
 		return strings.ReplaceAll(v, rest[:i], rest[i+1:])
 	case strings.HasPrefix(t, "keep:"):
-		rest := strings.TrimPrefix(t, "keep:")
-		i := strings.Index(rest, ":")
-		if i < 0 {
-			return v
-		}
-		sep := rest[:i]
-		if sep == "" {
-			return v
-		}
-		n, err := strconv.Atoi(strings.TrimSpace(rest[i+1:]))
-		if err != nil {
-			return v
-		}
-		parts := strings.Split(v, sep)
-		if n < 0 {
-			n += len(parts)
-		}
-		if n < 0 || n >= len(parts) {
-			return ""
-		}
-		return parts[n]
+		return applyKeep(v, strings.TrimPrefix(t, "keep:"))
 	default:
 		return v
 	}
+}
+
+// applyKeep implements keep:<sep>:<from>[:<to>]: keep the fields
+// from..to (negative counts from the end), joined by <sep>. A single
+// index keeps exactly one field. Out-of-range indices are clamped.
+func applyKeep(v, spec string) string {
+	parts := strings.SplitN(spec, ":", 3)
+	if len(parts) < 2 {
+		return v
+	}
+	sep := parts[0]
+	if sep == "" {
+		return v
+	}
+	from, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return v
+	}
+	fields := strings.Split(v, sep)
+	lo := normIndex(from, len(fields))
+	if len(parts) == 2 {
+		if lo < 0 || lo >= len(fields) {
+			return ""
+		}
+		return fields[lo]
+	}
+	hi := len(fields) - 1
+	if strings.TrimSpace(parts[2]) != "" {
+		to, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+		if err != nil {
+			return v
+		}
+		hi = normIndex(to, len(fields))
+	}
+	if lo < 0 {
+		lo = 0
+	}
+	if hi >= len(fields) {
+		hi = len(fields) - 1
+	}
+	if lo > hi || lo >= len(fields) {
+		return ""
+	}
+	return strings.Join(fields[lo:hi+1], sep)
+}
+
+func normIndex(n, length int) int {
+	if n < 0 {
+		return n + length
+	}
+	return n
 }
 
 // validateTransform rejects a malformed transform at load time.
@@ -257,13 +288,18 @@ func validateTransform(t string) error {
 		}
 		return nil
 	case strings.HasPrefix(t, "keep:"):
-		rest := strings.TrimPrefix(t, "keep:")
-		i := strings.Index(rest, ":")
-		if i <= 0 {
-			return fmt.Errorf("keep needs <sep>:<n>")
+		spec := strings.TrimPrefix(t, "keep:")
+		parts := strings.SplitN(spec, ":", 3)
+		if len(parts) < 2 || parts[0] == "" {
+			return fmt.Errorf("keep needs <sep>:<from>[:<to>]")
 		}
-		if _, err := strconv.Atoi(strings.TrimSpace(rest[i+1:])); err != nil {
-			return fmt.Errorf("keep index must be an integer")
+		if _, err := strconv.Atoi(strings.TrimSpace(parts[1])); err != nil {
+			return fmt.Errorf("keep from must be an integer")
+		}
+		if len(parts) == 3 && strings.TrimSpace(parts[2]) != "" {
+			if _, err := strconv.Atoi(strings.TrimSpace(parts[2])); err != nil {
+				return fmt.Errorf("keep to must be an integer")
+			}
 		}
 		return nil
 	default:
