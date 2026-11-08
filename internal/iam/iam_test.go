@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -68,7 +68,7 @@ func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
 		t.Fatalf("google location = %s", googleURL)
 	}
 
-	// Fake Google auto-consents and redirects to the broker callback.
+	// Fake Google auto-consents and redirects to the IAM callback.
 	resp, err = client.Get(googleURL.String())
 	if err != nil {
 		t.Fatal(err)
@@ -82,14 +82,14 @@ func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Broker callback exchanges the code and redirects to the client.
+	// IAM callback exchanges the code and redirects to the client.
 	resp, err = client.Get(cb.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("broker callback = %d: %s", resp.StatusCode, resp.Header.Get("Location"))
+		t.Fatalf("IAM callback = %d: %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	clientRedirect, err := url.Parse(resp.Header.Get("Location"))
 	if err != nil {
@@ -102,16 +102,16 @@ func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
 		t.Fatalf("state = %q", clientRedirect.Query().Get("state"))
 	}
 	if len(resp.Cookies()) == 0 {
-		t.Fatal("broker did not set its SSO session cookie")
+		t.Fatal("the IAM did not set its SSO session cookie")
 	}
-	brokerCode := clientRedirect.Query().Get("code")
-	if brokerCode == "" {
-		t.Fatal("no broker code")
+	iamCode := clientRedirect.Query().Get("code")
+	if iamCode == "" {
+		t.Fatal("no IAM code")
 	}
 
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
-	form.Set("code", brokerCode)
+	form.Set("code", iamCode)
 	form.Set("client_id", "cladone-go")
 	form.Set("client_secret", "secret")
 	form.Set("redirect_uri", redirectURI)
@@ -160,9 +160,9 @@ func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
 }
 
 func TestAC_AUTH_09_IdentityAdapterConformance(t *testing.T) {
-	// The broker's upstream adapter is the OIDC/Google adapter; the
+	// The IAM upstream adapter is the OIDC/Google adapter; the
 	// generic conformance suite is exercised in pkg/identityadapter.
-	// Here we assert the broker emits a conformant discovery + JWKS.
+	// Here we assert the IAM emits a conformant discovery + JWKS.
 	google := newFakeGoogle(t)
 	b, srv := newTestBroker(t, google)
 	_ = b
@@ -258,7 +258,7 @@ func TestAC_AUTH_13_BrokerRejectsBadRedirect(t *testing.T) {
 	}
 }
 
-func newTestBroker(t *testing.T, google *fakeGoogle) (*Broker, *httptest.Server) {
+func newTestBroker(t *testing.T, google *fakeGoogle) (*IAM, *httptest.Server) {
 	t.Helper()
 	cfg := &Config{
 		PublicURL: "http://placeholder.test",
@@ -363,7 +363,7 @@ func TestAC_AUTH_18_BrokerRedisStore(t *testing.T) {
 		t.Fatal("flow was not consumed")
 	}
 
-	// A second broker instance sees the same code store.
+	// A second IAM instance sees the same code store.
 	b2, err := New(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -378,7 +378,7 @@ func TestAC_AUTH_18_BrokerRedisStore(t *testing.T) {
 		t.Fatalf("code across instances = %+v, %v", gotCode, err)
 	}
 
-	// Broker revocation is readable by Gate One's shared store.
+	// IAM revocation is readable by Gate One's shared store.
 	if err := b.Revoke(ctx, "mycompany", "sid-1", "", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestAC_AUTH_18_BrokerRedisStore(t *testing.T) {
 
 func testBrokerConfig(google *fakeGoogle) *Config {
 	return &Config{
-		PublicURL: "https://broker.test",
+		PublicURL: "https://iam.test",
 		Tenants: []Tenant{{
 			ID:           "mycompany",
 			ClientID:     "cladone-go",
@@ -421,7 +421,7 @@ func TestAC_AUTH_09_GoogleAdapterConformance(t *testing.T) {
 	google := newFakeGoogle(t)
 	tnt := testBrokerConfig(google).Tenants[0]
 	a, err := newOIDCAdapter(context.Background(), tnt,
-		"https://broker.test", nil, time.Now, rand.Reader)
+		"https://iam.test", nil, time.Now, rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,14 +432,14 @@ func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
 	google := newFakeGoogle(t)
 	tnt := testBrokerConfig(google).Tenants[0]
 	a, err := newOIDCAdapter(context.Background(), tnt,
-		"https://broker.test", nil, time.Now, rand.Reader)
+		"https://iam.test", nil, time.Now, rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	step, err := a.Start(context.Background(), identityadapter.Request{
 		Tenant: "mycompany",
 		Params: map[string]string{
-			"broker_state": "flow-1",
+			"iam_state": "flow-1",
 			"nonce":        "nonce-adapter",
 		},
 		Header: map[string][]string{},
@@ -450,7 +450,7 @@ func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
 	if step.Kind != identityadapter.StepRedirect {
 		t.Fatalf("step = %s", step.Kind)
 	}
-	// Fake Google stores the code/nonce and redirects to the broker.
+	// Fake Google stores the code/nonce and redirects to the IAM.
 	client := &http.Client{CheckRedirect: func(
 		*http.Request, []*http.Request,
 	) error {
@@ -522,7 +522,7 @@ func TestAC_AUTH_20_BrokerKeyRotation(t *testing.T) {
 	if got := len(mergeJWKS(rt.keys).Keys); got != 2 {
 		t.Fatalf("jwks keys = %d", got)
 	}
-	claims := map[string]any{"iss": "https://broker.test/t/mycompany", "sub": "u"}
+	claims := map[string]any{"iss": "https://iam.test/t/mycompany", "sub": "u"}
 	tok, err := rt.activeKey().sign(claims)
 	if err != nil {
 		t.Fatal(err)
@@ -606,7 +606,7 @@ func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
 		t.Fatalf("flow sid = %q, want sid-shared", f.SID)
 	}
 
-	// Logout via the broker cookie revokes the shared sid immediately.
+	// Logout via the IAM cookie revokes the shared sid immediately.
 	req = httptest.NewRequest(http.MethodGet, srv.URL+"/t/mycompany/logout", nil)
 	req.AddCookie(&http.Cookie{Name: b.cfg.SessionCookieName, Value: "browser-1"})
 	rec = httptest.NewRecorder()
@@ -641,7 +641,7 @@ func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
 		t.Fatalf("fresh browser session = %q, %v", gotSID, err)
 	}
 
-	// id_token_hint path (no cookie): a valid broker ID token revokes its sid.
+	// id_token_hint path (no cookie): a valid IAM ID token revokes its sid.
 	hint, err := rt.activeKey().sign(map[string]any{
 		"iss": b.issuer(rt), "sub": "user-1", "sid": "sid-hint",
 		"aud": "cladone-go", "exp": time.Now().Add(time.Hour).Unix(),

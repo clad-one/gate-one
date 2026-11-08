@@ -882,7 +882,7 @@ Packages:
 | `internal/proxy`
 | `TestAC_AUTH_01_GoogleLoginCreatesSession`, `TestAC_AUTH_02_CrossTenantTokenRejected`, `TestAC_AUTH_03_MCPValidationUsesJWKSOnly`, `TestAC_AUTH_05_BackchannelLogoutRevokesSession`, `TestAC_AUTH_06_BrokerDownDegradesOnlyTenant`, `TestAC_AUTH_12_PerRouteIsolation`, `TestAC_AUTH_15_DegradedStartupAndReload`
 
-| `internal/broker`
+| `internal/iam`
 | `TestAC_AUTH_01_GoogleLoginCreatesSession`, `TestAC_AUTH_09_IdentityAdapterConformance`, `TestAC_AUTH_11_EnrichmentOptional`
 
 | `pkg/identityadapter/conformance`
@@ -963,7 +963,7 @@ Content:
 === 8.5 Coverage
 
 * Global threshold: 80%.
-* `internal/authn`, `internal/broker/policy`, `internal/broker/token`: 85%.
+* `internal/authn`, `internal/iam`: 85%.
 * Security error paths (401/403/502) must be covered.
 * Coverage does not replace contract and e2e tests.
 
@@ -1026,7 +1026,7 @@ Content:
 * Each fixed bug adds a test that fails before the fix.
 * Contract tests are versioned with `apiVersion`.
 * Golden files cover discovery, JWKS, resolved config.
-* Optional mutation testing on `internal/authn` and `internal/broker/policy`.
+* Optional mutation testing on `internal/authn` and `internal/iam`.
 * Any change to `IdentityAdapter` updates the conformance suite.
 * Any change to an HTTP status updates matrix 2.3.
 * Test secrets are marked `TEST ONLY` and scanned by `gitleaks`.
@@ -1139,7 +1139,7 @@ State as of 2026-10-28:
 | per-provider metrics; full browser e2e
 
 | C — IAM
-| `internal/broker` + `cmd/cladone-auth`: discovery, multi-key Ed25519 JWKS, Google authorize/callback via `IdentityAdapter`, code + client_credentials + refresh token, roles/tenant/audience policy; in-memory or Redis store; `keygen`/`revoke` CLI
+| `internal/iam` + `cmd/cladone-auth`: discovery, multi-key Ed25519 JWKS, Google authorize/callback via `IdentityAdapter`, code + client_credentials + refresh token, roles/tenant/audience policy; in-memory or Redis store; `keygen`/`revoke` CLI
 | Entra/SAML/LDAP, mTLS/API key, HTTP administration endpoint
 
 | D — validation
@@ -1153,32 +1153,32 @@ State as of 2026-10-28:
 
 Tests present:
 
-* `TestAC_AUTH_01_GoogleLoginCreatesSession` (`internal/broker`)
+* `TestAC_AUTH_01_GoogleLoginCreatesSession` (`internal/iam`)
 * `TestAC_AUTH_02_CrossTenantTokenRejected` (`internal/proxy`)
 * `TestAC_AUTH_03_MCPValidationUsesJWKSOnly` (`internal/authn`)
 * `TestAC_AUTH_04_KeyRotationKeepsSessions` (`internal/authn`)
 * `TestAC_AUTH_06_BrokerDownDegradesOnlyTenant` (`internal/proxy`)
 * `TestAC_AUTH_07_ProviderPluginRejected` (`internal/core`)
 * `TestAC_AUTH_08_JWTRejectsInvalidTokens` (`internal/authn`)
-* `TestAC_AUTH_09_IdentityAdapterConformance` (`pkg/identityadapter/conformance`, `internal/broker`)
-* `TestAC_AUTH_09_ClientCredentials` (`internal/broker`)
+* `TestAC_AUTH_09_IdentityAdapterConformance` (`pkg/identityadapter/conformance`, `internal/iam`)
+* `TestAC_AUTH_09_ClientCredentials` (`internal/iam`)
 * `TestAC_AUTH_10_HTTPBindingParity` (`pkg/identityadapter/httpbinding`)
 * `TestAC_AUTH_11_EnrichmentOptional` (`pkg/identityadapter/conformance`)
 * `TestAC_AUTH_12_PerRouteIsolation` (`internal/proxy`)
 * `TestAC_AUTH_13_ConfigValidation` (`internal/core`)
-* `TestAC_AUTH_13_BrokerRejectsBadRedirect` (`internal/broker`)
+* `TestAC_AUTH_13_BrokerRejectsBadRedirect` (`internal/iam`)
 * `TestAC_AUTH_14_InvalidTokenVsUnavailable` (`internal/proxy`, `internal/authn`)
 * `TestAC_AUTH_15_DegradedStartupAndReload` (`internal/proxy`)
 * `TestAC_AUTH_18_RedisRevocationStore` (`internal/authn`)
 * `TestAC_AUTH_18_RedisTTL` (`internal/authn`)
-* `TestAC_AUTH_18_BrokerRedisStore` (`internal/broker`)
+* `TestAC_AUTH_18_BrokerRedisStore` (`internal/iam`)
 * `TestAC_AUTH_19_JWTImmediateRevocation` (`internal/authn`)
 * `TestAC_AUTH_19_RedisFailClosedAndImmediateRevocation` (`internal/proxy`)
 * `TestAC_AUTH_16_PluginManifestV2` (`pkg/pluginmanifest`)
 * `TestAC_AUTH_17_NoSecretLeak` (`internal/proxy`)
-* `TestAC_AUTH_20_BrokerKeyRotation` (`internal/broker`)
-* `TestAC_AUTH_21_RevokeWithConfig` (`internal/broker`)
-* `TestAC_AUTH_22_LogoutRevokesSharedSID` (`internal/broker`)
+* `TestAC_AUTH_20_BrokerKeyRotation` (`internal/iam`)
+* `TestAC_AUTH_21_RevokeWithConfig` (`internal/iam`)
+* `TestAC_AUTH_22_LogoutRevokesSharedSID` (`internal/iam`)
 * `TestAC_AUTH_23_CrossInstanceRevocation` (`internal/proxy`)
 * `TestAC_AUTH_24_SubjectRevocationTimestamp` (`internal/authn`)
 * `TestAC_AUTH_24_JWTGlobalLogout` (`internal/authn`)
@@ -1196,7 +1196,7 @@ OIDC cookies/session, MCP scope, and the `go test ./...` suite.
 ----
 make test-auth
 make test-auth-race
-go test ./internal/broker/... -v
+go test ./internal/iam/... -v
 go test ./pkg/identityadapter/... -v
 ----
 

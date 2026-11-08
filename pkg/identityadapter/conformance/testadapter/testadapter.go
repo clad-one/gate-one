@@ -1,5 +1,5 @@
 // Package testadapter is a configurable in-memory IdentityAdapter used
-// by the conformance suite and by the broker tests.
+// by the conformance suite and by the IAM tests.
 package testadapter
 
 import (

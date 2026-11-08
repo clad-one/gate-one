@@ -1,9 +1,9 @@
-// Package identityadapter defines the broker-side contract for one
+// Package identityadapter defines the IAM-side contract for one
 // identity protocol (OIDC first, then SAML/LDAP/mTLS/API key).
 //
 // The contract is deliberately state-machine oriented: an adapter can
 // redirect (OIDC/SAML), challenge (mTLS/API key), show a form (LDAP),
-// or return an assertion directly. The broker, never the adapter,
+// or return an assertion directly. The IAM, never the adapter,
 // decides roles, tenant, audiences and token issuance.
 package identityadapter
 
@@ -14,7 +14,7 @@ import (
 	"net/http"
 )
 
-// Manifest describes an adapter for the broker registry and, later,
+// Manifest describes an adapter for the IAM registry and, later,
 // for signed out-of-process plugins.
 type Manifest struct {
 	Name         string          `json:"name"`
@@ -27,7 +27,7 @@ type Manifest struct {
 	ConfigSchema json.RawMessage `json:"configSchema,omitempty"`
 }
 
-// Capabilities declares the steps an adapter can produce. The broker
+// Capabilities declares the steps an adapter can produce. The IAM
 // refuses a step the adapter did not declare.
 type Capabilities struct {
 	Redirect   bool `json:"redirect,omitempty"`
@@ -37,7 +37,7 @@ type Capabilities struct {
 }
 
 // Request is the normalized input of Start/Continue. It contains no
-// broker policy and no destination authorization decision.
+// IAM policy and no destination authorization decision.
 type Request struct {
 	Tenant     string
 	Method     string
@@ -49,7 +49,7 @@ type Request struct {
 	State      []byte
 }
 
-// StepKind is the next action the broker must perform.
+// StepKind is the next action the IAM must perform.
 type StepKind string
 
 const (
@@ -78,7 +78,7 @@ type Field struct {
 }
 
 // Assertion is the raw identity fact set returned by an adapter. It
-// intentionally has no roles, tenant, audience or scope: the broker
+// intentionally has no roles, tenant, audience or scope: the IAM
 // maps facts to policy.
 type Assertion struct {
 	Subject    string         `json:"subject"`
@@ -87,7 +87,7 @@ type Assertion struct {
 	Groups     []string       `json:"groups,omitempty"`
 	Claims     map[string]any `json:"claims,omitempty"`
 	TenantHint string         `json:"tenantHint,omitempty"`
-	// IDToken is the raw upstream ID token, kept so the broker can
+	// IDToken is the raw upstream ID token, kept so the IAM can
 	// perform an RP-initiated logout at the upstream (id_token_hint).
 	IDToken string `json:"idToken,omitempty"`
 }
@@ -102,7 +102,7 @@ type Adapter interface {
 	Health(ctx context.Context) error
 }
 
-// Classified errors: the broker maps them to HTTP answers without
+// Classified errors: the IAM maps them to HTTP answers without
 // conflating invalid credentials with an unavailable upstream.
 var (
 	// ErrUnauthenticated: the credentials are absent or invalid.

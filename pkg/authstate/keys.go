@@ -1,6 +1,6 @@
 // Package authstate defines the shared Redis key schema used by Gate
-// One and the broker. Keeping one encoder avoids subtle cross-service
-// mismatches: a revocation written by the broker must be readable by
+// One and the IAM. Keeping one encoder avoids subtle cross-service
+// mismatches: a revocation written by the IAM must be readable by
 // every Gate One instance.
 package authstate
 

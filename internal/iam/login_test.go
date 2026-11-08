@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -13,16 +13,16 @@ import (
 	"time"
 )
 
-func newLoginTestBroker(t *testing.T) (*Broker, *tenantRuntime) {
+func newLoginTestBroker(t *testing.T) (*IAM, *tenantRuntime) {
 	t.Helper()
 	old := pbkdf2Iterations
 	pbkdf2Iterations = 1000
 	t.Cleanup(func() { pbkdf2Iterations = old })
 
-	b := &Broker{
+	b := &IAM{
 		cfg: &Config{
-			PublicURL:         "https://broker.test",
-			SessionCookieName: "broker_sid",
+			PublicURL:         "https://iam.test",
+			SessionCookieName: "iam_sid",
 		},
 		tenants:  map[string]*tenantRuntime{},
 		store:    newMemoryStore(),
@@ -44,7 +44,7 @@ func newLoginTestBroker(t *testing.T) (*Broker, *tenantRuntime) {
 	return b, rt
 }
 
-func putTestUser(t *testing.T, b *Broker, email, password string, verified bool) {
+func putTestUser(t *testing.T, b *IAM, email, password string, verified bool) {
 	t.Helper()
 	hash, err := hashPassword(password)
 	if err != nil {
@@ -66,7 +66,7 @@ func putTestUser(t *testing.T, b *Broker, email, password string, verified bool)
 }
 
 func authorizeURL(challenge, idp string) string {
-	return "https://broker.test/t/mycompany/authorize?client_id=gate-one" +
+	return "https://iam.test/t/mycompany/authorize?client_id=gate-one" +
 		"&redirect_uri=" + url.QueryEscape("https://login.test/callback") +
 		"&response_type=code&state=st&scope=openid" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256" +
@@ -89,7 +89,7 @@ func formField(t *testing.T, body, name string) string {
 }
 
 func postLogin(
-	t *testing.T, b *Broker, flow, csrf, email, password string,
+	t *testing.T, b *IAM, flow, csrf, email, password string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	form := url.Values{
@@ -99,7 +99,7 @@ func postLogin(
 		"password": {password},
 	}
 	req := httptest.NewRequest(http.MethodPost,
-		"https://broker.test/t/mycompany/login", strings.NewReader(form.Encode()))
+		"https://iam.test/t/mycompany/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	b.Handler().ServeHTTP(rec, req)
@@ -114,7 +114,7 @@ func TestLocalLoginFlow(t *testing.T) {
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 
-	// authorize?idp=local -> broker login page
+	// authorize?idp=local -> IAM login page
 	rec := httptest.NewRecorder()
 	b.Handler().ServeHTTP(rec, httptest.NewRequest(
 		http.MethodGet, authorizeURL(challenge, "local"), nil))
@@ -122,7 +122,7 @@ func TestLocalLoginFlow(t *testing.T) {
 		t.Fatalf("authorize = %d: %s", rec.Code, rec.Body.String())
 	}
 	loginLoc := rec.Header().Get("Location")
-	if !strings.HasPrefix(loginLoc, "https://broker.test/t/mycompany/login?flow=") {
+	if !strings.HasPrefix(loginLoc, "https://iam.test/t/mycompany/login?flow=") {
 		t.Fatalf("authorize redirect = %q", loginLoc)
 	}
 
@@ -228,7 +228,7 @@ func TestLocalLoginUnknownFlow(t *testing.T) {
 	b, _ := newLoginTestBroker(t)
 	rec := httptest.NewRecorder()
 	b.Handler().ServeHTTP(rec, httptest.NewRequest(
-		http.MethodGet, "https://broker.test/t/mycompany/login?flow=unknown", nil))
+		http.MethodGet, "https://iam.test/t/mycompany/login?flow=unknown", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown flow = %d, want 400", rec.Code)
 	}

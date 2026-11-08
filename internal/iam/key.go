@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"crypto/ed25519"

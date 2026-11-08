@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -32,7 +32,7 @@ func TestEffectiveRightsMappingsAndUserGrants(t *testing.T) {
 			Claims: map[string]any{"department": "support"},
 		},
 	}
-	b := &Broker{cfg: cfg, now: nil}
+	b := &IAM{cfg: cfg, now: nil}
 	_ = b
 	rt := &tenantRuntime{cfg: cfg.Tenants[0]}
 	u := &User{

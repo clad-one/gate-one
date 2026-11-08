@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -17,9 +17,9 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// oidcAdapter is the broker's built-in Google adapter. It implements
+// oidcAdapter is the IAM's built-in Google adapter. It implements
 // the same IdentityAdapter contract exposed to out-of-process plugins:
-// the broker's policy layer only consumes Assertion facts.
+// the IAM policy layer only consumes Assertion facts.
 type oidcAdapter struct {
 	issuer     string
 	idp        string
@@ -131,9 +131,9 @@ func (a *oidcAdapter) Start(
 	if nonce == "" {
 		nonce = a.randomHex(16)
 	}
-	brokerState := req.Params["broker_state"]
-	if brokerState == "" {
-		brokerState = a.randomHex(24)
+	iamState := req.Params["iam_state"]
+	if iamState == "" {
+		iamState = a.randomHex(24)
 	}
 	verifier := oauth2.GenerateVerifier()
 	state, err := json.Marshal(adapterState{
@@ -149,7 +149,7 @@ func (a *oidcAdapter) Start(
 	if a.prompt != "" {
 		opts = append(opts, oauth2.SetAuthURLParam("prompt", a.prompt))
 	}
-	url := a.oauth.AuthCodeURL(brokerState, opts...)
+	url := a.oauth.AuthCodeURL(iamState, opts...)
 	return identityadapter.Step{
 		Kind:        identityadapter.StepRedirect,
 		RedirectURL: url,
@@ -258,7 +258,7 @@ func (a *oidcAdapter) EndSessionURL() string { return a.endSession }
 // ClientID is the upstream client id (needed by some logout endpoints).
 func (a *oidcAdapter) ClientID() string { return a.clientID }
 
-// SetRedirectURL follows a broker public URL change (tests/dynamic
+// SetRedirectURL follows an IAM public URL change (tests/dynamic
 // ingress).
 func (a *oidcAdapter) SetRedirectURL(base string) {
 	a.publicURL = strings.TrimRight(base, "/")

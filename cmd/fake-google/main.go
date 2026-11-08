@@ -22,7 +22,7 @@ func main() {
 	addr := flag.String("addr", ":9000", "listen address")
 	issuer := flag.String(
 		"issuer", "http://idp.localhost:9000",
-		"public issuer URL (must be reachable by the browser and the broker)")
+		"public issuer URL (must be reachable by the browser and the IAM)")
 	configPath := flag.String("config", "", "optional JSON config (users, clientId)")
 	control := flag.Bool(
 		"control", true,

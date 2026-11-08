@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -10,12 +10,12 @@ import (
 	"time"
 )
 
-func newLogoutTestBroker(t *testing.T) *Broker {
+func newLogoutTestBroker(t *testing.T) *IAM {
 	t.Helper()
-	b := &Broker{
+	b := &IAM{
 		cfg: &Config{
-			PublicURL:         "https://broker.test",
-			SessionCookieName: "broker_sid",
+			PublicURL:         "https://iam.test",
+			SessionCookieName: "iam_sid",
 		},
 		tenants:  map[string]*tenantRuntime{},
 		store:    newMemoryStore(),
@@ -33,13 +33,13 @@ func newLogoutTestBroker(t *testing.T) *Broker {
 	return b
 }
 
-func doLogout(t *testing.T, b *Broker, browserID string) *httptest.ResponseRecorder {
+func doLogout(t *testing.T, b *IAM, browserID string) *httptest.ResponseRecorder {
 	t.Helper()
-	target := "https://broker.test/t/mycompany/logout?post_logout_redirect_uri=" +
+	target := "https://iam.test/t/mycompany/logout?post_logout_redirect_uri=" +
 		url.QueryEscape("https://app.test/")
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	if browserID != "" {
-		req.AddCookie(&http.Cookie{Name: "broker_sid", Value: browserID})
+		req.AddCookie(&http.Cookie{Name: "iam_sid", Value: browserID})
 	}
 	rec := httptest.NewRecorder()
 	b.Handler().ServeHTTP(rec, req)
@@ -79,7 +79,7 @@ func TestLogoutUpstreamRPInitiated(t *testing.T) {
 		t.Fatalf("client_id = %q", q.Get("client_id"))
 	}
 	if q.Get("post_logout_redirect_uri") !=
-		"https://broker.test/t/mycompany/logout/done" {
+		"https://iam.test/t/mycompany/logout/done" {
 		t.Fatalf("post_logout_redirect_uri = %q",
 			q.Get("post_logout_redirect_uri"))
 	}
@@ -88,15 +88,15 @@ func TestLogoutUpstreamRPInitiated(t *testing.T) {
 	// validates it and redirects.
 	var logoutCookie *http.Cookie
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "broker_logout_to" {
+		if c.Name == "iam_logout_to" {
 			logoutCookie = c
 		}
 	}
 	if logoutCookie == nil || logoutCookie.Value == "" {
-		t.Fatal("broker_logout_to cookie missing")
+		t.Fatal("iam_logout_to cookie missing")
 	}
 	req := httptest.NewRequest(http.MethodGet,
-		"https://broker.test/t/mycompany/logout/done", nil)
+		"https://iam.test/t/mycompany/logout/done", nil)
 	req.AddCookie(logoutCookie)
 	done := httptest.NewRecorder()
 	b.Handler().ServeHTTP(done, req)

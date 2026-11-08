@@ -92,7 +92,7 @@ type Event struct {
 //
 // The issuer is included so the same sub under two issuers yields two
 // IDs. The NUL separator makes the input unambiguous. The secret is
-// held only by the producer (Gate One/broker), never by a plugin.
+// held only by the producer (Gate One/IAM), never by a plugin.
 func SubjectID(secret []byte, issuer, sub string) (string, error) {
 	if len(secret) == 0 {
 		return "", fmt.Errorf("usage: empty subject secret")

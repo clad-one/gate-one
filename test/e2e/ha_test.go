@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"cladone/gate-one/internal/broker"
+	"cladone/gate-one/internal/iam"
 	"cladone/gate-one/internal/proxy"
 )
 
@@ -139,7 +139,7 @@ func TestE2E_HA_SessionSurvivesFailover(t *testing.T) {
 
 	// Revocation after the failover: a fresh Sentinel connection (the
 	// `cladone-auth revoke` path) must be seen by Gate One.
-	if err := broker.RevokeWithConfig(
+	if err := iam.RevokeWithConfig(
 		context.Background(), s.mycompanyCfg, "mycompany", sid, uid, time.Hour,
 	); err != nil {
 		t.Fatal(err)

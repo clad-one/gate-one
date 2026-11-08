@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -85,7 +85,7 @@ func TestBrokerRedisOptionsTLSCaInvalid(t *testing.T) {
 func TestBrokerRedisConfigSentinelValidation(t *testing.T) {
 	base := func() *Config {
 		return &Config{
-			PublicURL: "https://broker.test",
+			PublicURL: "https://iam.test",
 			Tenants: []Tenant{{
 				ID:           "mycompany",
 				ClientID:     "gate-one",

@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -23,8 +23,8 @@ import (
 	"github.com/go-jose/go-jose/v4"
 )
 
-// Broker is a multi-tenant OIDC issuer federating an upstream IdP.
-type Broker struct {
+// IAM is a multi-tenant OIDC issuer federating an upstream IdP.
+type IAM struct {
 	cfg      *Config
 	tenants  map[string]*tenantRuntime
 	store    store
@@ -139,12 +139,12 @@ type refreshGrant struct {
 	Expires  time.Time
 }
 
-// Option customizes the broker (tests).
-type Option func(*Broker)
+// Option customizes the IAM (tests).
+type Option func(*IAM)
 
 // WithClock replaces time.Now.
 func WithClock(now func() time.Time) Option {
-	return func(b *Broker) {
+	return func(b *IAM) {
 		if now != nil {
 			b.now = now
 		}
@@ -153,7 +153,7 @@ func WithClock(now func() time.Time) Option {
 
 // WithMailer replaces the SMTP mailer (tests, alternative relay).
 func WithMailer(m Mailer) Option {
-	return func(b *Broker) {
+	return func(b *IAM) {
 		if m != nil {
 			b.mailer = m
 		}
@@ -162,7 +162,7 @@ func WithMailer(m Mailer) Option {
 
 // WithRand replaces crypto/rand.Reader.
 func WithRand(r io.Reader) Option {
-	return func(b *Broker) {
+	return func(b *IAM) {
 		if r != nil {
 			b.rand = r
 		}
@@ -170,14 +170,14 @@ func WithRand(r io.Reader) Option {
 }
 
 // New discovers the upstream IdP and builds every tenant.
-func New(ctx context.Context, cfg *Config, opts ...Option) (*Broker, error) {
+func New(ctx context.Context, cfg *Config, opts ...Option) (*IAM, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("broker: nil config")
+		return nil, fmt.Errorf("iam: nil config")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	b := &Broker{
+	b := &IAM{
 		cfg:     cfg,
 		tenants: map[string]*tenantRuntime{},
 		now:     time.Now,
@@ -263,17 +263,17 @@ func New(ctx context.Context, cfg *Config, opts ...Option) (*Broker, error) {
 
 // Revoke writes a shared revocation key for a tenant session/user.
 // Gate One reads the same key (same authPrefix) on the next request.
-func (b *Broker) Revoke(
+func (b *IAM) Revoke(
 	ctx context.Context, tenantID, sid, sub string, expires time.Time,
 ) error {
 	rt := b.tenants[tenantID]
 	if rt == nil {
-		return fmt.Errorf("broker: unknown tenant %q", tenantID)
+		return fmt.Errorf("iam: unknown tenant %q", tenantID)
 	}
 	return b.store.Revoke(ctx, b.issuer(rt), sid, sub, expires)
 }
 
-// RevokeWithConfig writes a revocation without starting the broker or
+// RevokeWithConfig writes a revocation without starting the IAM or
 // discovering Google. It is used by the `cladone-auth revoke` CLI and
 // requires Redis (a memory store would not be shared).
 func RevokeWithConfig(
@@ -281,13 +281,13 @@ func RevokeWithConfig(
 	tenantID, sid, sub string, ttl time.Duration,
 ) error {
 	if cfg == nil {
-		return fmt.Errorf("broker: nil config")
+		return fmt.Errorf("iam: nil config")
 	}
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
 	if cfg.Redis == nil {
-		return fmt.Errorf("broker revoke: redis configuration is required")
+		return fmt.Errorf("iam revoke: redis configuration is required")
 	}
 	var found *Tenant
 	for i := range cfg.Tenants {
@@ -297,10 +297,10 @@ func RevokeWithConfig(
 		}
 	}
 	if found == nil {
-		return fmt.Errorf("broker revoke: unknown tenant %q", tenantID)
+		return fmt.Errorf("iam revoke: unknown tenant %q", tenantID)
 	}
 	if sid == "" && sub == "" {
-		return fmt.Errorf("broker revoke: sid or sub is required")
+		return fmt.Errorf("iam revoke: sid or sub is required")
 	}
 	if ttl <= 0 {
 		// The refresh token is the longest replayable credential:
@@ -317,7 +317,7 @@ func RevokeWithConfig(
 }
 
 // Close releases the Redis client (no-op for memory).
-func (b *Broker) Close() error {
+func (b *IAM) Close() error {
 	if b.accounts != nil {
 		_ = b.accounts.Close()
 	}
@@ -327,13 +327,13 @@ func (b *Broker) Close() error {
 	return nil
 }
 
-// Handler returns the broker HTTP handler.
-func (b *Broker) Handler() http.Handler { return http.HandlerFunc(b.serveHTTP) }
+// Handler returns the IAM HTTP handler.
+func (b *IAM) Handler() http.Handler { return http.HandlerFunc(b.serveHTTP) }
 
 // SetPublicURL updates the external origin. It is used by tests after
 // httptest starts (the port is only known then) and by deployments
 // behind a dynamic ingress. Issuers and Google redirect URIs follow.
-func (b *Broker) SetPublicURL(raw string) {
+func (b *IAM) SetPublicURL(raw string) {
 	b.cfg.PublicURL = strings.TrimRight(strings.TrimSpace(raw), "/")
 	for _, rt := range b.tenants {
 		if len(rt.adapters) == 0 && rt.adapter != nil {
@@ -350,10 +350,10 @@ func (b *Broker) SetPublicURL(raw string) {
 	}
 }
 
-// browserSession reads the broker SSO cookie and returns the browser
+// browserSession reads the IAM SSO cookie and returns the browser
 // session id plus the shared OIDC sid. The cookie is host-only on the
-// broker and scoped to /t/{tenant}: apps never receive it.
-func (b *Broker) browserSession(
+// IAM and scoped to /t/{tenant}: apps never receive it.
+func (b *IAM) browserSession(
 	ctx context.Context, rt *tenantRuntime, r *http.Request,
 ) (browserID, sid, sub string, issuedAt time.Time, err error) {
 	c, cerr := r.Cookie(b.cfg.SessionCookieName)
@@ -386,7 +386,7 @@ func (b *Broker) browserSession(
 	return c.Value, sid, sub, issuedAt, nil
 }
 
-func (b *Broker) setBrowserSession(
+func (b *IAM) setBrowserSession(
 	w http.ResponseWriter, rt *tenantRuntime, id string,
 ) {
 	http.SetCookie(w, &http.Cookie{
@@ -400,7 +400,7 @@ func (b *Broker) setBrowserSession(
 	})
 }
 
-func (b *Broker) clearBrowserSession(w http.ResponseWriter, rt *tenantRuntime) {
+func (b *IAM) clearBrowserSession(w http.ResponseWriter, rt *tenantRuntime) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     b.cfg.SessionCookieName,
 		Value:    "",
@@ -412,9 +412,9 @@ func (b *Broker) clearBrowserSession(w http.ResponseWriter, rt *tenantRuntime) {
 	})
 }
 
-// idTokenHintSID verifies a broker-issued ID token and extracts sid/sub.
+// idTokenHintSID verifies an IAM-issued ID token and extracts sid/sub.
 // The hint is only a hint: it is verified against the tenant keys.
-func (b *Broker) idTokenHintSID(
+func (b *IAM) idTokenHintSID(
 	rt *tenantRuntime, raw string,
 ) (sid, sub string) {
 	if raw == "" {
@@ -447,8 +447,8 @@ func (b *Broker) idTokenHintSID(
 }
 
 // revokeLogoutSession revokes the browser's shared sid (or sub when no
-// sid is available), deletes the broker session and clears the cookie.
-func (b *Broker) revokeLogoutSession(
+// sid is available), deletes the IAM session and clears the cookie.
+func (b *IAM) revokeLogoutSession(
 	ctx context.Context, w http.ResponseWriter, rt *tenantRuntime, r *http.Request,
 ) error {
 	browserID, sid, sub, _, err := b.browserSession(ctx, rt, r)
@@ -473,7 +473,7 @@ func (b *Broker) revokeLogoutSession(
 	return nil
 }
 
-func (b *Broker) sessionRevoked(
+func (b *IAM) sessionRevoked(
 	ctx context.Context, rt *tenantRuntime,
 	sid, sub string, issuedAt time.Time,
 ) (bool, error) {
@@ -490,7 +490,7 @@ func (b *Broker) sessionRevoked(
 	return false, nil
 }
 
-func (b *Broker) serveHTTP(w http.ResponseWriter, r *http.Request) {
+func (b *IAM) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 
@@ -537,11 +537,11 @@ func (b *Broker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (b *Broker) issuer(rt *tenantRuntime) string {
+func (b *IAM) issuer(rt *tenantRuntime) string {
 	return b.cfg.PublicURL + "/t/" + rt.cfg.ID
 }
 
-func (b *Broker) discovery(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+func (b *IAM) discovery(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
 	iss := b.issuer(rt)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -564,12 +564,12 @@ func (b *Broker) discovery(w http.ResponseWriter, r *http.Request, rt *tenantRun
 	})
 }
 
-func (b *Broker) jwks(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+func (b *IAM) jwks(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(mergeJWKS(rt.keys))
 }
 
-func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+func (b *IAM) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
 	q := r.URL.Query()
 	clientID := q.Get("client_id")
 	redirectURI := q.Get("redirect_uri")
@@ -627,7 +627,7 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		}
 	}
 
-	log.Printf("broker: authorize tenant=%s idp=%s client=%s",
+	log.Printf("iam: authorize tenant=%s idp=%s client=%s",
 		rt.cfg.ID, idp, clientID)
 
 	if idp == "local" {
@@ -675,7 +675,7 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		RemoteAddr: r.RemoteAddr,
 		Header:     r.Header.Clone(),
 		Params: map[string]string{
-			"broker_state": flowID,
+			"iam_state": flowID,
 			"nonce":        nonce,
 		},
 	})
@@ -711,7 +711,7 @@ func (b *Broker) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRun
 	http.Redirect(w, r, step.RedirectURL, http.StatusFound)
 }
 
-func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+func (b *IAM) callback(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
 	q := r.URL.Query()
 	state := q.Get("state")
 	f, err := b.store.TakeFlow(r.Context(), rt.cfg.ID, state)
@@ -720,7 +720,7 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 		return
 	}
 	if f == nil || b.now().After(f.Expires) {
-		log.Printf("broker: callback expired/unknown state tenant=%s state=%q",
+		log.Printf("iam: callback expired/unknown state tenant=%s state=%q",
 			rt.cfg.ID, state)
 		writeRestartPage(w, rt,
 			"The login session has expired or was already used.")
@@ -811,7 +811,7 @@ func (b *Broker) callback(w http.ResponseWriter, r *http.Request, rt *tenantRunt
 	if username == "" {
 		username = email
 	}
-	log.Printf("broker: login tenant=%s adapter=%s email=%s",
+	log.Printf("iam: login tenant=%s adapter=%s email=%s",
 		rt.cfg.ID, f.AdapterID, email)
 
 	var upstream *upstreamSession
@@ -848,14 +848,14 @@ type loginIdentity struct {
 	Claims   map[string]any
 }
 
-// finishLogin stores the broker SSO session, sets the cookie, issues a
+// finishLogin stores the IAM SSO session, sets the cookie, issues a
 // single-use authorization code and redirects to the RP callback.
 // Shared by the upstream callback and the local password login.
-func (b *Broker) finishLogin(
+func (b *IAM) finishLogin(
 	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
 	f *flow, id loginIdentity, upstream *upstreamSession,
 ) {
-	brokerCode := b.randomHex(24)
+	iamCode := b.randomHex(24)
 	sid := f.SID
 	if sid == "" {
 		sid = b.randomHex(16)
@@ -886,7 +886,7 @@ func (b *Broker) finishLogin(
 		}
 	}
 	b.setBrowserSession(w, rt, browserID)
-	if err := b.store.PutCode(r.Context(), rt.cfg.ID, brokerCode, &authCode{
+	if err := b.store.PutCode(r.Context(), rt.cfg.ID, iamCode, &authCode{
 		Tenant:            rt.cfg.ID,
 		ClientID:          f.ClientID,
 		RedirectURI:       f.RedirectURI,
@@ -914,13 +914,13 @@ func (b *Broker) finishLogin(
 		return
 	}
 	rq := redirect.Query()
-	rq.Set("code", brokerCode)
+	rq.Set("code", iamCode)
 	rq.Set("state", f.State)
 	redirect.RawQuery = rq.Encode()
 	http.Redirect(w, r, redirect.String(), http.StatusFound)
 }
 
-func (b *Broker) token(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+func (b *IAM) token(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		oauthError(w, http.StatusMethodNotAllowed, "invalid_request", "POST required")
@@ -942,7 +942,7 @@ func (b *Broker) token(w http.ResponseWriter, r *http.Request, rt *tenantRuntime
 	}
 }
 
-func (b *Broker) tokenCode(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+func (b *IAM) tokenCode(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
 	clientID, ok := rt.clientAuthOK(r)
 	if !ok {
 		w.Header().Set("WWW-Authenticate", `Basic realm="token"`)
@@ -992,7 +992,7 @@ func (b *Broker) tokenCode(w http.ResponseWriter, r *http.Request, rt *tenantRun
 		c.ClientID, true, true)
 }
 
-func (b *Broker) tokenClientCredentials(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+func (b *IAM) tokenClientCredentials(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
 	clientID, ok := rt.clientAuthOK(r)
 	if !ok || rt.cfg.ClientSecret == "" {
 		w.Header().Set("WWW-Authenticate", `Basic realm="token"`)
@@ -1015,7 +1015,7 @@ func (b *Broker) tokenClientCredentials(w http.ResponseWriter, r *http.Request, 
 		nil, nil, "", scope, aud, "", clientID, false, false)
 }
 
-func (b *Broker) tokenRefresh(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+func (b *IAM) tokenRefresh(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
 	raw := r.Form.Get("refresh_token")
 	g, err := b.store.TakeRefresh(r.Context(), rt.cfg.ID, raw)
 	if err != nil {
@@ -1039,7 +1039,7 @@ func (b *Broker) tokenRefresh(w http.ResponseWriter, r *http.Request, rt *tenant
 		g.Scopes, g.Claims, g.SID, g.Scope, g.Audience, "", g.ClientID, false, true)
 }
 
-func (b *Broker) writeTokens(
+func (b *IAM) writeTokens(
 	ctx context.Context, w http.ResponseWriter, rt *tenantRuntime,
 	sub, username, email string, roles, scopes []string,
 	extraClaims map[string]any, sid, scope, aud, nonce, clientID string,
@@ -1101,9 +1101,9 @@ func (b *Broker) writeTokens(
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
+func (b *IAM) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntime) {
 	// Read the upstream session BEFORE revokeLogoutSession deletes the
-	// broker session: it carries the upstream id_token_hint and
+	// IAM session: it carries the upstream id_token_hint and
 	// end_session_endpoint.
 	browserID := ""
 	if c, err := r.Cookie(b.cfg.SessionCookieName); err == nil {
@@ -1115,7 +1115,7 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntim
 		_ = b.store.DeleteUpstream(r.Context(), rt.cfg.ID, browserID)
 	}
 
-	log.Printf("broker: logout tenant=%s browser=%t upstream=%t end_session=%t",
+	log.Printf("iam: logout tenant=%s browser=%t upstream=%t end_session=%t",
 		rt.cfg.ID, browserID != "", upstream != nil,
 		upstream != nil && upstream.EndSession != "")
 
@@ -1140,7 +1140,7 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntim
 
 	// RP-initiated logout: close the upstream IdP session too (Auth0,
 	// Keycloak, Microsoft…). Google does not advertise an
-	// end_session_endpoint; it falls back to the broker redirect.
+	// end_session_endpoint; it falls back to the IAM redirect.
 	if upstream != nil && upstream.EndSession != "" {
 		if u, err := url.Parse(upstream.EndSession); err == nil {
 			q := u.Query()
@@ -1151,12 +1151,12 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntim
 				q.Set("client_id", upstream.ClientID)
 			}
 			if redirect != "" {
-				// ONE broker-owned landing is registered at the
+				// ONE IAM-owned landing is registered at the
 				// upstream (not every app URL): the app target rides
 				// in a short-lived, host-only cookie and is validated
 				// again by /logout/done.
 				http.SetCookie(w, &http.Cookie{
-					Name: "broker_logout_to",
+					Name: "iam_logout_to",
 					Value: base64.RawURLEncoding.EncodeToString(
 						[]byte(redirect)),
 					Path:     "/t/" + rt.cfg.ID + "/logout/done",
@@ -1185,17 +1185,17 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request, rt *tenantRuntim
 // upstream IdP. It returns to the application carried by the
 // short-lived cookie, after validating it against the client's
 // registered post-logout targets (no open redirect).
-func (b *Broker) logoutDone(
+func (b *IAM) logoutDone(
 	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
 ) {
 	target := ""
-	if c, err := r.Cookie("broker_logout_to"); err == nil {
+	if c, err := r.Cookie("iam_logout_to"); err == nil {
 		if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
 			target = string(raw)
 		}
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     "broker_logout_to",
+		Name:     "iam_logout_to",
 		Value:    "",
 		Path:     "/t/" + rt.cfg.ID + "/logout/done",
 		MaxAge:   -1,
@@ -1207,7 +1207,7 @@ func (b *Broker) logoutDone(
 	ok := target != "" &&
 		(redirectAllowed(rt.cfg.PostLogoutRedirectURIs, target) ||
 			containsString(rt.cfg.RedirectURIs, target))
-	log.Printf("broker: logout/done tenant=%s target_ok=%t", rt.cfg.ID, ok)
+	log.Printf("iam: logout/done tenant=%s target_ok=%t", rt.cfg.ID, ok)
 	if ok {
 		http.Redirect(w, r, target, http.StatusFound)
 		return
@@ -1250,7 +1250,7 @@ func (rt *tenantRuntime) domainAllowed(email string, claims map[string]any) bool
 	return false
 }
 
-func (b *Broker) randomHex(n int) string {
+func (b *IAM) randomHex(n int) string {
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(b.rand, buf); err != nil {
 		// crypto/rand should never fail; fall back to time-based
@@ -1345,10 +1345,10 @@ func claimStrings(v any) []string {
 }
 
 // upsertFederatedUser resolves the single external identity link
-// (issuer, subject). The user record is a broker-side authorization
+// (issuer, subject). The user record is an IAM-side authorization
 // profile; it never contains an upstream credential. The IdP remains
 // the only source of authentication for this user.
-func (b *Broker) upsertFederatedUser(
+func (b *IAM) upsertFederatedUser(
 	ctx context.Context, rt *tenantRuntime,
 	issuer, subject, email, name string, claims map[string]any,
 ) (*User, error) {
@@ -1360,7 +1360,7 @@ func (b *Broker) upsertFederatedUser(
 	switch {
 	case err == nil:
 		if u.Kind != "" && u.Kind != "federated" {
-			return nil, fmt.Errorf("broker: identity collision with a non-federated user")
+			return nil, fmt.Errorf("iam: identity collision with a non-federated user")
 		}
 		u.Kind = "federated"
 		u.Email = email
@@ -1385,7 +1385,7 @@ func (b *Broker) upsertFederatedUser(
 		if err := b.accounts.PutUser(ctx, u); err != nil {
 			return nil, err
 		}
-		log.Printf("broker: provisioned federated user tenant=%s issuer=%s sub=%s",
+		log.Printf("iam: provisioned federated user tenant=%s issuer=%s sub=%s",
 			rt.cfg.ID, issuer, subject)
 		return u, nil
 	default:

@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 // without an `idp` hint and more than one login method is enabled.
 // Every button re-enters the same authorize URL with `idp=<key>`, so
 // the OAuth parameters (state, PKCE, redirect_uri) are preserved.
-func (b *Broker) writeChooser(
+func (b *IAM) writeChooser(
 	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
 	methods []string,
 ) {

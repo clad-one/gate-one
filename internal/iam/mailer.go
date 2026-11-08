@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// Mailer sends account-lifecycle emails. The broker only needs the
+// Mailer sends account-lifecycle emails. The IAM only needs the
 // verification email in this slice; password reset will reuse it.
 type Mailer interface {
 	SendVerification(ctx context.Context, to, link string) error

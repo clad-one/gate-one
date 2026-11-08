@@ -488,7 +488,7 @@ type UpstreamPolicy struct {
 	BrowserCache *BrowserCachePolicy `json:"browserCache,omitempty"`
 	// TokenBroker: per-user credentials fetched from the token broker
 	// for the authenticated caller and injected into the backend
-	// request. Provider names are broker-owned; Gate One never
+	// request. Provider names are IAM-owned; Gate One never
 	// stores a provider secret. Requires route.auth (a user must be
 	// authenticated to have a delegated token).
 	TokenBroker *TokenBrokerPolicy `json:"tokenBroker,omitempty"`
@@ -1967,7 +1967,7 @@ type AuthProviderConfig struct {
 	BackchannelForwardURL string `json:"backchannelForwardUrl,omitempty"`
 
 	// RevocationTTLSeconds: retention of revocation entries. Default:
-	// the broker's advertised refresh-token TTL, else 30 days; never
+	// the IAM's advertised refresh-token TTL, else 30 days; never
 	// shorter than the session TTL. A global logout must outlive the
 	// refresh tokens it invalidates.
 	RevocationTTLSeconds int `json:"revocationTtlSeconds,omitempty"`

@@ -1,4 +1,4 @@
-// Command cladone-auth runs the small multi-tenant OIDC broker.
+// Command cladone-auth runs the small multi-tenant OIDC iam.
 //
 // It federates Google (V1), applies per-tenant policy (roles, tenant,
 // audiences), and re-emits Ed25519-signed JWTs. Gate One trusts only
@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"cladone/gate-one/internal/broker"
+	"cladone/gate-one/internal/iam"
 	"cladone/gate-one/internal/ops"
 )
 
@@ -49,14 +49,14 @@ func main() {
 		}
 	}
 
-	configPath := flag.String("config", "cladone-auth.json", "broker config path")
+	configPath := flag.String("config", "cladone-auth.json", "IAM config path")
 	addr := flag.String("addr", "", "listen address (default: config listen or :8081)")
 	pprofAddr := flag.String(
 		"pprof-addr", "",
 		"optional pprof listen address (e.g. 127.0.0.1:6061)")
 	flag.Parse()
 
-	cfg, err := broker.Load(*configPath)
+	cfg, err := iam.Load(*configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	b, err := broker.New(ctx, cfg)
+	b, err := iam.New(ctx, cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func main() {
 		close(stopped)
 	}()
 
-	fmt.Printf("Cladone Auth broker listening on %s (public %s)\n",
+	fmt.Printf("Cladone Auth embedded IAM listening on %s (public %s)\n",
 		*addr, cfg.PublicURL)
 
 	psrv, err := ops.StartPprof(*pprofAddr)
@@ -143,7 +143,7 @@ func runKeygen(args []string) int {
 
 func runRevoke(args []string) int {
 	fs := flag.NewFlagSet("revoke", flag.ContinueOnError)
-	configPath := fs.String("config", "cladone-auth.json", "broker config path")
+	configPath := fs.String("config", "cladone-auth.json", "IAM config path")
 	tenant := fs.String("tenant", "", "tenant id")
 	sid := fs.String("sid", "", "session id to revoke")
 	sub := fs.String("sub", "", "user subject to revoke")
@@ -157,12 +157,12 @@ func runRevoke(args []string) int {
 		fmt.Fprintln(os.Stderr, "revoke: -tenant and one of -sid/-sub are required")
 		return 2
 	}
-	cfg, err := broker.Load(*configPath)
+	cfg, err := iam.Load(*configPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "revoke:", err)
 		return 1
 	}
-	autoTTL, err := broker.TenantRevocationTTL(cfg, *tenant)
+	autoTTL, err := iam.TenantRevocationTTL(cfg, *tenant)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "revoke:", err)
 		return 1
@@ -179,7 +179,7 @@ func runRevoke(args []string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := broker.RevokeWithConfig(
+	if err := iam.RevokeWithConfig(
 		ctx, cfg, *tenant, *sid, *sub, *ttl,
 	); err != nil {
 		fmt.Fprintln(os.Stderr, "revoke:", err)

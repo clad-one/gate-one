@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"cladone/gate-one/internal/broker"
+	"cladone/gate-one/internal/iam"
 )
 
 func runUser(args []string) int {
@@ -36,19 +36,19 @@ func runUser(args []string) int {
 
 func userFlags(name string) (*flag.FlagSet, *string, *string) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	config := fs.String("config", "cladone-auth.json", "broker config path")
+	config := fs.String("config", "cladone-auth.json", "IAM config path")
 	tenant := fs.String("tenant", "", "tenant id")
 	return fs, config, tenant
 }
 
-func openDirectory(configPath string) (*broker.Directory, error) {
-	cfg, err := broker.Load(configPath)
+func openDirectory(configPath string) (*iam.Directory, error) {
+	cfg, err := iam.Load(configPath)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return broker.OpenDirectory(ctx, cfg)
+	return iam.OpenDirectory(ctx, cfg)
 }
 
 func splitList(raw string) []string {
@@ -75,7 +75,7 @@ func parseClaims(raw string) (map[string]any, error) {
 	return claims, nil
 }
 
-func printUser(u *broker.User) error {
+func printUser(u *iam.User) error {
 	cp := *u
 	cp.PasswordHash = "" // never print credential material
 	raw, err := json.MarshalIndent(&cp, "", "  ")
@@ -116,15 +116,15 @@ func userList(args []string) int {
 }
 
 func userSelector(fs *flag.FlagSet) (*string, *string, *string, *string) {
-	return fs.String("id", "", "broker user id"),
+	return fs.String("id", "", "IAM user id"),
 		fs.String("email", "", "local user email"),
 		fs.String("issuer", "", "federated issuer"),
 		fs.String("sub", "", "federated subject")
 }
 
 func lookupUser(
-	d *broker.Directory, tenant, id, email, issuer, sub string,
-) (*broker.User, error) {
+	d *iam.Directory, tenant, id, email, issuer, sub string,
+) (*iam.User, error) {
 	ctx := context.Background()
 	switch {
 	case id != "":
@@ -189,7 +189,7 @@ func userCreate(args []string) int {
 	normalized := strings.TrimSpace(*email)
 	if normalized != "" {
 		var err error
-		normalized, err = broker.NormalizeEmail(normalized)
+		normalized, err = iam.NormalizeEmail(normalized)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "user create:", err)
 			return 1
@@ -206,7 +206,7 @@ func userCreate(args []string) int {
 		return 1
 	}
 	defer d.Close()
-	u, err := d.CreateUser(context.Background(), &broker.User{
+	u, err := d.CreateUser(context.Background(), &iam.User{
 		Tenant:        *tenant,
 		Kind:          *kind,
 		Email:         normalized,

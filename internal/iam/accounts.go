@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -21,7 +21,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// User is a broker-owned authorization profile. A local user has a
+// User is an IAM-owned authorization profile. A local user has a
 // password; a federated user has exactly one external identity link
 // (issuer, subject). Roles/scopes/claims are always managed on this
 // object, for both kinds.
@@ -88,8 +88,8 @@ type verifyToken struct {
 	Expires     time.Time `json:"expires"`
 }
 
-var errAccountNotFound = errors.New("broker: account not found")
-var errVerifyTokenNotFound = errors.New("broker: verification token not found")
+var errAccountNotFound = errors.New("iam: account not found")
+var errVerifyTokenNotFound = errors.New("iam: verification token not found")
 
 type accountsStore interface {
 	PutUser(ctx context.Context, u *User) error

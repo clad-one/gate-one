@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"cladone/gate-one/internal/broker"
+	"cladone/gate-one/internal/iam"
 	"cladone/gate-one/internal/proxy"
 )
 
 // TestE2E_Login_SSO_Logout_NewLogin covers the browser path end to end:
-// login through fake Google and the broker, SSO across two apps and two
+// login through fake Google and the IAM, SSO across two apps and two
 // Gate One instances, logout, then a new login with a new sid.
 func TestE2E_Login_SSO_Logout_NewLogin(t *testing.T) {
 	s := NewStack(t)
@@ -145,7 +145,7 @@ func TestE2E_RedisFailClosed_PublicOK(t *testing.T) {
 	}
 }
 
-// TestE2E_Revoke_SID_SUB revokes the shared sid/sub through the broker
+// TestE2E_Revoke_SID_SUB revokes the shared sid/sub through the IAM
 // API (the same path as the CLI) and checks Gate One rejects the
 // existing session on the next request.
 func TestE2E_Revoke_SID_SUB(t *testing.T) {
@@ -164,7 +164,7 @@ func TestE2E_Revoke_SID_SUB(t *testing.T) {
 		t.Fatalf("RP payload missing sid/uid: %v", payload)
 	}
 
-	if err := broker.RevokeWithConfig(
+	if err := iam.RevokeWithConfig(
 		context.Background(), s.mycompanyCfg, "mycompany", sid, uid, time.Hour,
 	); err != nil {
 		t.Fatal(err)
@@ -193,7 +193,7 @@ func TestE2E_BrokerDown_PerTenant(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("mycompany with broker down = %d, want 502", resp.StatusCode)
+		t.Fatalf("mycompany with IAM down = %d, want 502", resp.StatusCode)
 	}
 
 	s.setUser("bob@contoso.test")
@@ -261,7 +261,7 @@ func TestE2E_Forbidden_SwitchAccount(t *testing.T) {
 		t.Fatalf("sign-out does not return to the refused URL: %q", link)
 	}
 
-	// Gate One clears its cookie, then redirects to the broker's
+	// Gate One clears its cookie, then redirects to the IAM's
 	// end-session (which revokes the shared session).
 	logout, err := s.noRedirect.Get(link)
 	if err != nil {
@@ -271,17 +271,17 @@ func TestE2E_Forbidden_SwitchAccount(t *testing.T) {
 	if logout.StatusCode != http.StatusFound {
 		t.Fatalf("logout = %d, want 302", logout.StatusCode)
 	}
-	brokerLogout := logout.Header.Get("Location")
-	if !strings.Contains(brokerLogout, "/t/mycompany/logout") {
-		t.Fatalf("logout did not reach the broker: %q", brokerLogout)
+	iamLogout := logout.Header.Get("Location")
+	if !strings.Contains(iamLogout, "/t/mycompany/logout") {
+		t.Fatalf("logout did not reach the IAM: %q", iamLogout)
 	}
-	bl, err := s.noRedirect.Get(brokerLogout)
+	bl, err := s.noRedirect.Get(iamLogout)
 	if err != nil {
 		t.Fatal(err)
 	}
 	bl.Body.Close()
 	if bl.StatusCode != http.StatusFound {
-		t.Fatalf("broker logout = %d, want 302", bl.StatusCode)
+		t.Fatalf("IAM logout = %d, want 302", bl.StatusCode)
 	}
 
 	// The RP session is gone: the route starts a fresh login instead of
@@ -449,7 +449,7 @@ func TestE2E_LoginHostLanding(t *testing.T) {
 
 // TestE2E_LoginForwardsIdpHint: Gate One forwards the optional `idp`
 // hint from its /login URL to the upstream authorize endpoint (e.g.
-// the broker's local password login).
+// the IAM's local password login).
 func TestE2E_LoginForwardsIdpHint(t *testing.T) {
 	s := NewStack(t)
 	resp, err := s.noRedirect.Get(

@@ -281,7 +281,7 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 	}
 	revocationTTL := cfg.RevocationTTL
 	if revocationTTL <= 0 {
-		// A broker can advertise its refresh-token lifetime in discovery:
+		// An IAM can advertise its refresh-token lifetime in discovery:
 		// the default revocation then covers refresh tokens too, instead
 		// of a fixed 24h guess. Other IdPs fall back to 30 days.
 		if discovery.RefreshTokenTTLSeconds > 0 {
@@ -612,7 +612,7 @@ func (o *OIDC) handleLogin(w http.ResponseWriter, r *http.Request) {
 		oidc.Nonce(nonce),
 		oauth2.S256ChallengeOption(verifier),
 	}
-	// idp is an optional upstream hint (e.g. the broker's "local"
+	// idp is an optional upstream hint (e.g. the IAM's "local"
 	// password login). Unknown values are ignored by standard IdPs.
 	if idp := strings.TrimSpace(r.URL.Query().Get("idp")); idp != "" {
 		opts = append(opts, oauth2.SetAuthURLParam("idp", idp))

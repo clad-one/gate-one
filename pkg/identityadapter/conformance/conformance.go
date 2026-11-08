@@ -76,7 +76,7 @@ func Run(t *testing.T, a identityadapter.Adapter) {
 			t.Error("assertion.subject is required")
 		}
 		// Assertion has no roles/tenant/audience fields by construction;
-		// raw claims may carry anything, but the broker ignores them for
+		// raw claims may carry anything, but the IAM ignores them for
 		// policy. This test documents the boundary.
 	})
 

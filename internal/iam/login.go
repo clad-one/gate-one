@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"crypto/subtle"
@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// login serves the local password login surface of the broker. It is
+// login serves the local password login surface of the IAM. It is
 // only reachable through /authorize?idp=local, which stores a
 // short-lived flow (client, redirect_uri, state, PKCE, CSRF).
-func (b *Broker) login(
+func (b *IAM) login(
 	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
 ) {
 	switch r.Method {
@@ -28,7 +28,7 @@ func (b *Broker) login(
 	}
 }
 
-func (b *Broker) loginPage(
+func (b *IAM) loginPage(
 	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
 ) {
 	flowID := strings.TrimSpace(r.URL.Query().Get("flow"))
@@ -47,7 +47,7 @@ func (b *Broker) loginPage(
 		f.CSRF, flowID, chooserBackURL(b, rt, f), "")
 }
 
-func (b *Broker) loginSubmit(
+func (b *IAM) loginSubmit(
 	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
 ) {
 	if err := r.ParseForm(); err != nil {
@@ -111,7 +111,7 @@ func (b *Broker) loginSubmit(
 	}, nil)
 }
 
-func chooserBackURL(b *Broker, rt *tenantRuntime, f *flow) string {
+func chooserBackURL(b *IAM, rt *tenantRuntime, f *flow) string {
 	if f == nil || f.AuthorizeQuery == "" {
 		return ""
 	}

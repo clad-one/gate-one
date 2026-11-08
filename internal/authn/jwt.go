@@ -44,7 +44,7 @@ type JWT struct {
 }
 
 // NewJWT builds the verifier. It does not fetch the JWKS at startup:
-// a broker outage must not prevent other tenants from starting. The
+// an IAM outage must not prevent other tenants from starting. The
 // first verification (or Health) fetches and caches the keys.
 func NewJWT(ctx context.Context, cfg JWTConfig) (*JWT, error) {
 	issuer := strings.TrimRight(strings.TrimSpace(cfg.Issuer), "/")

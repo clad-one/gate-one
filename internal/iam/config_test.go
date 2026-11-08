@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import "testing"
 
@@ -67,7 +67,7 @@ func TestAC_AUTH_13_GoogleClientIDEnv(t *testing.T) {
 
 	build := func() *Config {
 		return &Config{
-			PublicURL: "https://broker.test",
+			PublicURL: "https://iam.test",
 			Tenants: []Tenant{{
 				ID:           "mycompany",
 				ClientID:     "gate-one",
@@ -121,7 +121,7 @@ func TestLocalAccountsConfigValidation(t *testing.T) {
 	t.Setenv("TEST_REG_SECRET", "s3cret")
 	base := func() *Config {
 		return &Config{
-			PublicURL: "https://broker.test",
+			PublicURL: "https://iam.test",
 			Tenants: []Tenant{{
 				ID:                    "mycompany",
 				ClientID:              "gate-one",

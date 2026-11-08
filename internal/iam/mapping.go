@@ -1,11 +1,11 @@
-package broker
+package iam
 
 import (
 	"fmt"
 	"strings"
 )
 
-// MappingRule translates one upstream claim into broker rights. It is
+// MappingRule translates one upstream claim into IAM rights. It is
 // evaluated against the federated user's token claims on every login;
 // the resulting roles/scopes/claims are never persisted on the user.
 type MappingRule struct {

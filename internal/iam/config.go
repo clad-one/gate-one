@@ -1,8 +1,8 @@
-// Package broker implements a small multi-tenant OIDC issuer. It
+// Package iam implements the embedded multi-tenant OIDC issuer. It
 // federates an upstream identity provider (Google in V1), applies a
 // local policy (tenant, roles, audiences), and re-emits its own
 // Ed25519-signed JWTs. Gate One trusts only this issuer.
-package broker
+package iam
 
 import (
 	"encoding/json"
@@ -14,14 +14,14 @@ import (
 	"time"
 )
 
-// Config is the broker configuration file.
+// Config is the IAM configuration file.
 type Config struct {
-	// PublicURL is the external origin of the broker, without a
+	// PublicURL is the external origin of the IAM, without a
 	// trailing slash (e.g. https://auth.example.com).
 	PublicURL string `json:"publicUrl"`
 	// Listen is the default listen address for cmd/cladone-auth.
 	Listen string `json:"listen,omitempty"`
-	// SessionCookieName is the broker SSO cookie shared by all apps
+	// SessionCookieName is the IAM SSO cookie shared by all apps
 	// in one browser. Default cladone_iam_sid.
 	SessionCookieName string `json:"sessionCookieName,omitempty"`
 	// Tenants is the list of isolated issuers.
@@ -87,11 +87,11 @@ type Tenant struct {
 	AllowedDomains []string `json:"allowedDomains,omitempty"`
 	// AdminEmails receive the "admin" role.
 	AdminEmails []string `json:"adminEmails,omitempty"`
-	// GroupRoles maps an upstream group/claim value to broker roles
+	// GroupRoles maps an upstream group/claim value to IAM roles
 	// (legacy, groups claim only). Prefer Mappings.
 	GroupRoles map[string][]string `json:"groupRoles,omitempty"`
 
-	// Mappings translates upstream claims into broker roles/scopes/
+	// Mappings translates upstream claims into IAM roles/scopes/
 	// claims. It is evaluated on every federated login; the results are
 	// not persisted on the user.
 	Mappings []MappingRule `json:"mappings,omitempty"`
@@ -104,7 +104,7 @@ type Tenant struct {
 	AccessTokenTTL  int `json:"accessTokenTtlSeconds,omitempty"`
 	IDTokenTTL      int `json:"idTokenTtlSeconds,omitempty"`
 	RefreshTokenTTL int `json:"refreshTokenTtlSeconds,omitempty"`
-	// SessionTTLSeconds is the broker SSO cookie/session lifetime.
+	// SessionTTLSeconds is the IAM SSO cookie/session lifetime.
 	// Default 43200 (12h).
 	SessionTTLSeconds int `json:"sessionTtlSeconds,omitempty"`
 
@@ -140,7 +140,7 @@ type GoogleConfig struct {
 	Optional bool `json:"optional,omitempty"`
 }
 
-// Load reads and validates a broker configuration.
+// Load reads and validates an IAM configuration.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -486,14 +486,14 @@ func TenantRevocationTTL(
 	cfg *Config, tenantID string,
 ) (time.Duration, error) {
 	if cfg == nil {
-		return 0, fmt.Errorf("broker: nil config")
+		return 0, fmt.Errorf("iam: nil config")
 	}
 	for i := range cfg.Tenants {
 		if cfg.Tenants[i].ID == tenantID {
 			return cfg.Tenants[i].revocationTTL(), nil
 		}
 	}
-	return 0, fmt.Errorf("broker: unknown tenant %q", tenantID)
+	return 0, fmt.Errorf("iam: unknown tenant %q", tenantID)
 }
 
 // logoutRevocationTTL must cover refresh tokens: a logout that revokes

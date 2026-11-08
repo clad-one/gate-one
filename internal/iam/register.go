@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"crypto/subtle"
@@ -23,7 +23,7 @@ type registerRequest struct {
 	ContinueURL string `json:"continueUrl,omitempty"`
 }
 
-func (b *Broker) registerAuthorized(
+func (b *IAM) registerAuthorized(
 	rt *tenantRuntime, r *http.Request,
 ) bool {
 	if rt.cfg.RegistrationSecret == "" {
@@ -42,7 +42,7 @@ func (b *Broker) registerAuthorized(
 // register creates a local account and sends the verification email.
 // It is server-to-server only (Bearer registration secret): the app
 // backend calls it after its own signup form.
-func (b *Broker) register(
+func (b *IAM) register(
 	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
 ) {
 	if !rt.cfg.LocalAccounts {
@@ -143,12 +143,12 @@ func (b *Broker) register(
 		url.QueryEscape(raw) + "&continueUrl=" +
 		url.QueryEscape(vt.ContinueURL)
 	if err := b.mailer.SendVerification(r.Context(), email, link); err != nil {
-		log.Printf("broker: verification email to %s failed: %v", email, err)
+		log.Printf("iam: verification email to %s failed: %v", email, err)
 		oauthError(w, http.StatusBadGateway, "server_error", "email delivery failed")
 		return
 	}
 
-	log.Printf("broker: verification email sent tenant=%s user=%s",
+	log.Printf("iam: verification email sent tenant=%s user=%s",
 		rt.cfg.ID, user.ID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -159,7 +159,7 @@ func (b *Broker) register(
 
 // verifyEmail consumes the single-use token, marks the account
 // verified, then returns to the application carried by the link.
-func (b *Broker) verifyEmail(
+func (b *IAM) verifyEmail(
 	w http.ResponseWriter, r *http.Request, rt *tenantRuntime,
 ) {
 	if !rt.cfg.LocalAccounts {
@@ -195,7 +195,7 @@ func (b *Broker) verifyEmail(
 		return
 	}
 
-	log.Printf("broker: email verified tenant=%s user=%s", rt.cfg.ID, user.ID)
+	log.Printf("iam: email verified tenant=%s user=%s", rt.cfg.ID, user.ID)
 
 	if vt.ContinueURL != "" && rt.continueURLAllowed(vt.ContinueURL) {
 		target := vt.ContinueURL

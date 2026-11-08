@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -88,15 +88,15 @@ func (f *fakeMailer) SendVerification(_ context.Context, to, link string) error 
 	return f.err
 }
 
-func newAccountsTestBroker(t *testing.T) (*Broker, *tenantRuntime, *fakeMailer) {
+func newAccountsTestBroker(t *testing.T) (*IAM, *tenantRuntime, *fakeMailer) {
 	t.Helper()
 	old := pbkdf2Iterations
 	pbkdf2Iterations = 1000
 	t.Cleanup(func() { pbkdf2Iterations = old })
 
 	mail := &fakeMailer{}
-	b := &Broker{
-		cfg:      &Config{PublicURL: "https://broker.test"},
+	b := &IAM{
+		cfg:      &Config{PublicURL: "https://iam.test"},
 		tenants:  map[string]*tenantRuntime{},
 		accounts: newMemoryAccounts(),
 		mailer:   mail,
@@ -117,7 +117,7 @@ func newAccountsTestBroker(t *testing.T) (*Broker, *tenantRuntime, *fakeMailer) 
 }
 
 func doJSON(
-	t *testing.T, b *Broker, method, target, secret string, body string,
+	t *testing.T, b *IAM, method, target, secret string, body string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -134,7 +134,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 	b, rt, mail := newAccountsTestBroker(t)
 
 	rec := doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/mycompany/register", "s3cret",
+		"https://iam.test/t/mycompany/register", "s3cret",
 		`{"email":"Alice@App.test","password":"long-enough-pass",
 		  "name":"Alice","continueUrl":"https://app.test/"}`)
 	if rec.Code != http.StatusAccepted {
@@ -143,7 +143,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 	if mail.to != "alice@app.test" {
 		t.Fatalf("email sent to %q", mail.to)
 	}
-	if !strings.HasPrefix(mail.link, "https://broker.test/t/mycompany/verify-email?") {
+	if !strings.HasPrefix(mail.link, "https://iam.test/t/mycompany/verify-email?") {
 		t.Fatalf("link = %q", mail.link)
 	}
 
@@ -189,7 +189,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 
 	// A verified account cannot be registered again.
 	rec = doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/mycompany/register", "s3cret",
+		"https://iam.test/t/mycompany/register", "s3cret",
 		`{"email":"alice@app.test","password":"long-enough-pass",
 		  "continueUrl":"https://app.test/"}`)
 	if rec.Code != http.StatusConflict {
@@ -198,7 +198,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 
 	// The registration secret is enforced.
 	rec = doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/mycompany/register", "wrong",
+		"https://iam.test/t/mycompany/register", "wrong",
 		`{"email":"bob@app.test","password":"long-enough-pass",
 		  "continueUrl":"https://app.test/"}`)
 	if rec.Code != http.StatusUnauthorized {
@@ -207,7 +207,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 
 	// continueUrl outside the tenant allowlist is refused.
 	rec = doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/mycompany/register", "s3cret",
+		"https://iam.test/t/mycompany/register", "s3cret",
 		`{"email":"bob@app.test","password":"long-enough-pass",
 		  "continueUrl":"https://evil.test/"}`)
 	if rec.Code != http.StatusBadRequest {
@@ -217,7 +217,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 	// Local accounts disabled on another tenant.
 	rt.cfg.LocalAccounts = false
 	rec = doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/mycompany/register", "s3cret", `{}`)
+		"https://iam.test/t/mycompany/register", "s3cret", `{}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("disabled register = %d, want 404", rec.Code)
 	}
@@ -236,7 +236,7 @@ func TestRegisterValidation(t *testing.T) {
 	}
 	for _, c := range cases {
 		rec := doJSON(t, b, http.MethodPost,
-			"https://broker.test/t/mycompany/register", "s3cret", c.body)
+			"https://iam.test/t/mycompany/register", "s3cret", c.body)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d, want 400", c.name, rec.Code)
 		}
@@ -247,7 +247,7 @@ func TestRegisterMailerFailure(t *testing.T) {
 	b, _, mail := newAccountsTestBroker(t)
 	mail.err = context.DeadlineExceeded
 	rec := doJSON(t, b, http.MethodPost,
-		"https://broker.test/t/mycompany/register", "s3cret",
+		"https://iam.test/t/mycompany/register", "s3cret",
 		`{"email":"a@app.test","password":"long-enough-pass",
 		  "continueUrl":"https://app.test/"}`)
 	if rec.Code != http.StatusBadGateway {

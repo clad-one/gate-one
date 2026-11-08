@@ -6,11 +6,11 @@ test: ## go vet + tests unitaires
 	go test ./...
 
 test-auth: ## Tests d'acceptation auth (AC-AUTH-*) + broker + conformité
-	go test ./cmd/gate-one/... ./internal/authn/... ./internal/broker/... ./internal/core/... ./internal/proxy/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -run 'TestAC_AUTH_' -count=1
-	go test ./internal/broker/... ./internal/testutil/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -count=1
+	go test ./cmd/gate-one/... ./internal/authn/... ./internal/iam/... ./internal/core/... ./internal/proxy/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -run 'TestAC_AUTH_' -count=1
+	go test ./internal/iam/... ./internal/testutil/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -count=1
 
 test-auth-race: ## Tests auth sous le race detector
-	go test -race ./cmd/gate-one/... ./internal/authn/... ./internal/broker/... ./internal/proxy/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -run 'TestAC_AUTH_' -count=1
+	go test -race ./cmd/gate-one/... ./internal/authn/... ./internal/iam/... ./internal/proxy/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -run 'TestAC_AUTH_' -count=1
 	go test -race ./internal/testutil/... -count=1
 
 test-e2e: ## E2E in-process (faux Google, 2 brokers, 2 Gate One, Redis)

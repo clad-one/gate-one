@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 
 func ttlTestConfig(mr *miniredis.Miniredis, refresh, session int) *Config {
 	return &Config{
-		PublicURL: "https://broker.test",
+		PublicURL: "https://iam.test",
 		Tenants: []Tenant{{
 			ID:                "mycompany",
 			ClientID:          "gate-one",
@@ -23,7 +23,7 @@ func ttlTestConfig(mr *miniredis.Miniredis, refresh, session int) *Config {
 		}},
 		Redis: &RedisConfig{
 			URL:        "redis://" + mr.Addr() + "/0",
-			Prefix:     "test:broker:",
+			Prefix:     "test:iam:",
 			AuthPrefix: "test:auth:v1:",
 		},
 	}
@@ -32,7 +32,7 @@ func ttlTestConfig(mr *miniredis.Miniredis, refresh, session int) *Config {
 func revokedSubTTL(t *testing.T, mr *miniredis.Miniredis, sub string) time.Duration {
 	t.Helper()
 	key := authstate.Key(
-		"test:auth:v1:", "revoked:sub", "https://broker.test/t/mycompany", sub)
+		"test:auth:v1:", "revoked:sub", "https://iam.test/t/mycompany", sub)
 	if !mr.Exists(key) {
 		t.Fatalf("revocation key %q missing", key)
 	}

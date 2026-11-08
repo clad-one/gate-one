@@ -530,7 +530,7 @@ Go toolchain on the server.
 cmd/gate-one/       entrypoint (flags, init/doctor, SIGHUP reload, shutdown)
 cmd/cladone-auth/   small multi-tenant OIDC IAM (Google federation, JWKS, policy)
 internal/authn/     provider SPI: dev IdP, http adapter, native OIDC, JWT/JWKS, bbolt store
-internal/broker/    OIDC issuer: tenants, Google adapter, policy, Ed25519 tokens
+internal/iam/       OIDC issuer: tenants, Google adapter, policy, Ed25519 tokens
 internal/core/      config grammar + route loading/validation
 internal/proxy/     reverse proxy, auth, guards, rewriting, limits
 internal/pwa/       PWA wrap (manifest, service worker, Workbox)

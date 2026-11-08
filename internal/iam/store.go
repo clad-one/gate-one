@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -42,7 +42,7 @@ type store interface {
 	Close() error
 }
 
-// RedisConfig configures the broker's shared store. AuthPrefix MUST
+// RedisConfig configures the IAM's shared store. AuthPrefix MUST
 // match Gate One's sessionStore.redis.prefix so revocations are read
 // by the gateway.
 type RedisConfig struct {
@@ -78,7 +78,7 @@ type memoryStore struct {
 	subRevoked map[string]subRevocation
 }
 
-var errStoreNotFound = errors.New("broker: store entry not found")
+var errStoreNotFound = errors.New("iam: store entry not found")
 
 type memEntry struct {
 	value   []byte
@@ -359,7 +359,7 @@ func redisOptions(cfg RedisConfig) (*redis.UniversalOptions, error) {
 	}
 	if cfg.MasterName != "" {
 		if len(cfg.SentinelAddrs) == 0 {
-			return nil, fmt.Errorf("broker.redis: sentinelAddrs required")
+			return nil, fmt.Errorf("iam.redis: sentinelAddrs required")
 		}
 		opts.MasterName = cfg.MasterName
 		opts.Addrs = cfg.SentinelAddrs
@@ -376,15 +376,15 @@ func redisOptions(cfg RedisConfig) (*redis.UniversalOptions, error) {
 	}
 	if cfg.TLS || cfg.TLSCaFile != "" || cfg.TLSServerName != "" {
 		return nil, fmt.Errorf(
-			"broker.redis: tls options are only valid in sentinel mode; " +
+			"iam.redis: tls options are only valid in sentinel mode; " +
 				"use a rediss:// url otherwise")
 	}
 	if strings.TrimSpace(cfg.URL) == "" {
-		return nil, fmt.Errorf("broker.redis: url required")
+		return nil, fmt.Errorf("iam.redis: url required")
 	}
 	parsed, err := redis.ParseURL(cfg.URL)
 	if err != nil {
-		return nil, fmt.Errorf("broker.redis.url: %w", err)
+		return nil, fmt.Errorf("iam.redis.url: %w", err)
 	}
 	if cfg.Username != "" {
 		parsed.Username = cfg.Username
@@ -411,12 +411,12 @@ func tlsConfig(cfg RedisConfig) (*tls.Config, error) {
 	if cfg.TLSCaFile != "" {
 		pem, err := os.ReadFile(cfg.TLSCaFile)
 		if err != nil {
-			return nil, fmt.Errorf("broker.redis.tlsCaFile: %w", err)
+			return nil, fmt.Errorf("iam.redis.tlsCaFile: %w", err)
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(pem) {
 			return nil, fmt.Errorf(
-				"broker.redis.tlsCaFile: no PEM certificate found")
+				"iam.redis.tlsCaFile: no PEM certificate found")
 		}
 		tlsCfg.RootCAs = pool
 	}
@@ -475,11 +475,11 @@ func probeRedisWritable(
 	ctx context.Context, client redis.UniversalClient, dataPrefix string,
 ) error {
 	if err := client.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("broker.redis: ping: %w", err)
+		return fmt.Errorf("iam.redis: ping: %w", err)
 	}
 	key := dataPrefix + "meta:probe"
 	if err := client.Set(ctx, key, "1", 5*time.Second).Err(); err != nil {
-		return fmt.Errorf("broker.redis: write probe: %w", err)
+		return fmt.Errorf("iam.redis: write probe: %w", err)
 	}
 	_ = client.Del(ctx, key).Err()
 	return nil

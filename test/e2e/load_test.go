@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"cladone/gate-one/internal/broker"
+	"cladone/gate-one/internal/iam"
 	"cladone/gate-one/internal/proxy"
 )
 
@@ -255,7 +255,7 @@ func TestChaos_RedisOutageUnderLoad(t *testing.T) {
 }
 
 // TestChaos_BrokerSlow checks the steady-state path does not depend on
-// the broker: a slow broker makes login slow but leaves established
+// the IAM: a slow IAM makes login slow but leaves established
 // sessions fast.
 func TestChaos_BrokerSlow(t *testing.T) {
 	s := newStack(t, stackOptions{mycompanyBrokerDelay: 200 * time.Millisecond})
@@ -265,17 +265,17 @@ func TestChaos_BrokerSlow(t *testing.T) {
 	s.login("https://app.mycompany.test/")
 	loginDur := time.Since(t0)
 	if loginDur < 200*time.Millisecond {
-		t.Fatalf("login = %s, broker delay not applied", loginDur)
+		t.Fatalf("login = %s, IAM delay not applied", loginDur)
 	}
 
 	proxy.ResetAuthCache()
 	res := runLoad(t, s.noRedirect, "https://app.mycompany.test/", 4, 100)
 	res.requireAll(t, 200)
 
-	t.Logf("login (broker delayed 200ms) = %s", loginDur.Round(time.Millisecond))
+	t.Logf("login (IAM delayed 200ms) = %s", loginDur.Round(time.Millisecond))
 	t.Logf("steady state %s", res.lat.summary())
 	if p99 := res.lat.quantile(0.99); p99 > 100*time.Millisecond {
-		t.Fatalf("steady-state p99 = %s: broker latency leaked into the request path", p99)
+		t.Fatalf("steady-state p99 = %s: IAM latency leaked into the request path", p99)
 	}
 }
 
@@ -337,7 +337,7 @@ func TestLoad_RevocationUnderLoad(t *testing.T) {
 	}
 
 	time.Sleep(250 * time.Millisecond)
-	if err := broker.RevokeWithConfig(
+	if err := iam.RevokeWithConfig(
 		context.Background(), s.mycompanyCfg, "mycompany", sid, uid, time.Hour,
 	); err != nil {
 		close(stop)
@@ -367,7 +367,7 @@ func TestLoad_RevocationUnderLoad(t *testing.T) {
 	}
 }
 
-// TestLoad_KeyRotationOverlap replaces the broker behind a stable
+// TestLoad_KeyRotationOverlap replaces the IAM behind a stable
 // public URL with an instance that keeps the old key and adds a new
 // one. The old session must stay valid (overlap) and a new login must
 // succeed with the new key (JWKS refresh on unknown kid).
@@ -385,7 +385,7 @@ func TestLoad_KeyRotationOverlap(t *testing.T) {
 		t.Fatal("old RP payload missing sid")
 	}
 
-	// Rotated broker: keyFiles = [old, new], last key active.
+	// Rotated IAM: keyFiles = [old, new], last key active.
 	key2 := filepath.Join(t.TempDir(), "mycompany-2.key")
 	if err := writeTestKey(key2); err != nil {
 		t.Fatal(err)
@@ -394,7 +394,7 @@ func TestLoad_KeyRotationOverlap(t *testing.T) {
 	cfg.PublicURL = s.brokerProxy.URL()
 	tenant := cfg.Tenants[0]
 	tenant.KeyFiles = []string{s.mycompanyKeyFile, key2}
-	cfg.Tenants = []broker.Tenant{tenant}
+	cfg.Tenants = []iam.Tenant{tenant}
 
 	b2, srv2, _ := newBroker(t, &cfg)
 	b2.SetPublicURL(s.brokerProxy.URL())
@@ -408,7 +408,7 @@ func TestLoad_KeyRotationOverlap(t *testing.T) {
 		t.Fatalf("old session after rotation = %d, want 200", got)
 	}
 
-	// New login goes through the rotated broker and is signed by key2:
+	// New login goes through the rotated IAM and is signed by key2:
 	// Gate One must refresh JWKS (unknown kid) and accept it.
 	if _, err := s.follow.Get("https://login.mycompany.test/logout"); err != nil {
 		t.Fatal(err)

@@ -1,4 +1,4 @@
-package broker
+package iam
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Directory is the administrative view of the broker user store. It
+// Directory is the administrative view of the IAM user store. It
 // does not discover upstream IdPs and never issues tokens.
 type Directory struct {
 	cfg      *Config
@@ -21,7 +21,7 @@ type Directory struct {
 // OIDC server or discovering upstream providers.
 func OpenDirectory(ctx context.Context, cfg *Config) (*Directory, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("broker: nil config")
+		return nil, fmt.Errorf("iam: nil config")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -62,10 +62,10 @@ func (d *Directory) tenant(id string) (*Tenant, error) {
 			return &d.cfg.Tenants[i], nil
 		}
 	}
-	return nil, fmt.Errorf("broker: unknown tenant %q", id)
+	return nil, fmt.Errorf("iam: unknown tenant %q", id)
 }
 
-// NewUserID returns a random broker user id.
+// NewUserID returns a random IAM user id.
 func NewUserID() (string, error) {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
@@ -82,48 +82,48 @@ func NormalizeEmail(raw string) (string, error) { return normalizeEmail(raw) }
 
 func validateUser(u *User) error {
 	if u == nil {
-		return fmt.Errorf("broker: nil user")
+		return fmt.Errorf("iam: nil user")
 	}
 	if u.ID == "" {
-		return fmt.Errorf("broker: user id is required")
+		return fmt.Errorf("iam: user id is required")
 	}
 	if u.Tenant == "" {
-		return fmt.Errorf("broker: user tenant is required")
+		return fmt.Errorf("iam: user tenant is required")
 	}
 	u.normalize()
 	switch u.Kind {
 	case "local":
 		if u.Email == "" {
-			return fmt.Errorf("broker: local user email is required")
+			return fmt.Errorf("iam: local user email is required")
 		}
 		email, err := normalizeEmail(u.Email)
 		if err != nil {
-			return fmt.Errorf("broker: %w", err)
+			return fmt.Errorf("iam: %w", err)
 		}
 		u.Email = email
 		if u.Issuer != "" || u.Subject != "" {
-			return fmt.Errorf("broker: local user cannot have an external identity")
+			return fmt.Errorf("iam: local user cannot have an external identity")
 		}
 	case "federated":
 		if u.Issuer == "" || u.Subject == "" {
-			return fmt.Errorf("broker: federated user requires issuer and subject")
+			return fmt.Errorf("iam: federated user requires issuer and subject")
 		}
 	default:
-		return fmt.Errorf("broker: user kind must be local or federated")
+		return fmt.Errorf("iam: user kind must be local or federated")
 	}
 	for _, role := range u.Roles {
 		if strings.TrimSpace(role) == "" {
-			return fmt.Errorf("broker: empty role")
+			return fmt.Errorf("iam: empty role")
 		}
 	}
 	for _, scope := range u.Scopes {
 		if strings.TrimSpace(scope) == "" {
-			return fmt.Errorf("broker: empty scope")
+			return fmt.Errorf("iam: empty scope")
 		}
 	}
 	for name := range u.Claims {
 		if reservedClaim(name) {
-			return fmt.Errorf("broker: reserved claim %q", name)
+			return fmt.Errorf("iam: reserved claim %q", name)
 		}
 	}
 	return nil
@@ -132,7 +132,7 @@ func validateUser(u *User) error {
 // PutUser creates or updates a user and its grants.
 func (d *Directory) PutUser(ctx context.Context, u *User) error {
 	if d == nil {
-		return fmt.Errorf("broker: nil directory")
+		return fmt.Errorf("iam: nil directory")
 	}
 	if _, err := d.tenant(u.Tenant); err != nil {
 		return err
@@ -163,7 +163,7 @@ func (d *Directory) CreateUser(
 	}
 	if password != "" {
 		if u.Kind != "local" {
-			return nil, fmt.Errorf("broker: a federated user has no password")
+			return nil, fmt.Errorf("iam: a federated user has no password")
 		}
 		hash, err := hashPassword(password)
 		if err != nil {
@@ -172,7 +172,7 @@ func (d *Directory) CreateUser(
 		u.PasswordHash = hash
 	}
 	if u.Kind == "local" && u.PasswordHash == "" {
-		return nil, fmt.Errorf("broker: local user password is required")
+		return nil, fmt.Errorf("iam: local user password is required")
 	}
 	if err := d.PutUser(ctx, u); err != nil {
 		return nil, err

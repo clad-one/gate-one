@@ -1,7 +1,7 @@
 //go:build e2e
 
 // Package e2e runs the full authentication chain in-process: fake
-// Google, two brokers (one per tenant), two Gate One instances sharing
+// Google, two IAMs (one per tenant), two Gate One instances sharing
 // Redis, and a test backend. Hosts are rewritten by a transport so the
 // cookie jar sees real domains (mycompany.test, contoso.test) while the
 // servers listen on 127.0.0.1.
@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"cladone/gate-one/internal/broker"
+	"cladone/gate-one/internal/iam"
 	"cladone/gate-one/internal/core"
 	"cladone/gate-one/internal/proxy"
 	"cladone/gate-one/internal/testutil/fakegoogle"
@@ -61,7 +61,7 @@ type stackOptions struct {
 	// shared Redis (0 = direct connection).
 	redisDelay time.Duration
 	// mycompanyBrokerProxy puts a stable, swappable HTTP proxy in front of
-	// the mycompany broker so a key rotation can replace the broker
+	// the mycompany IAM so a key rotation can replace the IAM
 	// instance behind the same public URL.
 	mycompanyBrokerProxy bool
 	// redisHA replaces the miniredis URL with a real Sentinel cluster
@@ -86,7 +86,7 @@ type redisHAConfig struct {
 	Password         string
 	TLSCaFile        string
 	TLSServerName    string
-	// AuthPrefix is shared by Gate One's sessionStore and the broker's
+	// AuthPrefix is shared by Gate One's sessionStore and the IAM's
 	// revocation keys. It must be allowed by the Redis ACL.
 	AuthPrefix string
 }
@@ -109,9 +109,9 @@ func (r *redisHAConfig) sessionStoreJSON(prefix string) string {
 		r.Username, r.TLSCaFile, r.TLSServerName, prefix)
 }
 
-// brokerRedis renders the broker redis block (same cluster).
-func (r *redisHAConfig) brokerRedis(dataPrefix string) *broker.RedisConfig {
-	return &broker.RedisConfig{
+// brokerRedis renders the IAM redis block (same cluster).
+func (r *redisHAConfig) brokerRedis(dataPrefix string) *iam.RedisConfig {
+	return &iam.RedisConfig{
 		MasterName:          r.MasterName,
 		SentinelAddrs:       r.SentinelAddrs,
 		SentinelUsername:    r.SentinelUsername,
@@ -139,21 +139,21 @@ type Stack struct {
 	fakeSrv *httptest.Server
 	redis   *miniredis.Miniredis
 
-	mycompanyBroker *broker.Broker
+	mycompanyBroker *iam.IAM
 	mycompanySrv    *httptest.Server
-	mycompanyCfg    *broker.Config
+	mycompanyCfg    *iam.Config
 	mycompanyDelay  *netchaos.HTTPDelay
 
-	// Set when the mycompany broker sits behind a stable proxy (key
+	// Set when the mycompany IAM sits behind a stable proxy (key
 	// rotation test).
 	brokerProxy      *netchaos.HTTPProxy
 	mycompanyKeyFile string
 
 	redisProxy *netchaos.DelayProxy
 
-	contosoBroker *broker.Broker
+	contosoBroker *iam.IAM
 	contosoSrv    *httptest.Server
-	contosoCfg    *broker.Config
+	contosoCfg    *iam.Config
 
 	gw1    *proxy.Gateway
 	gw1Srv *httptest.Server
@@ -230,10 +230,10 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 	sessionStore := fmt.Sprintf(
 		`{"type":"redis","url":"redis://%s/0","prefix":%q}`,
 		redisAddr, authPrefix)
-	brokerRedis := func(id string) *broker.RedisConfig {
-		return &broker.RedisConfig{
+	brokerRedis := func(id string) *iam.RedisConfig {
+		return &iam.RedisConfig{
 			URL:        "redis://" + redisAddr + "/0",
-			Prefix:     "e2e:broker:" + id + ":",
+			Prefix:     "e2e:iam:" + id + ":",
 			AuthPrefix: authPrefix,
 		}
 	}
@@ -259,7 +259,7 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		s.mycompanyDelay.SetDelay(opts.mycompanyBrokerDelay)
 	}
 	if opts.mycompanyBrokerDown {
-		// Close only the HTTP surface: the broker object (and its
+		// Close only the HTTP surface: the IAM object (and its
 		// Redis client) stays alive so t.Cleanup closes it once.
 		s.mycompanySrv.Close()
 	}
@@ -435,11 +435,11 @@ func NewStack(t *testing.T) *Stack {
 }
 
 func newBrokerConfig(
-	id, fakeURL string, redis *broker.RedisConfig, domain string,
-) *broker.Config {
-	return &broker.Config{
+	id, fakeURL string, redis *iam.RedisConfig, domain string,
+) *iam.Config {
+	return &iam.Config{
 		PublicURL: "http://placeholder.invalid",
-		Tenants: []broker.Tenant{{
+		Tenants: []iam.Tenant{{
 			ID:           id,
 			ClientID:     "gate-one",
 			ClientSecret: clientSecret,
@@ -453,7 +453,7 @@ func newBrokerConfig(
 				"https://denied." + domain + "/*",
 			},
 			Audiences: []string{"https://api." + domain},
-			Google: broker.GoogleConfig{
+			Google: iam.GoogleConfig{
 				Issuer:       fakeURL,
 				ClientID:     "google-client",
 				ClientSecret: "google-secret",
@@ -462,7 +462,7 @@ func newBrokerConfig(
 			},
 			DefaultRoles:   []string{"user"},
 			AllowedDomains: []string{domain},
-			// The broker is the policy point: a Google group becomes
+			// The IAM is the policy point: a Google group becomes
 			// a role in the emitted ID token. Gate One only reads
 			// roles (it does not need the upstream groups claim).
 			GroupRoles: map[string][]string{
@@ -474,10 +474,10 @@ func newBrokerConfig(
 }
 
 func newBroker(
-	t *testing.T, cfg *broker.Config,
-) (*broker.Broker, *httptest.Server, *netchaos.HTTPDelay) {
+	t *testing.T, cfg *iam.Config,
+) (*iam.IAM, *httptest.Server, *netchaos.HTTPDelay) {
 	t.Helper()
-	b, err := broker.New(context.Background(), cfg)
+	b, err := iam.New(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
