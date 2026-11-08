@@ -1,6 +1,6 @@
 # Playwright browser E2E
 
-Runs against the local Compose stack (fake Google + brokers + Gate One):
+Runs against the local Compose stack (fake Google + IAMs + Gate One):
 
 ```bash
 cd ~/proj/2026/gate-one-src
@@ -29,7 +29,7 @@ Tests:
 | File | Covers |
 |---|---|
 | `login.spec.ts` | fake Google login, SSO across `gate-one-1`/`gate-one-2` |
-| `cookies.spec.ts` | RP cookie domain-wide, broker cookie host-only, HttpOnly, SameSite=Lax |
+| `cookies.spec.ts` | RP cookie domain-wide, IAM cookie host-only, HttpOnly, SameSite=Lax |
 | `logout.spec.ts` | logout invalidates the RP session (`302` to login) |
 | `storage.spec.ts` | logout in one tab triggers the storage event + immediate probe in another tab |
 
