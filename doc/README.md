@@ -13,7 +13,7 @@ repository and are published at
 | File | Contents |
 |---|---|
 | `auth-providers.adoc` | Provider contract and authentication internals: the four provider types, sessions, revocation, logout, claim mapping, migration. |
-| `auth-broker.adoc` | `cladone-auth` internals: tenants, upstreams, mappings, users, policy, degraded mode, key rotation. |
+| `auth-iam.adoc` | `cladone-auth` internals: tenants, upstreams, mappings, users, policy, degraded mode, key rotation. |
 | `auth-test-plan.adoc` | Authentication test plan: behaviour decisions, fixtures, traceability matrix and the detailed cases. |
 | `plugins.adoc` | Plugin and usage-event internals: taxonomy, invariants, the event contract, WAL durability, the signed manifest and licensing. |
 

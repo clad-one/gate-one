@@ -13,7 +13,7 @@ chooses — including proprietary, commercial or closed source — provided
 they:
 
 - do **not** implement authentication or authorization;
-- do **not** run inside the authentication broker;
+- do **not** run inside the authentication IAM;
 - interact with Gate One **only** through the documented plugin API and
   the signed plugin manifest;
 - do not impose terms on Gate One or its users that conflict with the
@@ -30,7 +30,7 @@ content extensions, integration glue.
 The exception does **not** apply to:
 
 - plugins, adapters or modules that implement **authentication or
-  authorization** (including broker IdP adapters);
+  authorization** (including IAM IdP adapters);
 - any component that **embeds, copies or derives from** Gate One source
   code.
 

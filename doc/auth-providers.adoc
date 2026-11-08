@@ -32,7 +32,7 @@ each route with `auth.provider`. Only `oidc` and `jwt` are allowed in
 this form; `http` (auth-bridge) and `dev` remain legacy single-provider
 modes. A provider that is unreachable at startup is degraded per tenant:
 its routes answer 502, the other tenants continue. See
-`doc/auth-broker.adoc` and `doc/auth-test-plan.adoc`.
+`doc/auth-iam.adoc` and `doc/auth-test-plan.adoc`.
 
 Absent `authProvider` keeps the legacy `oidc` + auth-bridge behaviour:
 existing configurations need no edit.
@@ -185,7 +185,7 @@ startup. `tlsServerName` is useful when the Sentinels are addressed by
 IP.
 
 `revocationTtlSeconds` defaults to the issuer's advertised
-`cladone_refresh_token_ttl_seconds` (the broker exposes its refresh-token
+`cladone_refresh_token_ttl_seconds` (the IAM exposes its refresh-token
 lifetime), otherwise 30 days, and is never shorter than the session TTL.
 Set it explicitly only if the issuer does not advertise the value; a
 shorter value would let a refresh token outlive a global logout.
@@ -292,8 +292,8 @@ on the connector (the badge displays it when configured):
 ----
 
 The token-broker connections page is a separate link, owned by the
-broker (`tokenBroker.links.services`), and only shown when an exposed
-route delegates. See `docs/api-routes.adoc` (userBadge links).
+token broker (`tokenBroker.links.services`), and only shown when an
+exposed route delegates. See `docs/api-routes.adoc` (userBadge links).
 
 == Claim mapping
 

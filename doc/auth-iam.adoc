@@ -1,15 +1,15 @@
-= Cladone G.O. Gate One — OIDC authentication broker
+= Cladone G.O. Gate One — embedded IAM (`cladone-auth`)
 :toc:
 :toclevels: 2
 
 == 1. Role
 
-The broker is a **multi-tenant OIDC/JWT issuer**:
+The IAM is a **multi-tenant OIDC/JWT issuer**:
 
 * it federates login to Google (V1);
 * it enforces the local policy (tenant, roles, audiences);
 * it re-issues its own Ed25519-signed JWTs;
-* Gate One only trusts the broker, never Google.
+* Gate One only trusts the IAM, never Google.
 
 Gate One loads **no provider plugin**. It only knows
 `type: "oidc"` (browser/MCP) and `type: "jwt"` (API Bearer).
@@ -21,16 +21,16 @@ Gate One loads **no provider plugin**. It only knows
 ----
 Browser
   -> Gate One (mycompany route, no session)
-  -> broker /t/mycompany/authorize
+  -> IAM /t/mycompany/authorize
   -> Google
-  -> broker /t/mycompany/callback
+  -> IAM /t/mycompany/callback
   -> Gate One /auth/callback
   -> Gate One session
 ----
 
 == 2.2 Shared session and global logout
 
-The broker sets a **host-only** session cookie on its own host,
+The IAM sets a **host-only** session cookie on its own host,
 with `Path=/t/{tenant}`. All applications in the same browser
 that go through this tenant reuse the same OIDC `sid`.
 
@@ -40,17 +40,17 @@ Consequence:
   `sub`**; all their existing sessions, across all
   browsers/devices, are refused on the next request;
 * `/t/{tenant}/logout` also revokes `sid`/`sub` (cookie or
-  `id_token_hint`), deletes the broker session and clears the cookie;
+  `id_token_hint`), deletes the IAM session and clears the cookie;
 * `sub` revocation carries a timestamp: sessions/tokens issued
   **before** the logout are refused, but a new login after the logout
   is allowed (no user lockout);
 * refresh tokens and authorization codes issued before the logout are
   refused at exchange;
 * Gate One derives its default `revocationTtlSeconds` from the
-  discovery field `cladone_refresh_token_ttl_seconds` published by the broker:
+  discovery field `cladone_refresh_token_ttl_seconds` published by the IAM:
   revocation therefore covers refresh tokens without manual configuration.
 
-The cookie is useless to applications: it is only sent to the broker.
+The cookie is useless to applications: it is only sent to the IAM.
 The shared `sid` is used for per-browser logout; the `sub` guarantees
 global user logout.
 
@@ -58,13 +58,13 @@ global user logout.
 
 ----
 M2M client
-  -> broker /t/mycompany/token (client_credentials)
+  -> IAM /t/mycompany/token (client_credentials)
   -> access token JWT (aud = MCP resource)
   -> Gate One Authorization: Bearer
   -> local JWKS validation
 ----
 
-== 3. Broker configuration
+== 3. IAM configuration
 
 [source,json]
 ----
@@ -117,7 +117,7 @@ M2M client
 }
 ----
 
-The broker exposes:
+The IAM exposes:
 
 ----
 GET  /health
@@ -131,10 +131,10 @@ GET  /t/{tenant}/logout
 
 == 4. Rights, mappings and users
 
-The broker has two sources of rights:
+The IAM has two sources of rights:
 
 * the IdP claim **mappings**, recomputed on each federated login;
-* the **grants** stored on the broker user, for both local
+* the **grants** stored on the IAM user, for both local
   and federated accounts.
 
 Effective rights are the union:
@@ -177,11 +177,11 @@ remains supported for the single claim `groups`.
 === Local and federated users
 
 A user has **a single external link** `(issuer, subject)` for
-federated accounts. On the first federated login, the broker creates a
+federated accounts. On the first federated login, the IAM creates a
 JIT user without rights; the admin can then assign roles/scopes/claims to it.
 A local account has a password and the same rights fields.
 
-The broker never recreates the IdP account. It only stores the broker
+The IAM never recreates the IdP account. It only stores the
 authorization profile and its identity link.
 
 The CLI works on the same configuration and the same Redis store:
@@ -294,7 +294,7 @@ For a non-MCP machine API:
 * `allowedDomains`: restricts `hd` / Google email domain.
 * `email_verified`: refused if explicitly `false`.
 
-The broker does not decide access to Gate One routes. It authenticates and
+The IAM does not decide access to Gate One routes. It authenticates and
 asserts an identity; Gate One applies `auth.when` / `auth.identity`.
 
 == 7. Degraded mode
@@ -307,16 +307,16 @@ Gate One builds each provider independently:
 * local sessions already issued remain valid;
 * an invalid token remains `401`, a JWKS failure becomes `502`.
 
-The broker must be supervised per tenant: `/health` and the logs.
+The IAM must be supervised per tenant: `/health` and the logs.
 
 == 8. Redis, revocation and V1 limits
 
-The broker uses Redis if the `redis` block is present. In multi-instance
+The IAM uses Redis if the `redis` block is present. In multi-instance
 production, Redis is required: flows, codes and refresh tokens must
-survive restarts and be shared. Without a `redis` block, the broker
+survive restarts and be shared. Without a `redis` block, the IAM
 uses an in-memory store (tests/dev).
 
-The broker writes `sid`/`sub` revocations into the `authPrefix` space;
+The IAM writes `sid`/`sub` revocations into the `authPrefix` space;
 Gate One reads them with the same prefix. Revocation is
 therefore visible on the next request on all instances. If Redis
 is unavailable, Gate One fails closed with `502` on authenticated
@@ -354,7 +354,7 @@ Other V1 limits:
 * No SAML/LDAP (V1.1/V2); they will go through `IdentityAdapter`.
 * No gRPC for adapter plugins; the HTTP/JSON binding is
   implemented (`pkg/identityadapter/httpbinding`).
-* No mTLS/API key on the Gate One side: the broker authenticates the client and
+* No mTLS/API key on the Gate One side: the IAM authenticates the client and
   issues a JWT (V1.1).
 
 == 9. Launch and rotation

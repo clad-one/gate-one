@@ -5,12 +5,12 @@
 
 == 1. Purpose and scope
 
-This plan covers the authentication of Gate One and of the OIDC broker:
+This plan covers the authentication of Gate One and of the OIDC IAM:
 
 * Gate One only knows **OIDC/JWT**; it loads no provider plugin.
-* The broker is an **OIDC/JWT issuer**: it federates Google, applies the policy
+* The IAM is an **OIDC/JWT issuer**: it federates Google, applies the policy
   (roles, tenant, audiences), then re-issues its own signed JWTs.
-* The broker's internal contract is `IdentityAdapter`: a single contract, several
+* The IAM's internal contract is `IdentityAdapter`: a single contract, several
   implementations per protocol (OIDC, then LDAP/mTLS/API key), a single loading
   mechanism for plugins.
 * The degraded mode is **fail-fast per tenant only**: the failure of one provider
@@ -23,7 +23,7 @@ Out of scope for V1:
 * SAML and LDAP (V1.1/V2);
 * PASETO;
 * real calls to Google in CI (fake Google + staging);
-* mTLS/API key on the Gate One side (V1.1, via the broker).
+* mTLS/API key on the Gate One side (V1.1, via the IAM).
 
 == 2. Behaviour decisions
 
@@ -161,7 +161,7 @@ Rules:
 
 [cols="3,2,2,2,2"]
 |===
-| Scenario | Session | Broker | Expected | Body
+| Scenario | Session | IAM | Expected | Body
 
 | Navigation, valid session
 | valid
@@ -339,16 +339,16 @@ Toggles:
 
 Each toggle is a public field protected by a mutex, reset to zero by `t.Cleanup`.
 
-=== 3.3 Test broker
+=== 3.3 Test IAM
 
 Two modes:
 
-* **in-process**: the real broker code, SQLite in `t.TempDir()`, fixed keys,
+* **in-process**: the real IAM code, SQLite in `t.TempDir()`, fixed keys,
   injected clock. Recommended for integration tests.
 * **minimal fake**: a server that only serves discovery/JWKS/token, for the
   Gate One unit tests.
 
-The test broker exposes `Down`, `FailJWKS`, `FailToken`, `RotateKey`, `Slow`,
+The test IAM exposes `Down`, `FailJWKS`, `FailToken`, `RotateKey`, `Slow`,
 `Revoke(sid)`.
 
 === 3.4 Fake `IdentityAdapter`
@@ -361,7 +361,7 @@ configurable steps:
 * `Enrich` optional;
 * `Health` with timeout/500.
 
-It is used to test the conformance suite itself, then the broker.
+It is used to test the conformance suite itself, then the IAM.
 
 === 3.5 Tokens
 
@@ -405,15 +405,15 @@ It is used to test the conformance suite itself, then the broker.
 | `pkg/identityadapter/conformance`
 
 | Integration
-| fake Google + broker + Gate One, cookies, JWKS, revocation
+| fake Google + IAM + Gate One, cookies, JWKS, revocation
 | `go test -tags=integration`
 
 | E2E
-| two tenants, MCP/API routes, broker failure
+| two tenants, MCP/API routes, IAM failure
 | `go test -tags=e2e`
 
 | Chaos
-| slow/down broker, invalid JWKS, plugin crash/hang
+| slow/down IAM, invalid JWKS, plugin crash/hang
 | nightly
 
 | Staging
@@ -434,7 +434,7 @@ It is used to test the conformance suite itself, then the broker.
 | AC-AUTH-01
 | Google login → session with `roles`, `tenant`, `sid`
 | `TestAC_AUTH_01_GoogleLoginCreatesSession`
-| fake Google, broker, two-tenants
+| fake Google, IAM, two-tenants
 | merge
 
 | AC-AUTH-02
@@ -444,9 +444,9 @@ It is used to test the conformance suite itself, then the broker.
 | PR
 
 | AC-AUTH-03
-| Local MCP validation via JWKS, without a broker call per request
+| Local MCP validation via JWKS, without an IAM call per request
 | `TestAC_AUTH_03_MCPValidationUsesJWKSOnly`
-| counting transport, broker
+| counting transport, IAM
 | merge
 
 | AC-AUTH-04
@@ -458,7 +458,7 @@ It is used to test the conformance suite itself, then the broker.
 | AC-AUTH-05
 | Revocation by back-channel logout only
 | `TestAC_AUTH_05_BackchannelLogoutRevokesSession`
-| broker, revocation store
+| IAM, revocation store
 | merge
 
 | AC-AUTH-06
@@ -546,9 +546,9 @@ It is used to test the conformance suite itself, then the broker.
 | PR
 
 | AC-AUTH-22
-| Broker logout revokes the browser's shared sid
+| IAM logout revokes the browser's shared sid
 | `TestAC_AUTH_22_LogoutRevokesSharedSID`
-| fake Google, broker cookie
+| fake Google, IAM cookie
 | merge
 
 | AC-AUTH-23
@@ -564,9 +564,9 @@ It is used to test the conformance suite itself, then the broker.
 | PR
 
 | AC-AUTH-25
-| Revocation TTL derived from the broker refresh token
+| Revocation TTL derived from the IAM refresh token
 | `TestAC_AUTH_25_RevocationTTLFromDiscovery`
-| broker discovery
+| IAM discovery
 | PR
 
 | AC-AUTH-26
@@ -584,10 +584,10 @@ It is used to test the conformance suite itself, then the broker.
 
 Steps:
 
-. Start the fake Google, the test broker, Gate One with the `mycompany` provider.
+. Start the fake Google, the test IAM, Gate One with the `mycompany` provider.
 . `GET /` on `app.mycompany.test` without a cookie.
-. Follow the redirection to the broker then to Google.
-. Google auto-consent, broker callback, Gate One callback.
+. Follow the redirection to the IAM then to Google.
+. Google auto-consent, IAM callback, Gate One callback.
 . Check the session cookie, `roles`, `tenant`, `sid`.
 
 Assertions:
@@ -596,7 +596,7 @@ Assertions:
 * `cladone_mycompany_session` cookie present, `HttpOnly`, `Secure`, `SameSite=Lax`;
 * claims `tenant=mycompany`, expected `roles`, non-empty `sid`;
 * no Google cookie on the Gate One domain;
-* the broker has never transmitted the Google token to Gate One.
+* the IAM has never transmitted the Google token to Gate One.
 
 Subtests:
 
@@ -633,9 +633,9 @@ of the same `oidc` type must not have the same cache key.
 
 * First MCP call: a JWKS fetch is allowed.
 * Subsequent calls with the same `kid`: `CountingTransport` must show **zero**
-  calls to the broker.
-* The broker is then stopped; the still-valid token must continue to pass.
-* A token with an unknown `kid` must trigger a fetch; if the broker is down,
+  calls to the IAM.
+* The IAM is then stopped; the still-valid token must continue to pass.
+* A token with an unknown `kid` must trigger a fetch; if the IAM is down,
   `502`.
 
 === AC-AUTH-04 — Key rotation
@@ -662,7 +662,7 @@ Subtests:
 `TestAC_AUTH_05_BackchannelLogoutRevokesSession`
 
 * Log in, retrieve `sid`.
-* Broker sends a signed logout token to `/backchannel-logout`.
+* IAM sends a signed logout token to `/backchannel-logout`.
 * Check the revocation store.
 * Next request with the cookie: `401`.
 * The identity cache is invalidated.
@@ -675,9 +675,9 @@ Subtests:
 
 Scenario:
 
-. Two tenants `mycompany` and `contoso`, two brokers.
+. Two tenants `mycompany` and `contoso`, two IAMs.
 . Log in on both.
-. Stop the `mycompany` broker.
+. Stop the `mycompany` IAM.
 . Request with the `mycompany` session: `200` (local validation).
 . New `mycompany` login: `502`.
 . `mycompany` MCP with the `kid` in cache: `200`.
@@ -762,11 +762,11 @@ The results are compared: same `Step.Kind`, same errors, same assertions
 
 `TestAC_AUTH_11_EnrichmentOptional`
 
-* Adapter without the `Enrichment` capability: the broker does not call it.
+* Adapter without the `Enrichment` capability: the IAM does not call it.
 * Adapter with the capability: the enriched claims are merged.
 * Enrichment failure: `fail_closed` policy (default) → login refused;
   `fail_open` → login accepted without enrichment.
-* The adapter cannot override `tenant`/`roles` decided by the broker.
+* The adapter cannot override `tenant`/`roles` decided by the IAM.
 
 === AC-AUTH-12 — Per-route isolation
 
@@ -815,8 +815,8 @@ Table:
 | unknown `kid` + refresh OK + invalid token | `ErrUnauthenticated` | `401`
 | unknown `kid` + refresh KO | `ErrProviderUnavailable` | `502`
 | revocation store in error | `ErrProviderUnavailable` | `502`
-| existing session, broker down | no error | `200`
-| new login, broker down | `ErrProviderUnavailable` | `502`
+| existing session, IAM down | no error | `200`
+| new login, IAM down | `ErrProviderUnavailable` | `502`
 |===
 
 The test also checks the headers: `WWW-Authenticate` only on `401`.
@@ -935,10 +935,10 @@ go test -tags=e2e ./... -race -count=1
 
 Content:
 
-* fake Google + broker + two tenants;
+* fake Google + IAM + two tenants;
 * key rotation;
 * back-channel logout;
-* broker down;
+* IAM down;
 * cookies/caches/stores isolation;
 * in-process/HTTP parity (gRPC: V2).
 
@@ -946,7 +946,7 @@ Content:
 
 * staging with real Google;
 * load: 1,000 req/s on public routes, 200 req/s auth;
-* chaos: slow/down broker, invalid JWKS, plugin crash/hang;
+* chaos: slow/down IAM, invalid JWKS, plugin crash/hang;
 * long fuzz (10 min);
 * dependency and image scan;
 * DB/key restore test.
@@ -1003,11 +1003,11 @@ Content:
 * Back-channel logout.
 * Check the Gate One session.
 * Check idempotence.
-* Check the broker down case.
+* Check the IAM down case.
 
-=== 9.5 Broker failure
+=== 9.5 IAM failure
 
-* Stop a tenant's broker.
+* Stop a tenant's IAM.
 * Check the existing sessions.
 * Check the new logins.
 * Check the other tenants.
@@ -1044,10 +1044,10 @@ Phase B (Gate One):
 * `-race` tests green;
 * no regression on `testdata/api-routes.json`.
 
-Phase C (broker):
+Phase C (IAM):
 
 * AC-AUTH-01, 09, 10, 11 green;
-* fake Google + real broker in e2e;
+* fake Google + real IAM in e2e;
 * rotation and revocation green.
 
 Phase D (validation):
@@ -1114,8 +1114,8 @@ in the repository.
 === 12.4 Glossary
 
 * **Provider**: Gate One configuration of an OIDC/JWT issuer.
-* **Broker**: service that federates the IdPs and re-issues JWTs.
-* **IdentityAdapter**: the broker's internal contract for an IdP protocol.
+* **IAM**: service that federates the IdPs and re-issues JWTs.
+* **IdentityAdapter**: the IAM's internal contract for an IdP protocol.
 * **Tenant**: isolation domain (issuer, key, audience, cookies, store).
 * **Fail-fast per tenant**: the failure of one provider degrades its routes, not the
   other tenants.
@@ -1131,23 +1131,23 @@ State as of 2026-10-28:
 | Phase | Implemented | Remaining
 
 | A — contract
-| `pkg/identityadapter`: `IdentityAdapter`, `Manifest`, `Step`, `Assertion`, capabilities, classified errors; `conformance` suite; fake adapter; HTTP/JSON binding `pkg/identityadapter/httpbinding`; **the broker uses the Google OIDC adapter via this contract**
+| `pkg/identityadapter`: `IdentityAdapter`, `Manifest`, `Step`, `Assertion`, capabilities, classified errors; `conformance` suite; fake adapter; HTTP/JSON binding `pkg/identityadapter/httpbinding`; **the IAM uses the Google OIDC adapter via this contract**
 | gRPC binding; TypeScript/Python SDK
 
 | B — Gate One
 | `authProviders[]`, `defaultAuthProvider`, `auth.provider`; `jwt` JWKS provider; per-provider key cache; per-provider OIDC cookies; per-tenant degraded startup/reload; `ErrUnauthenticated` vs `ErrProviderUnavailable`; immediate/fail-closed Redis; shared sid logout + timestamped sub global logout; `Close()`/drain
 | per-provider metrics; full browser e2e
 
-| C — broker
+| C — IAM
 | `internal/broker` + `cmd/cladone-auth`: discovery, multi-key Ed25519 JWKS, Google authorize/callback via `IdentityAdapter`, code + client_credentials + refresh token, roles/tenant/audience policy; in-memory or Redis store; `keygen`/`revoke` CLI
 | Entra/SAML/LDAP, mTLS/API key, HTTP administration endpoint
 
 | D — validation
-| `TestAC_AUTH_01..26` (authn, core, proxy, broker, conformance, HTTP binding, immediate/fail-closed Redis, signed manifest, broker rotation/key, revoke CLI, shared sid logout, timestamped sub global logout, TTL from discovery, IdP without TTL warning, cross-instance); `make test-auth`, `make test-auth-race`
+| `TestAC_AUTH_01..26` (authn, core, proxy, IAM, conformance, HTTP binding, immediate/fail-closed Redis, signed manifest, IAM rotation/key, revoke CLI, shared sid logout, timestamped sub global logout, TTL from discovery, IdP without TTL warning, cross-instance); `make test-auth`, `make test-auth-race`
 | gRPC parity, real Google in staging, load/chaos, CI scans
 
 | E — rollout
-| `doc/auth-broker.adoc`, `testdata/auth/broker.example.json`, README
+| `doc/auth-iam.adoc`, `testdata/auth/broker.example.json`, README
 | rotation/revocation runbooks, staging drills
 |===
 
@@ -1202,7 +1202,7 @@ go test ./pkg/identityadapter/... -v
 
 === 13.2 Known limitations
 
-* The broker uses Redis when `redis` is configured; otherwise the in-memory
+* The IAM uses Redis when `redis` is configured; otherwise the in-memory
   store remains the test/dev default. In multi-instance production,
   Redis is required.
 * The gRPC binding is not yet implemented; the contract and the HTTP
@@ -1210,7 +1210,7 @@ go test ./pkg/identityadapter/... -v
 * The staging tests (real Google, browsers, load, chaos) are not
   automated in this repository.
 * The degraded mode covers startup, reload and runtime failure.
-* The full Gate One <-> broker browser E2E (domain cookie,
+* The full Gate One <-> IAM browser E2E (domain cookie,
   real redirections) is not automated in this repository: the building
-  blocks are tested separately (broker with fake Google, OIDC wiring, JWT/JWKS).
+  blocks are tested separately (IAM with fake Google, OIDC wiring, JWT/JWKS).
   Staging with real Google remains the final validation.

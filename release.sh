@@ -244,8 +244,8 @@ for target in "${TARGETS[@]}"; do
 			-o "$broker_stage/$broker_bin" ./cmd/cladone-auth
 	)
 
-	if [ -n "$PRODUCT" ] && [ -f "$PRODUCT/schemas/broker.schema.json" ]; then
-		cp "$PRODUCT"/schemas/broker.schema.json "$broker_stage/schemas/"
+	if [ -n "$PRODUCT" ] && [ -f "$PRODUCT/schemas/embedded-iam.schema.json" ]; then
+		cp "$PRODUCT"/schemas/embedded-iam.schema.json "$broker_stage/schemas/"
 	fi
 	if [ -n "$PRODUCT" ] && [ -f "$PRODUCT/examples/embedded-iam/broker.json" ]; then
 		cp "$PRODUCT"/examples/embedded-iam/broker.json "$broker_stage/examples/"

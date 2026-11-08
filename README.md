@@ -140,10 +140,10 @@ a revoked `sid`/`sub` is rejected on the next request, on every instance.
 If Redis is unavailable, authenticated routes fail closed with `502`
 (public routes continue).
 
-The broker shares one browser `sid` across all apps of the same tenant
-(host-only broker cookie, `Path=/t/{tenant}`). A logout from any app
+The IAM shares one browser `sid` across all apps of the same tenant
+(host-only IAM cookie, `Path=/t/{tenant}`). A logout from any app
 revokes the session `sid` **and the user `sub`** in Redis: every existing
-session/device is rejected on its next request, and broker refresh
+session/device is rejected on its next request, and IAM refresh
 tokens/codes issued before the logout are refused. The `sub` revocation
 carries a timestamp, so a new login after the logout is allowed (no user
 lockout).
@@ -152,10 +152,10 @@ A provider that cannot be built (discovery down at startup) is
 **degraded per tenant**: its routes answer `502
 authentication_unavailable`, the other tenants continue, and existing
 local sessions remain valid. An invalid token stays `401`; a JWKS or
-broker outage becomes `502`.
+IAM outage becomes `502`.
 
-For a second tenant, the recommended companion is the small OIDC broker:
-`doc/auth-broker.adoc` and `cmd/cladone-auth`. It federates Google,
+For a second tenant, the recommended companion is the small OIDC IAM:
+`doc/auth-iam.adoc` and `cmd/cladone-auth`. It federates Google,
 applies roles/tenant/audience policy, and re-emits Ed25519 JWTs. Gate One
 trusts only that issuer.
 
@@ -262,7 +262,7 @@ Strict CSP (nonce styles, custom injections, proxified sites):
 ```bash
 go vet ./...
 go test ./...
-make test-auth             # AC-AUTH-* acceptance tests (authn, broker, proxy, conformance)
+make test-auth             # AC-AUTH-* acceptance tests (authn, IAM, proxy, conformance)
 make test-auth-race        # same, under -race
 ./smoke.sh                 # end-to-end: fake backend + auth-bridge + gateway
 ```
@@ -366,7 +366,7 @@ Full contract and behavioural test matrix:
 
 A route may call its backend with a **per-user token** supplied by the
 internal `token-broker` instead of a shared service credential. The
-gateway authenticates the caller as usual, asks the broker for that
+gateway authenticates the caller as usual, asks the IAM for that
 user's token, and injects it into the backend request. Provider client
 secrets never enter Gate One.
 
@@ -389,8 +389,8 @@ secrets never enter Gate One.
 }
 ```
 
-- `auth` is mandatory: the broker needs the authenticated user id.
-- `upstream.delegated.provider` is a broker-owned name. Gate One checks
+- `auth` is mandatory: the IAM needs the authenticated user id.
+- `upstream.delegated.provider` is an IAM-owned name. Gate One checks
   it against `GET /providers` when it starts (and on every SIGHUP); an
   unknown or disabled provider refuses startup.
 - The default injection is `Authorization: Bearer <token>`. `header`
@@ -400,13 +400,13 @@ secrets never enter Gate One.
 - A missing connection never reaches the backend: API routes get
   `401 delegated_credentials_required` (or `409
   reauthorization_required`) with a `connect_url`; frontend routes are
-  redirected there. A broker outage is a `502`.
+  redirected there. A IAM outage is a `502`.
 - The same policy applies to REST calls produced by an MCP route's
   `tools/call`, using the authenticated MCP caller's token.
 
 The shared secret is read from the environment at load and is never
 serialized or logged. `tokenBroker.url` defaults to the Docker service
-name `http://token-broker:4000` (or `TOKEN_BROKER_URL`); the broker has
+name `http://token-broker:4000` (or `TOKEN_BROKER_URL`); the IAM has
 no Traefik route and is reachable only from the internal network.
 
 ## External MCP proxy
@@ -442,7 +442,7 @@ tool names:
   Filtering is applied to `tools/list` **and** enforced on `tools/call`:
   a hidden tool is answered locally and never reaches the upstream.
 - `mcp.upstream` and `mcp.operations` are mutually exclusive.
-- `upstream.delegated` injects the caller's broker token. Without it,
+- `upstream.delegated` injects the caller's IAM token. Without it,
   `upstream.headers` can carry a static service credential (resolved
   with `${VAR}` at load). The Gate One bearer, cookies and identity
   headers are never forwarded upstream.
@@ -528,7 +528,7 @@ Go toolchain on the server.
 
 ```
 cmd/gate-one/       entrypoint (flags, init/doctor, SIGHUP reload, shutdown)
-cmd/cladone-auth/   small multi-tenant OIDC broker (Google federation, JWKS, policy)
+cmd/cladone-auth/   small multi-tenant OIDC IAM (Google federation, JWKS, policy)
 internal/authn/     provider SPI: dev IdP, http adapter, native OIDC, JWT/JWKS, bbolt store
 internal/broker/    OIDC issuer: tenants, Google adapter, policy, Ed25519 tokens
 internal/core/      config grammar + route loading/validation
@@ -537,12 +537,12 @@ internal/pwa/       PWA wrap (manifest, service worker, Workbox)
 internal/mcp/       MCP endpoint
 pkg/authstate/     shared Redis key schema (revocation, issuer/tenant)
 pkg/pluginmanifest/ signed plugin manifest/artifact/dependency verification
-pkg/identityadapter/ broker-side IdentityAdapter contract + conformance suite
+pkg/identityadapter/ IAM-side IdentityAdapter contract + conformance suite
 pkg/identityadapter/httpbinding/ portable HTTP/JSON binding
 test/ui/            guard-script harness (jsdom)
 sw-sim/             service-worker simulator
-testdata/           reference production config; testdata/auth/ broker example
-doc/                developer docs: auth broker, auth providers, test plan, plugins (see doc/README.md)
+testdata/           reference production config; testdata/auth/ IAM example
+doc/                developer docs: embedded IAM, auth providers, test plan, plugins (see doc/README.md)
 release.sh          signed release artifacts (never pushes)
 release/            public verification key for the release signature
 ```
@@ -555,7 +555,7 @@ release/            public verification key for the release signature
 - personal use, evaluation, testing and internal development: **free**;
 - **commercial production use requires a paid licence**;
 - no competing service / paid SaaS hosting without written permission;
-- **extension plugins** (non-auth, non-broker) may use their own licence,
+- **extension plugins** (non-auth, non-IAM) may use their own licence,
   including closed source/commercial — see `PLUGIN-LICENSING.md`.
 
 The gateway stays **fully functional** without a licence: it only shows an

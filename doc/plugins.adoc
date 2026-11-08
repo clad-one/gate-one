@@ -11,12 +11,12 @@ fail-closed login) are implemented. A `plugins.d` directory scan, admin
 == 1. Scope and taxonomy
 
 Gate One distinguishes five plugin families. Only the last four are
-extensions; the first one is broker-only.
+extensions; the first one is IAM-only.
 
 [cols="1,1,1,1,1",options="header"]
 |===
 | Type | Runs in | Transport | Decides auth? | Licence
-| Auth adapter | broker | out-of-process HTTP/JSON (gRPC later) | yes (broker) | Gate One licence
+| Auth adapter | IAM | out-of-process HTTP/JSON (gRPC later) | yes (IAM) | Gate One licence
 | Route handler / aggregator | Gate One | sidecar route or out-of-process | no (after auth) | extension licence
 | Injection / userscript / UI | Gate One | signed inject bundle, loaded at startup | no | extension licence
 | Event consumer | Gate One | out-of-process HTTP/JSON | no | extension licence
@@ -27,9 +27,9 @@ There is **no public compile-time plugin API**. Hot-path transforms
 (CSP, guard, rewriting) stay in the core. Go `plugin` (`.so`) is not
 used: ABI fragility, no Windows, identical toolchain requirement.
 
-Auth adapters stay in the broker and remain under the Gate One licence.
+Auth adapters stay in the IAM and remain under the Gate One licence.
 The extension-plugin exception (section 6 of `LICENSE`) covers non-auth,
-non-broker extensions and allows closed-source/commercial plugins.
+non-IAM extensions and allows closed-source/commercial plugins.
 
 == 2. AC-AUTH-07 invariants
 
@@ -95,7 +95,7 @@ Rules:
 The secret is per deployment, shared by every Gate One instance, and
 held **only by the producer**. A plugin never receives it. Without
 multi-IdP account linking, the ID is per `(issuer, sub)`; with a
-canonical broker account it becomes per person (`v2`).
+canonical IAM account it becomes per person (`v2`).
 
 The application may receive the ID as a backend header:
 
@@ -223,11 +223,11 @@ Gate One internals.
 
 * The core is source-available (BSL-CUSTOM, `LICENSE`; French reference
   in `LICENSE.fr.md`).
-* Extension plugins (non-auth, non-broker) may use any licence,
+* Extension plugins (non-auth, non-IAM) may use any licence,
   including closed source/commercial, provided they respect the
   documented API/manifest and do not impose incompatible terms on Gate
   One (section 6 of `LICENSE`; see `PLUGIN-LICENSING.md`).
-* Auth/authz plugins, broker IdP adapters and derived copies remain
+* Auth/authz plugins, IAM IdP adapters and derived copies remain
   under the Gate One licence.
 * A commercial plugin can declare `licenseFeature`; the host refuses to
   load it without that feature.
