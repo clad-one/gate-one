@@ -23,9 +23,9 @@ Two extended guides are maintained for **users** on the documentation
 site, not here:
 
 * Strict Content Security Policy —
-  <https://clad-one.github.io/gate-one-doc/v0.4.5-docs.4/docs/guides/strict-csp/>
+  <https://clad-one.github.io/gate-one-doc/v0.4.5-docs.9/docs/strict-csp/>
 * Declarative UI gating (`data-gtw-*`) —
-  <https://clad-one.github.io/gate-one-doc/v0.4.5-docs.4/docs/guides/ui-gating/>
+  <https://clad-one.github.io/gate-one-doc/v0.4.5-docs.9/docs/ui-gating/>
 
 ## Related
 

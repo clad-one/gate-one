@@ -247,7 +247,7 @@ gateway no longer hides an outage behind a sign-in loop.
 
 Full guide: `doc/auth-providers.adoc`.
 Strict CSP (nonce styles, custom injections, proxified sites):
-<https://clad-one.github.io/gate-one-doc/v0.4.5-docs.4/docs/guides/strict-csp/>.
+<https://clad-one.github.io/gate-one-doc/v0.4.5-docs.9/docs/strict-csp/>.
 
 ## Build
 
@@ -360,7 +360,7 @@ gates **activation**, never deactivation. Value controls (`select`,
 clicks are focus, not action: put the attribute on the submit button.
 
 Full contract and behavioural test matrix:
-<https://clad-one.github.io/gate-one-doc/v0.4.5-docs.4/docs/guides/ui-gating/>.
+<https://clad-one.github.io/gate-one-doc/v0.4.5-docs.9/docs/ui-gating/>.
 
 ## Delegated upstream credentials
 
