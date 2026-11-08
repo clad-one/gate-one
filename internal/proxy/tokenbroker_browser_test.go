@@ -202,6 +202,24 @@ func TestTokenBrokerBrowserUnauthenticatedRedirects(t *testing.T) {
 	}
 }
 
+func TestTokenBrokerBrowserHostDerivedFromLink(t *testing.T) {
+	broker, cap := fakeTokenBroker(t)
+	bridge := delegatedBridge(t)
+	// browserHost empty: it is derived from links.services.url
+	// (https://login.test/connections).
+	gw := newBrowserGateway(t, broker.URL, bridge.URL, "")
+
+	resp := doRequestWithHeaders(t, gw, "login.test", "/connections",
+		map[string]string{"Cookie": "access_token=u1"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	_, user, _ := cap.snapshot()
+	if user != "user-1" {
+		t.Fatalf("X-User-Id = %q, want user-1 (host derived)", user)
+	}
+}
+
 func TestTokenBrokerBrowserOtherHostFallsThrough(t *testing.T) {
 	broker, _ := fakeTokenBroker(t)
 	bridge := delegatedBridge(t)
