@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Demo application</title>
+  <style>
+    body { font: 16px/1.6 system-ui, sans-serif; margin: 2rem auto; max-width: 46rem; padding: 0 1rem; }
+    nav a { margin-right: 1rem; }
+    .card { border: 1px solid #ccc; border-radius: .5rem; padding: 1rem 1.25rem; margin: 1.25rem 0; }
+    .danger-zone { border-color: #b23; }
+    code { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Demo application</h1>
+  <p>
+    A plain static site behind Gate One. The application has no SDK and
+    knows nothing about the identity provider.
+  </p>
+  <nav>
+    <a href="/dashboard.html">Dashboard</a>
+    <a href="/healthz">Health</a>
+  </nav>
+  <div class="card">
+    <h2>What to look at</h2>
+    <ul>
+      <li>the redirect to <code>login.demo.localhost</code> on the first visit;</li>
+      <li>the user badge in the top-right corner;</li>
+      <li>the same page after signing in: no application change.</li>
+    </ul>
+  </div>
+</body>
+</html>

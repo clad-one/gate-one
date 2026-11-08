@@ -1,0 +1,48 @@
+{
+  "publicUrl": "http://auth.demo.localhost:8081",
+  "listen": ":8081",
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "prefix": "demo:broker:",
+    "authPrefix": "demo:auth:v1:"
+  },
+  "tenants": [
+    {
+      "id": "demo",
+      "clientId": "gate-one",
+      "clientSecret": "local-demo-secret",
+      "redirectUris": [
+        "http://login.demo.localhost:8080/auth/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "http://login.demo.localhost:8080/*",
+        "http://app.demo.localhost:8080/*"
+      ],
+      "upstreams": {
+        "demo-idp": {
+          "issuer": "http://idp.demo.localhost:9000",
+          "clientId": "gate-one",
+          "clientSecret": "local-demo-idp-secret",
+          "displayName": "Demo IdP",
+          "hostedDomain": "demo.test",
+          "scopes": ["openid", "profile", "email"]
+        }
+      },
+      "keyFiles": ["/config/demo.key"],
+      "defaultRoles": ["user"],
+      "allowedDomains": ["demo.test"],
+      "adminEmails": ["alice@demo.test"],
+      "mappings": [
+        {
+          "claim": "groups",
+          "values": ["admins"],
+          "roles": ["admin"]
+        }
+      ],
+      "accessTokenTtlSeconds": 600,
+      "idTokenTtlSeconds": 600,
+      "refreshTokenTtlSeconds": 2592000,
+      "sessionTtlSeconds": 43200
+    }
+  ]
+}

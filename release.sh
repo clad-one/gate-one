@@ -265,6 +265,40 @@ for target in "${TARGETS[@]}"; do
 		--source-name "cladone-auth" --source-version "$VERSION" \
 		-o "spdx-json=$DIST/cladone-auth_${VERSION}_${os}_${arch}.spdx.json" >/dev/null
 	rm -rf "$broker_stage"
+
+	# --- demo IdP (fake Google, demos only) -------------------------
+	# Local and VPS demos need an OIDC issuer that runs offline. It is
+	# explicitly a demo/test tool: never a production identity provider.
+	demo_bin="demo-idp"
+	[ "$os" = "windows" ] && demo_bin="demo-idp.exe"
+
+	demo_stage="$DIST/stage/gate-one-demo-idp_${VERSION}_${os}_${arch}"
+	mkdir -p "$demo_stage"
+
+	echo "building demo-idp ${os}/${arch}…"
+	(
+		cd "$SRC"
+		CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" "$go_bin" build \
+			-trimpath \
+			-ldflags "-s -w" \
+			-o "$demo_stage/$demo_bin" ./cmd/fake-google
+	)
+	if [ -n "$PRODUCT" ] && [ -d "$PRODUCT/examples" ]; then
+		mkdir -p "$demo_stage/deploy"
+		cp -R "$SRC"/deploy/local "$demo_stage/deploy/" 2>/dev/null || true
+	fi
+	cp "$SRC"/LICENSE "$SRC"/README.md "$SRC"/VERSION "$demo_stage/" 2>/dev/null || true
+
+	demo_archive="$DIST/gate-one-demo-idp_${VERSION}_${os}_${arch}${ext}"
+	if [ "$os" = "windows" ]; then
+		( cd "$demo_stage" && zip -qr "$demo_archive" . )
+	else
+		tar -czf "$demo_archive" -C "$demo_stage" .
+	fi
+	"$syft_bin" "dir:$demo_stage" \
+		--source-name "gate-one-demo-idp" --source-version "$VERSION" \
+		-o "spdx-json=$DIST/gate-one-demo-idp_${VERSION}_${os}_${arch}.spdx.json" >/dev/null
+	rm -rf "$demo_stage"
 done
 
 rmdir "$DIST/stage" 2>/dev/null || true
@@ -305,7 +339,7 @@ cat > "$DIST/RELEASE_MANIFEST.json" <<JSON
   "productCommit": "${PRODUCT_COMMIT}",
   "docsIndex": ${docs_index:-null},
   "builtAt": "${DATE}",
-  "binaries": ["gate-one", "cladone-auth"],
+  "binaries": ["gate-one", "cladone-auth", "demo-idp"],
   "services": ["token-broker", "auth-bridge"],
   "targets": ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"]
 }
@@ -322,6 +356,7 @@ Artifacts:
 
 - \`gate-one_${VERSION}_<os>_<arch>.tar.gz\` (or \`.zip\` on Windows)
 - \`cladone-auth_${VERSION}_<os>_<arch>.tar.gz\` (or \`.zip\` on Windows)
+- \`gate-one-demo-idp_${VERSION}_<os>_<arch>.tar.gz\` (fake OIDC IdP for the local/VPS demos; never production)
 - \`services_${VERSION}_src.tar.gz\` (token-broker and auth-bridge sources)
 ${site_line}
 - \`RELEASE_MANIFEST.json\` (source/product tags and commits)

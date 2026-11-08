@@ -1,0 +1,115 @@
+name: gate-one-local-embedded-iam
+
+# Local embedded IAM demo: Gate One + cladone-auth + a demo OIDC IdP.
+# Everything runs on *.localhost over plain HTTP; no domain, no external
+# service. The three Gate One binaries are mounted from $BIN_DIR.
+#
+#   ./run.sh            # starts, prints the URL
+#   ./run.sh down       # stops
+
+x-go-tool: &go-tool
+  image: alpine:3.20
+  restart: unless-stopped
+  working_dir: /
+  volumes:
+    - ${BIN_DIR:-./bin}/gate-one:/bin/gate-one:ro
+    - ${BIN_DIR:-./bin}/cladone-auth:/bin/cladone-auth:ro
+    - ${BIN_DIR:-./bin}/demo-idp:/bin/demo-idp:ro
+    - ${DEMO_CONFIG_DIR:-./config}:/config:ro
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  demo-idp:
+    <<: *go-tool
+    entrypoint: ["/bin/demo-idp"]
+    command:
+      - "-addr"
+      - ":9000"
+      - "-issuer"
+      - "http://idp.demo.localhost:9000"
+      - "-config"
+      - "/config/idp.json"
+    ports:
+      - "9000:9000"
+    networks:
+      default:
+        aliases:
+          - idp.demo.localhost
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  broker:
+    <<: *go-tool
+    entrypoint: ["/bin/cladone-auth"]
+    command: ["-config", "/config/broker.json"]
+    ports:
+      - "8081:8081"
+    networks:
+      default:
+        aliases:
+          - auth.demo.localhost
+    depends_on:
+      redis:
+        condition: service_healthy
+      demo-idp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  backend:
+    image: python:3.12-alpine
+    command: ["python", "/app/server.py"]
+    restart: unless-stopped
+    volumes:
+      - ${DEMO_BACKEND_DIR:-./backend}:/app:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  gate-one:
+    <<: *go-tool
+    entrypoint: ["/bin/gate-one"]
+    command: ["-config", "/config/routes.json", "-addr", ":8080"]
+    ports:
+      - "8080:8080"
+    networks:
+      default:
+        aliases:
+          - app.demo.localhost
+          - login.demo.localhost
+    environment:
+      DEMO_GATE_ONE_SECRET: local-demo-secret
+      GATE_ONE_SESSION_KEY: local-demo-session-key
+    depends_on:
+      redis:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

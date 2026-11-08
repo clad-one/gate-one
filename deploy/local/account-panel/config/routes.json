@@ -1,0 +1,16 @@
+{
+  "authProvider": {
+    "type": "dev",
+    "loginBaseUrl": "http://login.demo.localhost:3000",
+    "cookieDomain": "demo.localhost"
+  },
+  "routes": [
+    {
+      "host": "app.demo.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://127.0.0.1:8080",
+      "auth": {}
+    }
+  ]
+}

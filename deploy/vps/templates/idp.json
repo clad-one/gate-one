@@ -1,0 +1,21 @@
+{
+  "clientId": "demo-client",
+  "users": [
+    {
+      "sub": "demo-alice",
+      "email": "alice@demo.test",
+      "emailVerified": true,
+      "preferredUsername": "alice",
+      "name": "Alice",
+      "groups": ["admins"]
+    },
+    {
+      "sub": "demo-bob",
+      "email": "bob@demo.test",
+      "emailVerified": true,
+      "preferredUsername": "bob",
+      "name": "Bob",
+      "groups": ["users"]
+    }
+  ]
+}

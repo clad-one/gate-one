@@ -1,0 +1,23 @@
+{
+  "clientId": "gate-one",
+  "users": [
+    {
+      "sub": "idp-alice",
+      "email": "alice@demo.test",
+      "emailVerified": true,
+      "hostedDomain": "demo.test",
+      "preferredUsername": "alice",
+      "name": "Alice",
+      "groups": ["admins"]
+    },
+    {
+      "sub": "idp-bob",
+      "email": "bob@demo.test",
+      "emailVerified": true,
+      "hostedDomain": "demo.test",
+      "preferredUsername": "bob",
+      "name": "Bob",
+      "groups": ["users"]
+    }
+  ]
+}

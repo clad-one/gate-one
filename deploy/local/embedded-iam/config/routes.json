@@ -1,0 +1,41 @@
+{
+  "authProvider": {
+    "type": "oidc",
+    "issuer": "http://auth.demo.localhost:8081/t/demo",
+    "clientId": "gate-one",
+    "clientSecretEnv": "DEMO_GATE_ONE_SECRET",
+    "loginBaseUrl": "http://login.demo.localhost:8080",
+    "cookieDomain": "demo.localhost",
+    "cookieName": "gate_one_demo",
+    "roleClaims": [
+      "roles",
+      "groups"
+    ],
+    "sessionStore": {
+      "type": "redis",
+      "url": "redis://redis:6379/0",
+      "prefix": "demo:auth:v1:"
+    },
+    "sessionKeyEnv": "GATE_ONE_SESSION_KEY",
+    "sessionTtlSeconds": 1800,
+    "revocationTtlSeconds": 2592000,
+    "backchannelLogout": true
+  },
+  "routes": [
+    {
+      "host": "app.demo.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://backend:8080",
+      "auth": {},
+      "userBadge": {
+        "position": "right",
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
+        "logoutLabel": "Sign out"
+      }
+    }
+  ]
+}

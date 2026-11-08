@@ -1,0 +1,39 @@
+{
+  "apiVersion": "v1",
+  "artifact": {
+    "digest": "sha256:269af18521885718e2a0d017de46b329e998b855dd11f1b1f9da82df99dcae9f",
+    "platform": "linux/amd64",
+    "size": 77,
+    "type": "binary"
+  },
+  "capabilities": [
+    "events"
+  ],
+  "events": {
+    "filters": {
+      "sampleRate": 1,
+      "statusClasses": [
+        "4xx",
+        "5xx"
+      ]
+    },
+    "maxLagBytes": 5000000,
+    "onMaxLag": "block",
+    "types": [
+      "auth",
+      "error"
+    ]
+  },
+  "hostAPI": ">=1.0 <2.0",
+  "keyId": "example-2026",
+  "kind": "extension",
+  "name": "com.cladone.audit",
+  "publisher": "Cladone-IT (example)",
+  "schemaVersion": 1,
+  "signature": {
+    "alg": "ed25519",
+    "keyId": "example-2026",
+    "value": "4rsaE4o828N-CNhvc2_7Ev6Hi7gj3R1D00ESEsjj019H8tqMEHNzMR-mGOky4ahMxeXKvc-wt7ffxowPAe8mDQ"
+  },
+  "version": "1.0.0"
+}

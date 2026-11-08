@@ -1,0 +1,73 @@
+{
+  "authProvider": {
+    "type": "dev",
+    "loginBaseUrl": "http://login.demo.localhost:3000",
+    "cookieDomain": "demo.localhost"
+  },
+  "routes": [
+    {
+      "host": "app.demo.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://127.0.0.1:8080",
+      "auth": {},
+      "inject": "bundle.json",
+      "userBadge": {
+        "position": "right",
+        "claims": [
+          "preferred_username",
+          "email"
+        ],
+        "roles": [
+          "admin"
+        ],
+        "logoutLabel": "Sign out",
+        "links": [
+          {
+            "label": "Account",
+            "url": "http://login.demo.localhost:3000/account"
+          }
+        ]
+      },
+      "uiGate": [
+        {
+          "selector": ".danger-zone",
+          "roles": [
+            "admin"
+          ]
+        },
+        {
+          "selector": ".beta-feature",
+          "hidden": "before"
+        },
+        {
+          "selector": "[data-feature=export]",
+          "auth": "before"
+        }
+      ],
+      "authGuard": {
+        "forbidden": {
+          "banner": true
+        }
+      },
+      "csp": {
+        "mode": "nonce"
+      },
+      "pwa": {
+        "enabled": true,
+        "name": "Gate One demo",
+        "shortName": "Demo",
+        "themeColor": "#2563eb",
+        "networkOnly": {
+          "excludePatterns": [
+            "^https://idp\\.example\\.com/.*/\\.well-known/openid-configuration",
+            "^https://idp\\.example\\.com/.*/protocol/openid-connect",
+            "^https://idp\\.example\\.com/.*/end_session_endpoint",
+            "^http://login\\.demo\\.localhost:3000/auth/callback",
+            "^http://login\\.demo\\.localhost:3000/t/[^/?#]+/callback"
+          ]
+        }
+      }
+    }
+  ]
+}

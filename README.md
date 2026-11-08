@@ -542,6 +542,7 @@ pkg/identityadapter/httpbinding/ portable HTTP/JSON binding
 test/ui/            guard-script harness (jsdom)
 sw-sim/             service-worker simulator
 testdata/           reference production config; testdata/auth/ IAM example
+deploy/             runnable deployments: local/ (*.localhost demos) and vps/ (Traefik + TLS)
 doc/                developer docs: embedded IAM, auth providers, test plan, plugins (see doc/README.md)
 release.sh          signed release artifacts (never pushes)
 release/            public verification key for the release signature

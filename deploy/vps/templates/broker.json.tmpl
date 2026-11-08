@@ -1,0 +1,37 @@
+{
+  "publicUrl": "https://auth.__DOMAIN__",
+  "listen": ":8081",
+  "tenants": [
+    {
+      "id": "main",
+      "clientId": "gate-one",
+      "clientSecretEnv": "GATE_ONE_OIDC_CLIENT_SECRET",
+      "redirectUris": [
+        "https://login.__DOMAIN__/auth/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "https://login.__DOMAIN__/*",
+        "https://app.__DOMAIN__/*"
+      ],
+      "upstreams": {
+        "google": {
+          "issuer": "https://accounts.google.com",
+          "clientIdEnv": "GOOGLE_CLIENT_ID",
+          "clientSecretEnv": "GOOGLE_CLIENT_SECRET",
+          "displayName": "Google",
+          "optional": true
+        },
+        "demo": {
+          "issuer": "https://idp.__DOMAIN__",
+          "clientIdEnv": "DEMO_IDP_CLIENT_ID",
+          "clientSecretEnv": "DEMO_IDP_CLIENT_SECRET",
+          "displayName": "Demo IdP",
+          "optional": true
+        }
+      },
+      "keyFiles": ["/config/broker.key"],
+      "defaultRoles": ["user"],
+      "sessionTtlSeconds": 43200
+    }
+  ]
+}

@@ -1,0 +1,195 @@
+name: gate-one-vps
+
+# Production shape: Traefik (TLS) -> Gate One -> your application,
+# with cladone-auth as the embedded IAM in front of Google.
+#
+#   make init     create .env, generate secrets, render config/
+#   make up       start the stack
+#   make demo     also start the demo IdP (smoke test before Google)
+#   make ha       two Gate One replicas + Redis
+#
+# Hostnames (DOMAIN comes from .env):
+#   app.<domain>    protected application
+#   login.<domain>  login surface
+#   auth.<domain>   embedded IAM
+#   idp.<domain>    demo IdP (profile "demo" only)
+
+x-go-tool: &go-tool
+  image: alpine:3.20
+  restart: unless-stopped
+  working_dir: /
+  volumes:
+    - ${BIN_DIR:-./bin}/gate-one:/bin/gate-one:ro
+    - ${BIN_DIR:-./bin}/cladone-auth:/bin/cladone-auth:ro
+    - ${BIN_DIR:-./bin}/demo-idp:/bin/demo-idp:ro
+    - ./config:/config:ro
+
+services:
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data/acme.json:/acme.json
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  broker:
+    <<: *go-tool
+    entrypoint: ["/bin/cladone-auth"]
+    command: ["-config", "/config/broker.json"]
+    environment:
+      GATE_ONE_OIDC_CLIENT_SECRET: ${GATE_ONE_OIDC_CLIENT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      DEMO_IDP_CLIENT_ID: ${DEMO_IDP_CLIENT_ID:-}
+      DEMO_IDP_CLIENT_SECRET: ${DEMO_IDP_CLIENT_SECRET:-}
+    networks:
+      - internal
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.broker.rule=Host(`auth.${DOMAIN}`)
+      - traefik.http.routers.broker.entrypoints=websecure
+      - traefik.http.routers.broker.tls.certresolver=le
+      - traefik.http.services.broker.loadbalancer.server.port=8081
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  backend:
+    image: python:3.12-alpine
+    command: ["python", "/app/server.py"]
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app:ro
+    networks:
+      - internal
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  gate-one:
+    <<: *go-tool
+    entrypoint: ["/bin/gate-one"]
+    command: ["-config", "/config/routes.json", "-addr", ":3000"]
+    environment:
+      GATE_ONE_OIDC_CLIENT_SECRET: ${GATE_ONE_OIDC_CLIENT_SECRET}
+      GATE_ONE_SESSION_KEY: ${GATE_ONE_SESSION_KEY}
+    networks:
+      - internal
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.gate-one.rule=Host(`app.${DOMAIN}`) || Host(`login.${DOMAIN}`)
+      - traefik.http.routers.gate-one.entrypoints=websecure
+      - traefik.http.routers.gate-one.tls.certresolver=le
+      - traefik.http.services.gate-one.loadbalancer.server.port=3000
+    depends_on:
+      broker:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["ha"]
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    restart: unless-stopped
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  gate-one-2:
+    <<: *go-tool
+    profiles: ["ha"]
+    entrypoint: ["/bin/gate-one"]
+    command: ["-config", "/config/routes.ha.json", "-addr", ":3000"]
+    environment:
+      GATE_ONE_OIDC_CLIENT_SECRET: ${GATE_ONE_OIDC_CLIENT_SECRET}
+      GATE_ONE_SESSION_KEY: ${GATE_ONE_SESSION_KEY}
+    networks:
+      - internal
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.gate-one.loadbalancer.server.port=3000
+    depends_on:
+      redis:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  demo-idp:
+    <<: *go-tool
+    profiles: ["demo"]
+    entrypoint: ["/bin/demo-idp"]
+    command:
+      - "-addr"
+      - ":9000"
+      - "-issuer"
+      - "https://idp.${DOMAIN}"
+      - "-config"
+      - "/config/idp.json"
+    networks:
+      - internal
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.demo-idp.rule=Host(`idp.${DOMAIN}`)
+      - traefik.http.routers.demo-idp.entrypoints=websecure
+      - traefik.http.routers.demo-idp.tls.certresolver=le
+      - traefik.http.services.demo-idp.loadbalancer.server.port=9000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+networks:
+  proxy:
+    name: gate-one-vps_proxy
+  internal:
+    name: gate-one-vps_internal

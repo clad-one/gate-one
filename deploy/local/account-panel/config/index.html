@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account panel example</title>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<header class="app-header">
+  <strong>Example application</strong>
+  <button id="account-toggle" class="account-toggle"
+          type="button" aria-controls="account-panel" aria-expanded="false">
+    <span class="burger" aria-hidden="true"><span></span><span></span><span></span></span>
+    Account
+  </button>
+</header>
+
+<main class="app-main">
+  <h1>Bring your own account panel</h1>
+  <p>This page is the application. Gate One authenticates the request; the
+  panel below reads the session from Gate One and renders it in the app's
+  own burger menu. There is no built-in user badge on this route.</p>
+</main>
+
+<aside id="account-panel" class="account-panel" hidden>
+  <div class="account-panel__head">
+    <strong>Account</strong>
+    <button id="account-close" class="account-close" type="button"
+            aria-label="Close account panel">×</button>
+  </div>
+
+  <div id="account-anonymous" class="account-anonymous" hidden>
+    <p>You are not signed in.</p>
+    <button id="account-login" class="account-button" type="button">Sign in</button>
+  </div>
+
+  <div id="account-signed" class="account-signed" hidden>
+    <dl class="account-facts">
+      <dt>User</dt><dd id="account-name">—</dd>
+      <dt>Email</dt><dd id="account-email">—</dd>
+      <dt>Roles</dt><dd id="account-roles">—</dd>
+      <dt>Scopes</dt><dd id="account-scopes">—</dd>
+    </dl>
+    <button id="account-logout" class="account-button account-button--danger"
+            type="button">Sign out</button>
+  </div>
+
+  <p id="account-error" class="account-error" hidden></p>
+</aside>
+
+<script src="panel.js"></script>
+</body>
+</html>

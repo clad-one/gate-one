@@ -1,0 +1,194 @@
+name: gate-one-local-redis
+
+# Two tenants, two Gate One instances, one shared Redis.
+#
+#   app.mycompany.localhost:8080   -> Gate One instance 1 (tenant mycompany)
+#   app.mycompany.localhost:8090   -> Gate One instance 2, same session
+#   app.contoso.localhost:8080     -> tenant contoso, separate issuer
+#
+# Redis carries both the brokers' directories and the Gate One
+# session/revocation state, which is what lets the second instance accept
+# a session created by the first.
+
+x-go-tool: &go-tool
+  image: alpine:3.20
+  restart: unless-stopped
+  working_dir: /
+  volumes:
+    - ${BIN_DIR:-./bin}/gate-one:/bin/gate-one:ro
+    - ${BIN_DIR:-./bin}/cladone-auth:/bin/cladone-auth:ro
+    - ${BIN_DIR:-./bin}/demo-idp:/bin/demo-idp:ro
+    - ${DEMO_CONFIG_DIR:-./config}:/config:ro
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  idp-mycompany:
+    <<: *go-tool
+    entrypoint: ["/bin/demo-idp"]
+    command:
+      - "-addr"
+      - ":9000"
+      - "-issuer"
+      - "http://idp.mycompany.localhost:9000"
+      - "-config"
+      - "/config/idp-mycompany.json"
+    ports:
+      - "9000:9000"
+    networks:
+      default:
+        aliases:
+          - idp.mycompany.localhost
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  idp-contoso:
+    <<: *go-tool
+    entrypoint: ["/bin/demo-idp"]
+    command:
+      - "-addr"
+      - ":9001"
+      - "-issuer"
+      - "http://idp.contoso.localhost:9001"
+      - "-config"
+      - "/config/idp-contoso.json"
+    ports:
+      - "9001:9001"
+    networks:
+      default:
+        aliases:
+          - idp.contoso.localhost
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9001/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  broker-mycompany:
+    <<: *go-tool
+    entrypoint: ["/bin/cladone-auth"]
+    command: ["-config", "/config/mycompany.json"]
+    ports:
+      - "8081:8081"
+    networks:
+      default:
+        aliases:
+          - auth.mycompany.localhost
+    depends_on:
+      redis:
+        condition: service_healthy
+      idp-mycompany:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  broker-contoso:
+    <<: *go-tool
+    entrypoint: ["/bin/cladone-auth"]
+    command: ["-config", "/config/contoso.json"]
+    ports:
+      - "8082:8082"
+    networks:
+      default:
+        aliases:
+          - auth.contoso.localhost
+    depends_on:
+      redis:
+        condition: service_healthy
+      idp-contoso:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8082/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  backend:
+    image: python:3.12-alpine
+    command: ["python", "/app/server.py"]
+    restart: unless-stopped
+    volumes:
+      - ${DEMO_BACKEND_DIR:-./backend}:/app:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  gate-one-1:
+    <<: *go-tool
+    entrypoint: ["/bin/gate-one"]
+    command: ["-config", "/config/routes.json", "-addr", ":8080"]
+    ports:
+      - "8080:8080"
+    networks:
+      default:
+        aliases:
+          - app.mycompany.localhost
+          - app2.mycompany.localhost
+          - api.mycompany.localhost
+          - public.mycompany.localhost
+          - app.contoso.localhost
+          - login.mycompany.localhost
+          - login.contoso.localhost
+    environment:
+      GATE_ONE_SESSION_KEY: local-session-key
+      MYCOMPANY_GATE_ONE_SECRET: local-mycompany-secret
+      CONTOSO_GATE_ONE_SECRET: local-contoso-secret
+    depends_on:
+      redis:
+        condition: service_healthy
+      broker-mycompany:
+        condition: service_healthy
+      broker-contoso:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  gate-one-2:
+    <<: *go-tool
+    entrypoint: ["/bin/gate-one"]
+    command: ["-config", "/config/routes.json", "-addr", ":8080"]
+    ports:
+      - "8090:8080"
+    environment:
+      GATE_ONE_SESSION_KEY: local-session-key
+      MYCOMPANY_GATE_ONE_SECRET: local-mycompany-secret
+      CONTOSO_GATE_ONE_SECRET: local-contoso-secret
+    depends_on:
+      redis:
+        condition: service_healthy
+      broker-mycompany:
+        condition: service_healthy
+      broker-contoso:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

@@ -1,0 +1,11 @@
+{
+  "allowAuth": false,
+  "allowedNames": [
+    "com.cladone.*"
+  ],
+  "coreVersion": "1.5.0",
+  "keys": {
+    "example-2026": "hAWESqVW9wP_aZgvp8j2EsXLij9Si4oUyX3Jhhxkd0o"
+  },
+  "revokedDigests": []
+}

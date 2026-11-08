@@ -1,0 +1,29 @@
+{
+  "authProvider": {
+    "type": "oidc",
+    "issuer": "https://auth.__DOMAIN__/t/main",
+    "clientId": "gate-one",
+    "clientSecretEnv": "GATE_ONE_OIDC_CLIENT_SECRET",
+    "loginBaseUrl": "https://login.__DOMAIN__",
+    "cookieDomain": "__DOMAIN__",
+    "roleClaims": ["roles", "groups"],
+    "sessionKeyEnv": "GATE_ONE_SESSION_KEY",
+    "sessionTtlSeconds": 43200,
+    "revocationTtlSeconds": 2592000
+  },
+  "routes": [
+    {
+      "host": "app.__DOMAIN__",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://backend:8080",
+      "auth": {},
+      "userBadge": {
+        "position": "right",
+        "claims": ["preferred_username", "email"],
+        "roles": true,
+        "logoutLabel": "Sign out"
+      }
+    }
+  ]
+}

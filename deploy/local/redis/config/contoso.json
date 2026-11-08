@@ -1,0 +1,58 @@
+{
+  "publicUrl": "http://auth.contoso.localhost:8082",
+  "listen": ":8082",
+  "tenants": [
+    {
+      "id": "contoso",
+      "clientId": "gate-one",
+      "clientSecret": "local-contoso-secret",
+      "redirectUris": [
+        "http://login.contoso.localhost:8080/auth/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "http://login.contoso.localhost:8080/*",
+        "http://app.contoso.localhost:8080/*"
+      ],
+      "audiences": [
+        "http://api.contoso.localhost:8080"
+      ],
+      "google": {
+        "issuer": "http://idp.contoso.localhost:9001",
+        "clientId": "google-client",
+        "clientSecret": "google-secret",
+        "hostedDomain": "contoso.test",
+        "scopes": [
+          "openid",
+          "profile",
+          "email"
+        ]
+      },
+      "keyFiles": [
+        "/config/contoso.key"
+      ],
+      "defaultRoles": [
+        "user"
+      ],
+      "allowedDomains": [
+        "contoso.test"
+      ],
+      "adminEmails": [
+        "bob@contoso.test"
+      ],
+      "groupRoles": {
+        "users": [
+          "user"
+        ]
+      },
+      "accessTokenTtlSeconds": 600,
+      "idTokenTtlSeconds": 600,
+      "refreshTokenTtlSeconds": 2592000,
+      "sessionTtlSeconds": 43200
+    }
+  ],
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "prefix": "cladone:broker:contoso:",
+    "authPrefix": "cladone:auth:v1:"
+  }
+}

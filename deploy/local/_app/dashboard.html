@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Dashboard — Gate One demo</title>
+  <style>
+    body { font: 16px/1.6 system-ui, sans-serif; margin: 2rem auto; max-width: 46rem; padding: 0 1rem; }
+    .card { border: 1px solid #ccc; border-radius: .5rem; padding: 1rem 1.25rem; margin: 1.25rem 0; }
+    .danger-zone { border-color: #b23; }
+    code { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Dashboard</h1>
+  <p>This page exercises the injection and the UI gating of the example.</p>
+
+  <div class="card">
+    <h2>Always visible</h2>
+    <p>The guard is injected into this page by Gate One, not by the application.</p>
+  </div>
+
+  <div class="card beta-feature">
+    <h2>Beta feature</h2>
+    <p><code>.beta-feature</code> is hidden while anonymous and shown once authenticated
+    (<code>uiGate: {"hidden": "before"}</code>).</p>
+  </div>
+
+  <div class="card">
+    <h2>Export</h2>
+    <p><button data-feature="export">Export the data</button></p>
+    <p><code>[data-feature=export]</code> opens the login tab first
+    (<code>auth: "before"</code>): the action runs only after signing in.</p>
+  </div>
+
+  <div class="card danger-zone">
+    <h2>Danger zone</h2>
+    <p>Visible only with the <code>admin</code> role (<code>uiGate: {"roles": ["admin"]}</code>).
+    Sign in as <code>bob</code> to see it.</p>
+    <p><button>Delete everything</button></p>
+  </div>
+
+  <p><a href="/">Back</a></p>
+</body>
+</html>

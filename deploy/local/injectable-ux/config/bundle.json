@@ -1,0 +1,23 @@
+{
+  "injects": [
+    {
+      "name": "announcement",
+      "target": "body-end",
+      "when": "/dashboard",
+      "file": "banner.html"
+    },
+    {
+      "name": "brand-style",
+      "target": "head",
+      "style": ".demo-brand{letter-spacing:.02em}"
+    }
+  ],
+  "patch": [
+    {
+      "selector": "[data-feature=beta]",
+      "attrs": {
+        "data-gtw-auth-hidden": "before"
+      }
+    }
+  ]
+}

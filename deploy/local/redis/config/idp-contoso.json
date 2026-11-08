@@ -1,0 +1,16 @@
+{
+  "clientId": "google-client",
+  "users": [
+    {
+      "sub": "google-contoso-bob",
+      "email": "bob@contoso.test",
+      "emailVerified": true,
+      "hostedDomain": "contoso.test",
+      "preferredUsername": "bob",
+      "name": "Bob",
+      "groups": [
+        "users"
+      ]
+    }
+  ]
+}

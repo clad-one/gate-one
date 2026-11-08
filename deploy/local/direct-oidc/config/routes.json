@@ -1,0 +1,28 @@
+{
+  "authProvider": {
+    "type": "oidc",
+    "issuer": "http://idp.demo.localhost:9000",
+    "clientId": "gate-one",
+    "clientSecretEnv": "DEMO_OIDC_SECRET",
+    "loginBaseUrl": "http://login.demo.localhost:8080",
+    "cookieDomain": "demo.localhost",
+    "roleClaims": ["groups"],
+    "sessionKeyEnv": "GATE_ONE_SESSION_KEY",
+    "sessionTtlSeconds": 1800
+  },
+  "routes": [
+    {
+      "host": "app.demo.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://backend:8080",
+      "auth": {},
+      "userBadge": {
+        "position": "right",
+        "claims": ["preferred_username", "email"],
+        "roles": true,
+        "logoutLabel": "Sign out"
+      }
+    }
+  ]
+}

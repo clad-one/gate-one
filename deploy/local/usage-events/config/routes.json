@@ -1,0 +1,50 @@
+{
+  "authProvider": {
+    "type": "dev",
+    "loginBaseUrl": "http://login.demo.localhost:3000",
+    "cookieDomain": "demo.localhost"
+  },
+  "usage": {
+    "dir": "./usage-wal",
+    "nodeId": "gw-demo-1",
+    "budgetBytes": 52428800,
+    "subjectSecretEnv": "GATE_ONE_SUBJECT_SECRET",
+    "pluginSecretEnv": "GATE_ONE_PLUGIN_SECRET",
+    "trustStore": "trust-store.json",
+    "types": {
+      "auth": {
+        "shareBytes": 10485760,
+        "fsync": "always"
+      },
+      "error": {
+        "shareBytes": 10485760,
+        "fsync": "window_ms",
+        "windowMs": 250
+      }
+    },
+    "plugins": [
+      {
+        "name": "com.cladone.audit",
+        "url": "http://127.0.0.1:9100",
+        "manifest": "audit.manifest.json",
+        "artifact": "audit-echo.placeholder"
+      }
+    ]
+  },
+  "routes": [
+    {
+      "host": "app.demo.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://127.0.0.1:8080",
+      "auth": {},
+      "userBadge": {
+        "position": "right",
+        "claims": [
+          "preferred_username",
+          "email"
+        ]
+      }
+    }
+  ]
+}

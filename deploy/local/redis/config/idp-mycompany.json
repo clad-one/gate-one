@@ -1,0 +1,16 @@
+{
+  "clientId": "google-client",
+  "users": [
+    {
+      "sub": "google-mycompany-alice",
+      "email": "alice@mycompany.test",
+      "emailVerified": true,
+      "hostedDomain": "mycompany.test",
+      "preferredUsername": "alice",
+      "name": "Alice",
+      "groups": [
+        "admins"
+      ]
+    }
+  ]
+}

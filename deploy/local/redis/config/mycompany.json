@@ -1,0 +1,59 @@
+{
+  "publicUrl": "http://auth.mycompany.localhost:8081",
+  "listen": ":8081",
+  "tenants": [
+    {
+      "id": "mycompany",
+      "clientId": "gate-one",
+      "clientSecret": "local-mycompany-secret",
+      "redirectUris": [
+        "http://login.mycompany.localhost:8080/auth/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "http://login.mycompany.localhost:8080/*",
+        "http://app.mycompany.localhost:8080/*",
+        "http://app2.mycompany.localhost:8080/*"
+      ],
+      "audiences": [
+        "http://api.mycompany.localhost:8080"
+      ],
+      "google": {
+        "issuer": "http://idp.mycompany.localhost:9000",
+        "clientId": "google-client",
+        "clientSecret": "google-secret",
+        "hostedDomain": "mycompany.test",
+        "scopes": [
+          "openid",
+          "profile",
+          "email"
+        ]
+      },
+      "keyFiles": [
+        "/config/mycompany.key"
+      ],
+      "defaultRoles": [
+        "user"
+      ],
+      "allowedDomains": [
+        "mycompany.test"
+      ],
+      "adminEmails": [
+        "alice@mycompany.test"
+      ],
+      "groupRoles": {
+        "admins": [
+          "admin"
+        ]
+      },
+      "accessTokenTtlSeconds": 600,
+      "idTokenTtlSeconds": 600,
+      "refreshTokenTtlSeconds": 2592000,
+      "sessionTtlSeconds": 43200
+    }
+  ],
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "prefix": "cladone:broker:mycompany:",
+    "authPrefix": "cladone:auth:v1:"
+  }
+}
