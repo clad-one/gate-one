@@ -74,7 +74,7 @@ M2M client
   "redis": {
     "url": "redis://redis:6379/0",
     "passwordEnv": "REDIS_PASSWORD",
-    "prefix": "cladone:broker:v1:",
+    "prefix": "cladone:iam:v1:",
     "authPrefix": "cladone:auth:v1:"
   },
   "tenants": [
@@ -336,7 +336,7 @@ with sentinel authentication and TLS:
   "passwordEnv": "REDIS_PASSWORD",
   "tls": true,
   "tlsCaFile": "/etc/cladone-auth/redis-ca.pem",
-  "prefix": "cladone:broker:v1:",
+  "prefix": "cladone:iam:v1:",
   "authPrefix": "cladone:auth:v1:"
 }
 ----
@@ -362,7 +362,7 @@ Other V1 limits:
 [source,bash]
 ----
 make build-auth
-./bin/cladone-auth -config testdata/auth/broker.example.json -addr :8081
+./bin/cladone-auth -config testdata/auth/embedded-iam.example.json -addr :8081
 
 # New key: append it at the END of keyFiles, reload, then remove
 # the old one after the tokens signed with it expire.

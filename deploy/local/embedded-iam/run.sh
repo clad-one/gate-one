@@ -3,8 +3,8 @@
 #
 #   ./run.sh                 start, wait for readiness, print the URL
 #   ./run.sh down            stop and remove the containers
-#   ./run.sh logs            follow the Gate One and broker logs
-#   ./run.sh user <args...>  run the broker admin CLI inside the stack
+#   ./run.sh logs            follow the Gate One and IAM logs
+#   ./run.sh user <args...>  run the IAM admin CLI inside the stack
 set -euo pipefail
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -14,10 +14,10 @@ compose() { docker compose -f compose.yml "$@"; }
 
 case "${1:-up}" in
 down) compose down -v; exit 0 ;;
-logs) compose logs -f gate-one broker demo-idp; exit 0 ;;
+logs) compose logs -f gate-one cladone-auth demo-idp; exit 0 ;;
 user)
 	shift
-	compose exec broker /bin/cladone-auth user "$@" -config /config/broker.json
+	compose exec cladone-auth /bin/cladone-auth user "$@" -config /config/embedded-iam.json
 	exit $?
 	;;
 up) ;;
@@ -40,7 +40,7 @@ Sign in:   alice@demo.test (mapped to role admin) or bob@demo.test (role user)
 The backend shows the identity headers Gate One sends (X-User-Id,
 X-Email, X-Roles, ...). Rights come from two places:
 
-  * the claim mapping in config/broker.json (groups=admins -> role admin);
+  * the claim mapping in config/embedded-iam.json (groups=admins -> role admin);
   * per-user grants, editable live after the first sign-in:
 
       ./run.sh user list -tenant demo

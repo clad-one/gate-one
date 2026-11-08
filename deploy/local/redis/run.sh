@@ -13,7 +13,7 @@ compose() { docker compose -f compose.yml "$@"; }
 
 case "${1:-up}" in
 down)  compose down -v; exit 0 ;;
-logs)  compose logs -f gate-one-1 gate-one-2 broker-mycompany broker-contoso; exit 0 ;;
+logs)  compose logs -f gate-one-1 gate-one-2 iam-mycompany iam-contoso; exit 0 ;;
 up)    ;;
 *)     echo "usage: $0 [up|down|logs]" >&2; exit 2 ;;
 esac
@@ -31,7 +31,7 @@ Tenant mycompany (alice@mycompany.test, role admin):
   http://public.mycompany.localhost:8080   no authentication
 
 Tenant contoso (bob@contoso.test, role user):
-  http://app.contoso.localhost:8080        separate broker and issuer
+  http://app.contoso.localhost:8080        separate IAM and issuer
 
 Sign in on instance 1, then open instance 2: the session is accepted
 without a new login (shared Redis + shared session key). Sign out from

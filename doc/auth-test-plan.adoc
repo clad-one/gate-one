@@ -280,7 +280,7 @@ testdata/auth/
   fake-google/
     config.json              # issuer, client, users, groupes, hd
     keys/                    # test Ed25519 keys (never a real secret)
-  broker/
+  iam/
     mycompany.json                # tenant, clients, policy, audiences
     contoso.json
     policy.json
@@ -1147,7 +1147,7 @@ State as of 2026-10-28:
 | gRPC parity, real Google in staging, load/chaos, CI scans
 
 | E — rollout
-| `doc/auth-iam.adoc`, `testdata/auth/broker.example.json`, README
+| `doc/auth-iam.adoc`, `testdata/auth/embedded-iam.example.json`, README
 | rotation/revocation runbooks, staging drills
 |===
 

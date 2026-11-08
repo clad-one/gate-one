@@ -53,10 +53,10 @@ services:
       timeout: 3s
       retries: 20
 
-  broker:
+  cladone-auth:
     <<: *go-tool
     entrypoint: ["/bin/cladone-auth"]
-    command: ["-config", "${BROKER_CONFIG:-/config/broker.json}"]
+    command: ["-config", "${IAM_CONFIG:-/config/embedded-iam.json}"]
     environment:
       GATE_ONE_OIDC_CLIENT_SECRET: ${GATE_ONE_OIDC_CLIENT_SECRET}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -68,10 +68,10 @@ services:
       - proxy
     labels:
       - traefik.enable=true
-      - traefik.http.routers.broker.rule=Host(`auth.${DOMAIN}`)
-      - traefik.http.routers.broker.entrypoints=websecure
-      - traefik.http.routers.broker.tls.certresolver=le
-      - traefik.http.services.broker.loadbalancer.server.port=8081
+      - traefik.http.routers.cladone-auth.rule=Host(`auth.${DOMAIN}`)
+      - traefik.http.routers.cladone-auth.entrypoints=websecure
+      - traefik.http.routers.cladone-auth.tls.certresolver=le
+      - traefik.http.services.cladone-auth.loadbalancer.server.port=8081
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
       interval: 5s
@@ -113,7 +113,7 @@ services:
       - traefik.http.routers.gate-one.tls.certresolver=le
       - traefik.http.services.gate-one.loadbalancer.server.port=3000
     depends_on:
-      broker:
+      cladone-auth:
         condition: service_healthy
       backend:
         condition: service_healthy
@@ -153,7 +153,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      broker:
+      cladone-auth:
         condition: service_healthy
       backend:
         condition: service_healthy

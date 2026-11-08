@@ -22,7 +22,7 @@ type Config struct {
 	// Listen is the default listen address for cmd/cladone-auth.
 	Listen string `json:"listen,omitempty"`
 	// SessionCookieName is the broker SSO cookie shared by all apps
-	// in one browser. Default cladone_broker_sid.
+	// in one browser. Default cladone_iam_sid.
 	SessionCookieName string `json:"sessionCookieName,omitempty"`
 	// Tenants is the list of isolated issuers.
 	Tenants []Tenant `json:"tenants"`
@@ -179,7 +179,7 @@ func (c *Config) Validate() error {
 	}
 	c.SessionCookieName = strings.TrimSpace(c.SessionCookieName)
 	if c.SessionCookieName == "" {
-		c.SessionCookieName = "cladone_broker_sid"
+		c.SessionCookieName = "cladone_iam_sid"
 	}
 	if len(c.Tenants) == 0 {
 		return fmt.Errorf("at least one tenant is required")

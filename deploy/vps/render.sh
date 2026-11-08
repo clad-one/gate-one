@@ -28,20 +28,20 @@ render() {
 	sed "s|__DOMAIN__|${DOMAIN}|g" "$src" >"$dst"
 }
 
-render templates/broker.json.tmpl config/broker.json
-render templates/broker.demo.json.tmpl config/broker.demo.json
+render templates/embedded-iam.json.tmpl config/embedded-iam.json
+render templates/embedded-iam.demo.json.tmpl config/embedded-iam.demo.json
 render templates/routes.json.tmpl config/routes.json
 render templates/routes.ha.json.tmpl config/routes.ha.json
 cp templates/idp.json config/idp.json
 
-if [ ! -f config/broker.key ]; then
+if [ ! -f config/iam.key ]; then
 	if [ ! -x "${BIN_DIR}/cladone-auth" ]; then
 		echo "render: ${BIN_DIR}/cladone-auth is missing; put the binaries in ${BIN_DIR}" >&2
 		exit 1
 	fi
-	"${BIN_DIR}/cladone-auth" keygen -out config/broker.key
+	"${BIN_DIR}/cladone-auth" keygen -out config/iam.key
 fi
-chmod 600 config/broker.key
+chmod 600 config/iam.key
 
 if [ ! -f data/acme.json ]; then
 	touch data/acme.json

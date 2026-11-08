@@ -10,7 +10,7 @@ browser ──► Traefik (443, Let's Encrypt)
               └─► auth.<domain>   cladone-auth ─► Google (or demo IdP)
 ```
 
-Nothing phones home. Gate One, the broker and Traefik are the whole
+Nothing phones home. Gate One, the IAM and Traefik are the whole
 stack; Google is contacted only when a user signs in.
 
 ## What this is not
@@ -59,14 +59,14 @@ cd /srv/gate-one/vps
 cp .env.example .env
 $EDITOR .env        # DOMAIN, ACME_EMAIL (leave the secrets empty)
 make init           # generates the secrets and renders config/
-make up             # Traefik + Gate One + broker + backend
+make up             # Traefik + Gate One + IAM + backend
 ```
 
-`make init` creates `config/broker.json` (Google), `config/broker.demo.json`
+`make init` creates `config/embedded-iam.json` (Google), `config/embedded-iam.demo.json`
 (Google + demo IdP), `config/routes.json`, `config/routes.ha.json`,
-`config/idp.json` and a broker signing key.
+`config/idp.json` and an IAM signing key.
 
-`make up` needs Google credentials: the broker refuses to start without at
+`make up` needs Google credentials: the IAM refuses to start without at
 least one usable upstream, and says so. That is why the demo comes first.
 
 ## 4. Smoke test with the demo IdP
@@ -92,7 +92,7 @@ If this fails, the problem is local (DNS, TLS, secrets) — not Google.
    https://auth.<domain>/t/main/callback
    ```
 
-   That is the **broker** callback, not Gate One's.
+   That is the **IAM** callback, not Gate One's.
 
 2. Put the client id and secret in `.env`:
 
@@ -108,14 +108,14 @@ If this fails, the problem is local (DNS, TLS, secrets) — not Google.
    make up
    ```
 
-The broker advertises Google on its chooser; Gate One never sees the
+The IAM advertises Google on its chooser; Gate One never sees the
 Google token.
 
 ## 6. Operations
 
 | Command | Effect |
 |---|---|
-| `make logs` | follow Traefik, Gate One and the broker |
+| `make logs` | follow Traefik, Gate One and the IAM |
 | `make reload` | `SIGHUP` Gate One: re-reads the config, refuses an invalid file |
 | `make check` | validate the rendered Gate One configuration |
 | `make ha` | add Redis and a second Gate One replica |
@@ -135,8 +135,8 @@ bbolt store for a single replica.
 ### Users and grants
 
 ```bash
-docker compose exec broker cladone-auth user list -tenant main
-docker compose exec broker cladone-auth user set  -tenant main \
+docker compose exec cladone-auth /bin/cladone-auth user list -tenant main
+docker compose exec cladone-auth /bin/cladone-auth user set  -tenant main \
     -issuer https://accounts.google.com -sub '<google-sub>' -roles admin
 ```
 
@@ -154,11 +154,11 @@ the host to the Traefik rule (or use a wildcard), then `make reload`.
 ## 7. Checks and back-ups
 
 - `data/acme.json` holds the TLS certificates: keep it, and keep it `600`.
-- `config/broker.key` signs the broker tokens: a back-up is required to
+- `config/iam.key` signs the IAM tokens: a back-up is required to
   keep sessions valid across a rebuild.
 - `.env` holds every secret: it is the only copy unless you store it
   elsewhere. Back it up like a password.
-- The Redis data is disposable (sessions); the broker user directory is
+- The Redis data is disposable (sessions); the IAM user directory is
   not. With the `ha` profile the user grants live in Redis — back it up
   or move it to a persistent volume before relying on it.
 
@@ -167,5 +167,5 @@ the host to the Traefik rule (or use a wildcard), then `make reload`.
 - Put a firewall in front: only 80/443 public.
 - Restrict access to the Docker socket (Traefik needs it).
 - Add log rotation for the containers and Traefik.
-- Monitor `/readyz` on Gate One and `/health` on the broker.
-- Back up `.env`, `config/broker.key` and the broker directory.
+- Monitor `/readyz` on Gate One and `/health` on the IAM.
+- Back up `.env`, `config/iam.key` and the IAM directory.

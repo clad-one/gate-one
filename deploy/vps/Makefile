@@ -23,20 +23,20 @@ up: check
 		if [ -z "$$GOOGLE_CLIENT_ID" ] || [ -z "$$GOOGLE_CLIENT_SECRET" ]; then \
 			echo "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are empty in .env."; \
 			echo "Set them first, or run 'make demo' to smoke-test the stack"; \
-			echo "with the demo IdP (the broker refuses to start without an upstream)."; \
+			echo "with the demo IdP (the IAM refuses to start without an upstream)."; \
 			exit 1; \
 		fi
 	$(COMPOSE) up -d --remove-orphans
 
 demo: check
-	BROKER_CONFIG=/config/broker.demo.json $(COMPOSE) --profile demo up -d --remove-orphans
+	IAM_CONFIG=/config/embedded-iam.demo.json $(COMPOSE) --profile demo up -d --remove-orphans
 
 ha: check
 	@set -a; . ./.env; set +a; \
 		if [ -z "$$GOOGLE_CLIENT_ID" ] || [ -z "$$GOOGLE_CLIENT_SECRET" ]; then \
 			echo "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are empty in .env."; \
 			echo "Set them first, or run 'make demo' to smoke-test the stack"; \
-			echo "with the demo IdP (the broker refuses to start without an upstream)."; \
+			echo "with the demo IdP (the IAM refuses to start without an upstream)."; \
 			exit 1; \
 		fi
 	$(COMPOSE) --profile ha up -d --remove-orphans
@@ -45,7 +45,7 @@ down:
 	$(COMPOSE) --profile demo --profile ha down --remove-orphans
 
 logs:
-	$(COMPOSE) --profile demo --profile ha logs -f traefik gate-one broker
+	$(COMPOSE) --profile demo --profile ha logs -f traefik gate-one cladone-auth
 
 reload:
 	$(COMPOSE) kill -s HUP gate-one

@@ -3,7 +3,7 @@
   "listen": ":8081",
   "redis": {
     "url": "redis://redis:6379/0",
-    "prefix": "demo:broker:",
+    "prefix": "demo:iam:",
     "authPrefix": "demo:auth:v1:"
   },
   "tenants": [

@@ -66,10 +66,10 @@ services:
       timeout: 2s
       retries: 30
 
-  broker-mycompany:
+  iam-mycompany:
     <<: *go-service
     entrypoint: ["/usr/local/bin/cladone-auth"]
-    command: ["-config", "/auth/broker/mycompany.json"]
+    command: ["-config", "/auth/iam/mycompany.json"]
     volumes:
       - ../:/auth:ro
     ports:
@@ -89,10 +89,10 @@ services:
       timeout: 2s
       retries: 30
 
-  broker-contoso:
+  iam-contoso:
     <<: *go-service
     entrypoint: ["/usr/local/bin/cladone-auth"]
-    command: ["-config", "/auth/broker/contoso.json"]
+    command: ["-config", "/auth/iam/contoso.json"]
     volumes:
       - ../:/auth:ro
     ports:
@@ -147,9 +147,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      broker-mycompany:
+      iam-mycompany:
         condition: service_healthy
-      broker-contoso:
+      iam-contoso:
         condition: service_healthy
       backend:
         condition: service_healthy
@@ -178,9 +178,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      broker-mycompany:
+      iam-mycompany:
         condition: service_healthy
-      broker-contoso:
+      iam-contoso:
         condition: service_healthy
       backend:
         condition: service_healthy

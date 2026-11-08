@@ -249,8 +249,8 @@ for target in "${TARGETS[@]}"; do
 	fi
 	if [ -n "$PRODUCT" ] && [ -f "$PRODUCT/examples/embedded-iam/broker.json" ]; then
 		cp "$PRODUCT"/examples/embedded-iam/broker.json "$broker_stage/examples/"
-	elif [ -f "$SRC"/testdata/auth/broker.example.json ]; then
-		cp "$SRC"/testdata/auth/broker.example.json "$broker_stage/examples/"
+	elif [ -f "$SRC"/testdata/auth/embedded-iam.example.json ]; then
+		cp "$SRC"/testdata/auth/embedded-iam.example.json "$broker_stage/examples/"
 	fi
 	cp "$SRC"/LICENSE "$SRC"/LICENSE.fr.md "$SRC"/README.md "$SRC"/VERSION \
 		"$broker_stage/" 2>/dev/null || true

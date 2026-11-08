@@ -53,7 +53,7 @@
   ],
   "redis": {
     "url": "redis://redis:6379/0",
-    "prefix": "cladone:broker:mycompany:",
+    "prefix": "cladone:iam:mycompany:",
     "authPrefix": "cladone:auth:v1:"
   }
 }

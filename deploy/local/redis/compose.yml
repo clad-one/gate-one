@@ -6,7 +6,7 @@ name: gate-one-local-redis
 #   app.mycompany.localhost:8090   -> Gate One instance 2, same session
 #   app.contoso.localhost:8080     -> tenant contoso, separate issuer
 #
-# Redis carries both the brokers' directories and the Gate One
+# Redis carries both the IAMs' directories and the Gate One
 # session/revocation state, which is what lets the second instance accept
 # a session created by the first.
 
@@ -75,7 +75,7 @@ services:
       timeout: 2s
       retries: 30
 
-  broker-mycompany:
+  iam-mycompany:
     <<: *go-tool
     entrypoint: ["/bin/cladone-auth"]
     command: ["-config", "/config/mycompany.json"]
@@ -96,7 +96,7 @@ services:
       timeout: 2s
       retries: 30
 
-  broker-contoso:
+  iam-contoso:
     <<: *go-tool
     entrypoint: ["/bin/cladone-auth"]
     command: ["-config", "/config/contoso.json"]
@@ -156,9 +156,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      broker-mycompany:
+      iam-mycompany:
         condition: service_healthy
-      broker-contoso:
+      iam-contoso:
         condition: service_healthy
       backend:
         condition: service_healthy
@@ -181,9 +181,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      broker-mycompany:
+      iam-mycompany:
         condition: service_healthy
-      broker-contoso:
+      iam-contoso:
         condition: service_healthy
       backend:
         condition: service_healthy

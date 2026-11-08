@@ -430,7 +430,7 @@ func newRedisStore(ctx context.Context, cfg RedisConfig) (*redisStore, error) {
 	}
 	data := strings.TrimSpace(cfg.Prefix)
 	if data == "" {
-		data = "cladone:broker:v1:"
+		data = "cladone:iam:v1:"
 	}
 	if !strings.HasSuffix(data, ":") {
 		data += ":"

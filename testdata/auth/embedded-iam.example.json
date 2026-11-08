@@ -49,7 +49,7 @@
   "redis": {
     "url": "redis://redis:6379/0",
     "passwordEnv": "REDIS_PASSWORD",
-    "prefix": "cladone:broker:v1:",
+    "prefix": "cladone:iam:v1:",
     "authPrefix": "cladone:auth:v1:"
   }
 }

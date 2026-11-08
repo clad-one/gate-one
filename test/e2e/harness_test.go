@@ -118,7 +118,7 @@ func (r *redisHAConfig) brokerRedis(dataPrefix string) *broker.RedisConfig {
 		SentinelPasswordEnv: "E2E_HA_SENTINEL_PASSWORD",
 		Username:            r.Username,
 		PasswordEnv:         "E2E_HA_APP_PASSWORD",
-		Prefix:              "cladone:broker:canari:e2e:" + dataPrefix + ":",
+		Prefix:              "cladone:iam:canari:e2e:" + dataPrefix + ":",
 		AuthPrefix:          r.AuthPrefix,
 		TLS:                 true,
 		TLSCaFile:           r.TLSCaFile,

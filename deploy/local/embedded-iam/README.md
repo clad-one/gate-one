@@ -14,13 +14,13 @@ browser → Gate One → cladone-auth (embedded IAM) → demo IdP
 | `cladone-auth` | <http://auth.demo.localhost:8081/t/demo> | OIDC issuer/IAM |
 | demo IdP | <http://idp.demo.localhost:9000> | fake Google, auto-consent |
 | backend | internal `backend:8080` | shows the `X-User-*` headers |
-| Redis | internal `redis:6379` | broker directory + Gate One session store |
+| Redis | internal `redis:6379` | IAM directory + Gate One session store |
 
 The demo IdP stands in for Google. It runs the same OIDC flow
 (discovery, JWKS, authorization code), so the claim mapping and the
 grants behave exactly as they do against a real provider.
 
-Redis is part of the demo because the broker stores its user directory
+Redis is part of the demo because the IAM stores its user directory
 there: that is what makes `cladone-auth user set` visible to the running
 process without a restart.
 
@@ -57,10 +57,10 @@ The backend page lists `X-User-Id`, `X-Username`, `X-Email`, `X-Roles`,
 
 ## What it demonstrates
 
-**Federated login.** Gate One trusts only the broker
+**Federated login.** Gate One trusts only the IAM
 (`authProvider.issuer` → `…/t/demo`). It never sees the demo IdP.
 
-**Claim mapping.** `config/broker.json` maps the upstream `groups`
+**Claim mapping.** `config/embedded-iam.json` maps the upstream `groups`
 claim to IAM roles:
 
 ```json
@@ -71,7 +71,7 @@ claim to IAM roles:
 `roles=["user","admin"]` (`user` is the tenant default). `bob` only gets
 `user`.
 
-**Per-user grants.** Sign in once so the broker creates the federated
+**Per-user grants.** Sign in once so the IAM creates the federated
 user, then edit the grants while it runs:
 
 ```bash
@@ -88,7 +88,7 @@ Sign out and back in, and the backend shows the new roles. Grants are
 stored on the user and apply to local accounts too.
 
 **Single sign-out.** The user badge's sign-out ends the Gate One session
-and the broker session; the revocation is shared through Redis.
+and the IAM session; the revocation is shared through Redis.
 
 ## Files
 
@@ -96,7 +96,7 @@ and the broker session; the revocation is shared through Redis.
 |---|---|
 | `compose.yml` | the five containers |
 | `config/routes.json` | Gate One: one OIDC provider, one route |
-| `config/broker.json` | tenant, upstream, mapping, key file, Redis |
+| `config/embedded-iam.json` | tenant, upstream, mapping, key file, Redis |
 | `config/idp.json` | demo IdP users (`alice`, `bob`) |
 | `config/demo.key` | demo Ed25519 signing key — **never use in production** |
 | `backend/server.py` | the identity-header page |
@@ -104,6 +104,6 @@ and the broker session; the revocation is shared through Redis.
 ## Going to production
 
 The same stack with real Google, TLS and a public domain is
-[`deploy/vps/`](../../vps/) — see its README. The broker configuration
+[`deploy/vps/`](../../vps/) — see its README. The IAM configuration
 only changes its `upstreams` block (`https://accounts.google.com`) and
 its `redirectUris`.

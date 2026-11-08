@@ -49,7 +49,7 @@
   ],
   "redis": {
     "url": "redis://redis:6379/0",
-    "prefix": "cladone:broker:contoso:",
+    "prefix": "cladone:iam:contoso:",
     "authPrefix": "cladone:auth:v1:"
   }
 }

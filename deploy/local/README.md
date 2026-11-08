@@ -25,7 +25,7 @@ prints the URL.
 |---|---|---|
 | `direct-oidc` | Gate One talking to one issuer, no IAM | `gate-one`, `demo-idp` |
 | `sso-multi-apps` | two applications, one provider, one cookie domain | `gate-one`, `demo-idp` |
-| `embedded-iam` | broker, claim mapping, live grants | the three binaries, Docker |
+| `embedded-iam` | IAM, claim mapping, live grants | the three binaries, Docker |
 | `redis` | two tenants, two instances, shared Redis | the three binaries, Docker |
 
 Each `run.sh` starts the stack, waits for readiness and prints the URLs.

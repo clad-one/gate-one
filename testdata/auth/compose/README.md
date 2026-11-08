@@ -1,9 +1,9 @@
-# Local auth E2E stack — fake Google + broker + Gate One
+# Local auth E2E stack — fake Google + IAM + Gate One
 
 Full chain without Keycloak:
 
 ```text
-browser → Gate One (2 instances) → broker cladone-auth → fake Google
+browser → Gate One (2 instances) → IAM cladone-auth → fake Google
 ```
 
 Everything runs in Docker, with real hostnames under `*.localhost`
@@ -13,11 +13,11 @@ Everything runs in Docker, with real hostnames under `*.localhost`
 
 | Service | Host / port | Role |
 |---|---|---|
-| `redis` | internal `redis:6379` | broker store + shared revocation |
+| `redis` | internal `redis:6379` | IAM store + shared revocation |
 | `fake-google-mycompany` | `http://idp.mycompany.localhost:9000` | fake Google, user alice |
 | `fake-google-contoso` | `http://idp.contoso.localhost:9001` | fake Google, user bob |
-| `broker-mycompany` | `http://auth.mycompany.localhost:8081` | broker tenant mycompany |
-| `broker-contoso` | `http://auth.contoso.localhost:8082` | broker tenant contoso |
+| `iam-mycompany` | `http://auth.mycompany.localhost:8081` | IAM tenant mycompany |
+| `iam-contoso` | `http://auth.contoso.localhost:8082` | IAM tenant contoso |
 | `backend` | internal `backend:8080` | shows `X-User-*` headers |
 | `gate-one-1` | `http://app.mycompany.localhost:8080` etc. | Gate One instance 1 |
 | `gate-one-2` | `http://app2.mycompany.localhost:8090` | Gate One instance 2 (shared Redis/key) |
@@ -43,7 +43,7 @@ from the repository (multi-stage Dockerfile).
 - `http://app.contoso.localhost:8080/` → login as `bob@contoso.test`.
 - `http://public.mycompany.localhost:8080/` → no auth.
 - `http://api.mycompany.localhost:8080/` → 401 JSON without a session.
-- `http://auth.mycompany.localhost:8081/health` → broker health.
+- `http://auth.mycompany.localhost:8081/health` → IAM health.
 - `http://idp.mycompany.localhost:9000/healthz` → fake Google health.
 
 The fake Google is auto-consent: there is no password prompt.
@@ -69,7 +69,7 @@ curl 'http://idp.mycompany.localhost:9000/__control/state'
 Broker down per tenant:
 
 ```bash
-docker compose -f testdata/auth/compose/compose.yaml stop broker-mycompany
+docker compose -f testdata/auth/compose/compose.yaml stop iam-mycompany
 # mycompany routes -> 502; contoso keeps working
 ```
 
