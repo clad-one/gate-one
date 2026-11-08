@@ -1431,7 +1431,7 @@
     "pwaNetworkOnly": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Its presence activates the \"never cached\" route (auth exchanges, OAuth callbacks carrying a one-time code…).",
+      "description": "Its presence activates the \"never cached\" route. When a PWA route shares the authentication scope, the identity-provider endpoints (discovery, authorize, token, JWKS, end-session) and the RP callback carrying a one-time code/state MUST be excluded, or the service worker can replay a stale identity or a one-time code.",
       "properties": {
         "excludePatterns": {
           "type": "array",
