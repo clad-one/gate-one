@@ -5,7 +5,7 @@ test: ## go vet + tests unitaires
 	go vet ./...
 	go test ./...
 
-test-auth: ## Tests d'acceptation auth (AC-AUTH-*) + broker + conformité
+test-auth: ## Tests d'acceptation auth (AC-AUTH-*) + IAM + conformité
 	go test ./cmd/gate-one/... ./internal/authn/... ./internal/iam/... ./internal/core/... ./internal/proxy/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -run 'TestAC_AUTH_' -count=1
 	go test ./internal/iam/... ./internal/testutil/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -count=1
 
@@ -13,10 +13,10 @@ test-auth-race: ## Tests auth sous le race detector
 	go test -race ./cmd/gate-one/... ./internal/authn/... ./internal/iam/... ./internal/proxy/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -run 'TestAC_AUTH_' -count=1
 	go test -race ./internal/testutil/... -count=1
 
-test-e2e: ## E2E in-process (faux Google, 2 brokers, 2 Gate One, Redis)
+test-e2e: ## E2E in-process (faux Google, 2 IAM, 2 Gate One, Redis)
 	go test -tags=e2e -count=1 ./test/e2e/...
 
-e2e-up: ## Démarre la stack E2E locale (fake Google + broker + Redis + 2 Gate One)
+e2e-up: ## Démarre la stack E2E locale (fake Google + IAM + Redis + 2 Gate One)
 	docker compose -f testdata/auth/compose/compose.yaml up -d --build
 
 e2e-down: ## Arrête et supprime la stack E2E locale
@@ -25,7 +25,7 @@ e2e-down: ## Arrête et supprime la stack E2E locale
 test-browser: ## Playwright browser E2E (stack e2e-up requise)
 	cd test/e2e/browser && npm test
 
-build-auth: ## Compile le broker OIDC dans bin/cladone-auth
+build-auth: ## Compile l'IAM OIDC dans bin/cladone-auth
 	go build -o ./bin/cladone-auth ./cmd/cladone-auth
 
 build-fake-google: ## Compile le faux Google dans bin/fake-google
