@@ -96,6 +96,11 @@ type Tenant struct {
 	// not persisted on the user.
 	Mappings []MappingRule `json:"mappings,omitempty"`
 
+	// Rules is the when/then policy engine: test the token's claims and
+	// grant roles/scopes/claims, including derived ones (rolesFrom,
+	// copyClaims). Evaluated on every login; results are not persisted.
+	Rules []Rule `json:"rules,omitempty"`
+
 	AccessTokenTTL  int `json:"accessTokenTtlSeconds,omitempty"`
 	IDTokenTTL      int `json:"idTokenTtlSeconds,omitempty"`
 	RefreshTokenTTL int `json:"refreshTokenTtlSeconds,omitempty"`
@@ -426,6 +431,9 @@ func (c *Config) Validate() error {
 			t.RegistrationSecret = secret
 		}
 		if err := validateMappingRules(t.Mappings); err != nil {
+			return fmt.Errorf("tenants[%s]: %w", t.ID, err)
+		}
+		if err := validateRules(t.Rules); err != nil {
 			return fmt.Errorf("tenants[%s]: %w", t.ID, err)
 		}
 		if t.AccessTokenTTL <= 0 {
