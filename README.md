@@ -247,7 +247,7 @@ gateway no longer hides an outage behind a sign-in loop.
 
 Full guide: `doc/auth-providers.adoc`.
 Strict CSP (nonce styles, custom injections, proxified sites):
-`doc/strict-csp.adoc`.
+<https://clad-one.github.io/gate-one-doc/v0.4.5-docs.3/docs/guides/strict-csp/>.
 
 ## Build
 
@@ -359,7 +359,8 @@ gates **activation**, never deactivation. Value controls (`select`,
 `data-gtw-auth-off` (or the default value) as the OFF value. Text-entry
 clicks are focus, not action: put the attribute on the submit button.
 
-Full contract and behavioural test matrix: `doc/ui-gating.adoc`.
+Full contract and behavioural test matrix:
+<https://clad-one.github.io/gate-one-doc/v0.4.5-docs.3/docs/guides/ui-gating/>.
 
 ## Delegated upstream credentials
 
@@ -541,7 +542,7 @@ pkg/identityadapter/httpbinding/ portable HTTP/JSON binding
 test/ui/            guard-script harness (jsdom)
 sw-sim/             service-worker simulator
 testdata/           reference production config; testdata/auth/ broker example
-doc/                auth broker, auth providers, test plan
+doc/                developer docs: auth broker, auth providers, test plan, plugins (see doc/README.md)
 release.sh          signed release artifacts (never pushes)
 release/            public verification key for the release signature
 ```
