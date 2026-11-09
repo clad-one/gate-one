@@ -37,6 +37,13 @@ A global block also avoids the other bypass: forgetting the policy on one
 host or one route of the same instance. It does not help across separate
 configurations.
 
+When Gate One cannot be the only path (heterogeneous ingresses, an
+application reachable internally), put a small verifying sidecar in
+front of the application instead: every ingress points at it, it verifies
+the token once and forwards the POST to the backend, which is reachable
+only through the sidecar. The Gate One block remains the right choice
+when this instance is the single entry point.
+
 == Configuration
 
 [source,json]
