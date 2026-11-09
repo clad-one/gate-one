@@ -231,7 +231,7 @@ func licenseJSON(cfg *core.Config) string {
 	} else {
 		st = license.Eval(cfg.License, time.Now())
 	}
-	b, err := json.Marshal(st)
+	b, err := json.Marshal(license.ClientStatus(st))
 	if err != nil {
 		return `{"state":"eval","reason":"invalid"}`
 	}

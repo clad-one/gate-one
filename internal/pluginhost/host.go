@@ -11,6 +11,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,10 +53,14 @@ type Config struct {
 	WAL    *usagewal.Store
 	Secret []byte // HMAC key for the signed assertion (required)
 	// Allow gates licenseFeature; nil allows everything.
-	Allow  func(feature string) bool
-	Client *http.Client
-	Now    func() time.Time
-	Logger *log.Logger
+	Allow func(feature string) bool
+	// LicenceJSON returns the licence view sent to plugins (state,
+	// enforce mode, org, exp, domains, domainCount, maxReplicas,
+	// features). nil = no licence block: no header is sent.
+	LicenceJSON func() string
+	Client      *http.Client
+	Now         func() time.Time
+	Logger      *log.Logger
 }
 
 // Host delivers events to registered plugins.
@@ -270,7 +275,11 @@ func (h *Host) post(p *Plugin, batch []usagewal.Record) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Gate-One-Assertion", h.assertion(p, len(raw)))
+	licence := h.licence()
+	if licence != "" {
+		req.Header.Set("X-Gate-One-License", licence)
+	}
+	req.Header.Set("X-Gate-One-Assertion", h.assertion(p, len(raw), licence))
 	resp, err := h.cfg.Client.Do(req)
 	if err != nil {
 		return err
@@ -283,19 +292,50 @@ func (h *Host) post(p *Plugin, batch []usagewal.Record) error {
 	return nil
 }
 
-// assertion signs the plugin audience, an expiry and a digest of the
-// body. The plugin rejects anything not signed by the host.
-func (h *Host) assertion(p *Plugin, bodyLen int) string {
+// licence returns the base64url-encoded licence view, or "" when the
+// deployment has no licence block.
+func (h *Host) licence() string {
+	if h.cfg.LicenceJSON == nil {
+		return ""
+	}
+	raw := h.cfg.LicenceJSON()
+	if raw == "" {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// assertion signs the plugin audience, an expiry, a digest of the body
+// and — when present — the licence header, so a plugin can trust the
+// licence facts it receives.
+func (h *Host) assertion(p *Plugin, bodyLen int, licence string) string {
 	exp := h.cfg.Now().Add(30 * time.Second).Unix()
 	payload := fmt.Sprintf("%s\n%d\n%d", p.Name, exp, bodyLen)
+	if licence != "" {
+		sum := sha256.Sum256([]byte(licence))
+		payload += "\n" + hex.EncodeToString(sum[:])
+	}
 	mac := hmac.New(sha256.New, h.cfg.Secret)
 	mac.Write([]byte(payload))
 	return base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." +
 		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// VerifyAssertion is the plugin-side helper used by the sample/tests.
+// VerifyAssertion is the plugin-side helper used by the sample/tests
+// when the host sends no licence header.
 func VerifyAssertion(secret []byte, header, pluginName string, bodyLen int, now time.Time) error {
+	return VerifyAssertionWithLicense(secret, header, pluginName, bodyLen, "", now)
+}
+
+// VerifyAssertionWithLicense verifies the host assertion and, when the
+// host sent a licence header (X-Gate-One-License, base64url JSON), checks
+// that the signed payload binds exactly that header. Plugins can then
+// trust the licence facts (state, enforce mode, domains, maxReplicas)
+// they received alongside the events.
+func VerifyAssertionWithLicense(
+	secret []byte, header, pluginName string, bodyLen int,
+	licenceHeader string, now time.Time,
+) error {
 	parts := strings.Split(header, ".")
 	if len(parts) != 2 {
 		return fmt.Errorf("pluginhost: malformed assertion")
@@ -314,7 +354,7 @@ func VerifyAssertion(secret []byte, header, pluginName string, bodyLen int, now 
 		return fmt.Errorf("pluginhost: bad assertion")
 	}
 	fields := strings.Split(string(payload), "\n")
-	if len(fields) != 3 || fields[0] != pluginName {
+	if (len(fields) != 3 && len(fields) != 4) || fields[0] != pluginName {
 		return fmt.Errorf("pluginhost: assertion audience")
 	}
 	var exp int64
@@ -330,6 +370,15 @@ func VerifyAssertion(secret []byte, header, pluginName string, bodyLen int, now 
 	}
 	if size != bodyLen {
 		return fmt.Errorf("pluginhost: assertion body size")
+	}
+	if len(fields) == 4 {
+		if licenceHeader == "" {
+			return fmt.Errorf("pluginhost: licence header missing")
+		}
+		sum := sha256.Sum256([]byte(licenceHeader))
+		if fields[3] != hex.EncodeToString(sum[:]) {
+			return fmt.Errorf("pluginhost: licence header mismatch")
+		}
 	}
 	return nil
 }

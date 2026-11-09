@@ -148,6 +148,20 @@ func newUsageRuntime(
 		Allow: func(feature string) bool {
 			return license.HasFeature(st, feature)
 		},
+		LicenceJSON: func() string {
+			// Plugins see the licence facts they need (state, enforce
+			// mode, domains, domainCount, maxReplicas, features),
+			// signed by the host assertion.
+			cur := license.Eval(licCfg, time.Now())
+			if cur.State != "registered" && cur.Reason == "missing" && licCfg == nil {
+				return ""
+			}
+			b, err := json.Marshal(cur)
+			if err != nil {
+				return ""
+			}
+			return string(b)
+		},
 	})
 	if err != nil {
 		_ = store.Close()

@@ -14,6 +14,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -165,12 +166,18 @@ func main() {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := pluginhost.VerifyAssertion(
+		licenceHeader := r.Header.Get("X-Gate-One-License")
+		if err := pluginhost.VerifyAssertionWithLicense(
 			secret, r.Header.Get("X-Gate-One-Assertion"),
-			*name, len(body), time.Now(),
+			*name, len(body), licenceHeader, time.Now(),
 		); err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
+		}
+		if licenceHeader != "" {
+			if raw, err := base64.RawURLEncoding.DecodeString(licenceHeader); err == nil {
+				log.Printf("licence: %s", string(raw))
+			}
 		}
 		var batch []envelope
 		if err := json.Unmarshal(body, &batch); err != nil {

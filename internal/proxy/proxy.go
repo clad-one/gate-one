@@ -147,6 +147,10 @@ type Gateway struct {
 	// (verification + script injection). nil = disabled.
 	turnstile *turnstileRuntime
 
+	// licence checks that every served host is covered by the active
+	// licence (info/warn/strict). nil = no licence block configured.
+	licence *licenceGuard
+
 	// inflight tracks requests for graceful Close on reload/shutdown.
 	inflight  sync.WaitGroup
 	closeOnce sync.Once
@@ -798,6 +802,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 
 	gw.routes = routes
 	gw.config = cfg
+	gw.licence = newLicenceGuard(cfg, time.Now())
 	gw.tokenBroker = broker
 	if broker != nil && cfg.TokenBroker != nil && cfg.TokenBroker.BrowserHost != "" {
 		rp, err := newTokenBrokerBrowser(
@@ -2184,6 +2189,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("cannot build request context: %v", err)
 		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Licence host coverage (strict mode refuses an uncovered host).
+	if !g.licence.check(ctx.Host) {
+		writeLicenceUnavailable(w, ctx.Host)
 		return
 	}
 

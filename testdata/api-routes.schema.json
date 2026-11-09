@@ -55,7 +55,7 @@
     },
     "license": {
       "type": "object",
-      "description": "Optional offline signed licence (Ed25519). Absent, invalid or expired = evaluation/personal mode: the gateway keeps serving; the user badge shows a notice. The private signing key NEVER ships (only publicKey is embedded).",
+      "description": "Optional offline signed licence (Ed25519), one token per period. Absent, invalid or expired = evaluation/personal mode: the gateway keeps serving; the user badge shows a notice. The private signing key NEVER ships (only publicKey is embedded).",
       "additionalProperties": false,
       "properties": {
         "token": {
@@ -64,7 +64,7 @@
         },
         "tokenFile": {
           "type": "string",
-          "description": "Path to a file holding the token (mounted secret, easy renewal: replace the file + SIGHUP). Overridden by GATE_ONE_LICENSE_TOKEN; falls back to `token` when unreadable."
+          "description": "Deprecated single-token file. Prefer tokenDir (one token per period). Overridden by GATE_ONE_LICENSE_TOKEN; falls back to `token` when unreadable."
         },
         "publicKey": {
           "type": "string",
@@ -80,6 +80,19 @@
         "url": {
           "type": "string",
           "description": "Registration/pricing URL shown by the badge."
+        },
+        "tokenDir": {
+          "type": "string",
+          "description": "Directory holding one signed token per period: every regular file is read (convention licence-<start>-<end>.txt). The active periods are merged (nbf <= now < exp): domains and features are unioned, domainCount and maxReplicas take the maximum. Dropping a file + SIGHUP is enough."
+        },
+        "enforce": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warn",
+            "strict"
+          ],
+          "description": "What to do when a configured host is not covered by the active licence: info (default, logged), warn (logged as a warning), strict (503 on that host). Eval (no active token) is never blocked."
         }
       }
     },
@@ -531,7 +544,10 @@
       "type": "object",
       "description": "Platform-wide Cloudflare Turnstile bot check for form pages. Presence enables it (explicit enabled=false disables it in templated configs). The widget is injected into matching HTML pages and every matching request is verified against the Siteverify API BEFORE the backend: a missing/invalid token is answered 403 (readable page for a navigation, JSON otherwise), a Siteverify outage 503 (fail closed). The block is global on purpose: one place to change, no per-host duplication. LIMITATION: it protects only traffic that passes through this Gate One instance; a second ingress, an internal caller or a direct port reaching the application bypasses it. Network isolation (only Gate One can reach the application) remains required. The token is never logged nor written to usage events.",
       "additionalProperties": false,
-      "required": ["siteKey", "secretEnv"],
+      "required": [
+        "siteKey",
+        "secretEnv"
+      ],
       "properties": {
         "enabled": {
           "type": "boolean",
@@ -550,24 +566,42 @@
         },
         "hosts": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1},
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "description": "Hosts the block applies to: exact hostnames, or a leading *. wildcard on a label boundary (*.example.com). Empty = every route."
         },
         "paths": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1},
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "description": "Paths the block applies to, with the route.path grammar: /contact/* (prefix on a path boundary), an exact path, or /* (everything). Empty = every path. The widget is injected only on matching pages; verification only on matching requests."
         },
         "methods": {
           "type": "array",
           "minItems": 1,
-          "items": {"type": "string", "enum": ["POST", "PUT", "PATCH", "DELETE"]},
+          "items": {
+            "type": "string",
+            "enum": [
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ]
+          },
           "description": "Request methods verified. Default POST. GET/HEAD are never challenged (the page must load before the widget can run)."
         },
         "forms": {
           "type": "array",
           "maxItems": 32,
-          "items": {"type": "string", "minLength": 1, "maxLength": 256},
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
           "description": "CSS selectors of the forms that receive the widget. Empty = every POST form on the page. A form marked data-gtw-turnstile=\"off\" is always skipped. An invalid selector is ignored (no injection, no error)."
         },
         "action": {
@@ -671,27 +705,37 @@
             "properties": {
               "hosts": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                  "type": "string"
+                },
                 "description": "Request hosts or glob patterns to capture. Empty = all hosts."
               },
               "routes": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                  "type": "string"
+                },
                 "description": "Request path patterns to capture. Empty = all paths."
               },
               "methods": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                  "type": "string"
+                },
                 "description": "HTTP methods to capture. Empty = all methods."
               },
               "types": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                  "type": "string"
+                },
                 "description": "Event types to attach attrs to. Default: [billing]."
               },
               "query": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                  "type": "string"
+                },
                 "description": "Allow-listed query parameter names whose values are copied as q.<name>. Sensitive names are skipped."
               },
               "body": {
@@ -700,12 +744,16 @@
                 "properties": {
                   "format": {
                     "type": "string",
-                    "enum": ["json"],
+                    "enum": [
+                      "json"
+                    ],
                     "description": "Body parser; only json is supported."
                   },
                   "paths": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {
+                      "type": "string"
+                    },
                     "description": "Dotted JSON paths ($.a.b or a.b) whose scalar values are copied as b.<path>."
                   },
                   "maxBytes": {

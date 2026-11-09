@@ -42,8 +42,9 @@ func TestLicenseJSONEval(t *testing.T) {
 	}
 }
 
-// TestLicenseJSONRegistered: a valid signed token surfaces its claims to
-// the guard script.
+// TestLicenseJSONRegistered: a valid signed token surfaces the state and
+// the expiry to the guard script — and nothing confidential (the script
+// is embedded in every protected page).
 func TestLicenseJSONRegistered(t *testing.T) {
 	pub, priv, err := licenseTestKeypair()
 	if err != nil {
@@ -65,8 +66,11 @@ func TestLicenseJSONRegistered(t *testing.T) {
 	if err := json.Unmarshal([]byte(licenseJSON(cfg)), &st); err != nil {
 		t.Fatal(err)
 	}
-	if st.State != "registered" || st.Org != "MYCOMPANY" || st.Email != "ops@mycompany.fr" {
-		t.Fatalf("got %+v, want registered/MYCOMPANY", st)
+	if st.State != "registered" {
+		t.Fatalf("got %+v, want registered", st)
+	}
+	if st.Org != "" || st.Email != "" || len(st.Domains) != 0 || len(st.Features) != 0 {
+		t.Fatalf("client payload leaks licence claims: %+v", st)
 	}
 	if st.URL != "https://example.test/pricing" {
 		t.Fatalf("url = %q", st.URL)
