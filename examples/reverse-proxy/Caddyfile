@@ -1,0 +1,15 @@
+# Gate One behind Caddy.
+#
+# Caddy terminates TLS (automatic Let's Encrypt), sets the X-Forwarded-*
+# headers Gate One needs, preserves the Host and streams responses
+# without buffering — nothing else has to be configured.
+#
+# Both hosts are served by the same Gate One, which dispatches on Host.
+
+app.example.com, login.example.com {
+	reverse_proxy 127.0.0.1:3000 {
+		# Optional active readiness check (Caddy >= 2.5).
+		health_uri /readyz
+		health_interval 10s
+	}
+}

@@ -1,0 +1,41 @@
+# Traefik (dynamic configuration) for Gate One — file provider.
+#
+# Traefik already: preserves the Host, sets X-Forwarded-For/Host/Proto,
+# streams responses without buffering and handles WebSocket upgrades.
+# So the routing below is all Gate One needs.
+
+http:
+  routers:
+    # HTTP -> HTTPS, same rule as the TLS router.
+    redirect:
+      rule: "Host(`app.example.com`) || Host(`login.example.com`)"
+      entryPoints: [web]
+      middlewares: [to-https]
+      service: gate-one
+
+    gate-one:
+      rule: "Host(`app.example.com`) || Host(`login.example.com`)"
+      entryPoints: [websecure]
+      service: gate-one
+      tls:
+        certResolver: le
+
+  middlewares:
+    to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+  services:
+    gate-one:
+      loadBalancer:
+        # 127.0.0.1 assumes Traefik and Gate One share the host network.
+        # With the Docker provider, use the service name (http://gate-one:3000)
+        # and label-based routing — see gate-one-src/deploy/vps/.
+        servers:
+          - url: "http://127.0.0.1:3000"
+        # Active readiness: /readyz also covers providers and the usage bus.
+        healthCheck:
+          path: /readyz
+          interval: 10s
+          timeout: 3s
