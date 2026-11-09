@@ -255,14 +255,15 @@ func (s *RedisStore) Revoke(
 	if expires.IsZero() {
 		expires = time.Now().Add(24 * time.Hour)
 	}
+	revokedAt := time.Now()
 	if sid != "" {
-		if err := s.revokeSID(ctx, issuer, sid, expires); err != nil {
+		if err := s.revokeSID(ctx, issuer, sid, revokedAt, expires); err != nil {
 			return err
 		}
 	}
 	if sub != "" {
 		if err := s.RevokeSubject(
-			ctx, issuer, sub, time.Now(), expires,
+			ctx, issuer, sub, revokedAt, expires,
 		); err != nil {
 			return err
 		}
@@ -270,15 +271,21 @@ func (s *RedisStore) Revoke(
 	return nil
 }
 
+// revokeSID records a session revocation with the instant it happened.
+// Only sessions issued at or before revokedAt are revoked: a later
+// login that the IdP maps to the SAME sid (its SSO session survived an
+// RP-initiated logout) is accepted instead of being locked out forever.
 func (s *RedisStore) revokeSID(
-	ctx context.Context, issuer, sid string, expires time.Time,
+	ctx context.Context, issuer, sid string,
+	revokedAt, expires time.Time,
 ) error {
 	ttl := time.Until(expires)
 	if ttl <= 0 {
 		return nil
 	}
 	if err := s.client.Set(
-		ctx, s.key("revoked:sid", issuer, sid), "1", ttl,
+		ctx, s.key("revoked:sid", issuer, sid),
+		strconv.FormatInt(revokedAt.Unix(), 10), ttl,
 	).Err(); err != nil {
 		return fmt.Errorf("sessionStore.redis: revoke sid: %w", err)
 	}
@@ -344,9 +351,9 @@ func (s *RedisStore) CheckRevoked(
 	}
 
 	pipe := s.client.Pipeline()
-	var sidCmd *redis.IntCmd
+	var sidCmd *redis.StringCmd
 	if sid != "" {
-		sidCmd = pipe.Exists(ctx, s.key("revoked:sid", issuer, sid))
+		sidCmd = pipe.Get(ctx, s.key("revoked:sid", issuer, sid))
 	}
 	var subCmd *redis.StringCmd
 	if sub != "" {
@@ -360,13 +367,20 @@ func (s *RedisStore) CheckRevoked(
 	}
 
 	if sidCmd != nil {
-		n, err := sidCmd.Result()
-		if err != nil {
+		raw, err := sidCmd.Result()
+		if err != nil && err != redis.Nil {
 			return false, fmt.Errorf(
-				"sessionStore.redis: exists: %w", err)
+				"sessionStore.redis: get sid: %w", err)
 		}
-		if n > 0 {
-			return true, nil
+		if err == nil {
+			revoked, ok := revokedAtReached(raw, issuedAt)
+			if !ok {
+				// Legacy "1" marker (pre-timestamp): fail-closed.
+				return true, nil
+			}
+			if revoked {
+				return true, nil
+			}
 		}
 	}
 	if subCmd == nil {
@@ -412,6 +426,21 @@ func (s *RedisStore) IsSubjectRevoked(
 		return true, nil
 	}
 	return issuedAt.Unix() <= revokedAt, nil
+}
+
+// revokedAtReached parses a stored revocation timestamp and reports
+// whether a session issued at issuedAt is covered by it. ok=false means
+// the value is not a timestamp (a legacy "1" marker): the caller then
+// fails closed and treats the session as revoked.
+func revokedAtReached(raw string, issuedAt time.Time) (revoked, ok bool) {
+	ts, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return false, false
+	}
+	if issuedAt.IsZero() {
+		return true, true
+	}
+	return issuedAt.Unix() <= ts, true
 }
 
 func (s *RedisStore) UseJTI(

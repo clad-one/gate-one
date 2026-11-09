@@ -162,6 +162,15 @@ func TestAC_AUTH_18_RedisCheckRevokedCombined(t *testing.T) {
 		t.Fatalf("revoked sid = %v, %v", revoked, err)
 	}
 
+	// A later login mapped to the SAME sid (the IdP SSO survived an
+	// RP-initiated logout) must be accepted, not locked out forever.
+	revoked, err = s.CheckRevoked(
+		ctx, iss, "sid-1", "", time.Now().Add(time.Minute))
+	if err != nil || revoked {
+		t.Fatalf("new session on reused sid after logout = %v, %v",
+			revoked, err)
+	}
+
 	// Subject revocation only applies to tokens issued before it.
 	if err := s.RevokeSubject(
 		ctx, iss, "sub-2", time.Now(), time.Now().Add(time.Hour),

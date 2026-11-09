@@ -27,6 +27,7 @@ import (
 const (
 	oidcSessionCookie = "gate_one_session"
 	oidcTxCookie      = "gate_one_oidc_tx"
+	oidcRtCookie      = "gate_one_oidc_rt"
 	oidcTxTTL         = 15 * time.Minute
 	oidcSessionTTL    = time.Hour
 )
@@ -129,6 +130,7 @@ type OIDC struct {
 
 	session *sessionCodec
 	tx      *txCodec
+	rt      *rtCodec
 	now     func() time.Time
 
 	doneTmpl *template.Template
@@ -384,6 +386,12 @@ func NewOIDC(ctx context.Context, cfg OIDCConfig) (*OIDC, error) {
 			secure: u.Scheme == "https",
 			now:    now,
 		},
+		rt: &rtCodec{
+			name:   oidcRtCookie,
+			secret: txSecret,
+			secure: u.Scheme == "https",
+			now:    now,
+		},
 		now:      now,
 		doneTmpl: template.Must(template.New("done").Parse(devPopupDoneHTML)),
 	}
@@ -607,6 +615,10 @@ func (o *OIDC) handleLogin(w http.ResponseWriter, r *http.Request) {
 		ReturnTo: returnTo,
 		Expires:  o.now().Add(oidcTxTTL).Unix(),
 	})
+	// Keep the return target separately, on a path that survives an
+	// expired/missing transaction cookie, so the recovery page can
+	// send the user back to their app.
+	o.rt.set(w, returnTo)
 
 	opts := []oauth2.AuthCodeOption{
 		oidc.Nonce(nonce),
@@ -623,9 +635,13 @@ func (o *OIDC) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // writeTxExpired answers an expired/missing OIDC transaction with a
 // readable page (the raw text was a dead end, especially after a slow
-// upstream login).
-func (o *OIDC) writeTxExpired(w http.ResponseWriter) {
+// upstream login). It points "Restart the sign-in" back at the app the
+// user came from when the return target is still known.
+func (o *OIDC) writeTxExpired(w http.ResponseWriter, r *http.Request) {
 	login := strings.TrimRight(o.loginBase.String(), "/") + "/login"
+	if returnTo := o.rt.read(r); returnTo != "" {
+		login += "?returnTo=" + url.QueryEscape(returnTo)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusBadRequest)
@@ -673,14 +689,16 @@ func hostOnly(h string) string {
 }
 
 func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
-	tx, ok := o.tx.read(r)
+	state := r.URL.Query().Get("state")
+	tx, ok := o.tx.read(r, state)
 	if !ok {
 		log.Printf("OIDC: login transaction expired/missing host=%s", r.Host)
 		o.auditFailure("failed", hostOnly(r.Host))
-		o.writeTxExpired(w)
+		o.writeTxExpired(w, r)
 		return
 	}
-	o.tx.clear(w)
+	o.tx.clear(w, state)
+	o.rt.clear(w)
 
 	if e := r.URL.Query().Get("error"); e != "" {
 		desc := r.URL.Query().Get("error_description")
@@ -693,7 +711,6 @@ func (o *OIDC) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication refused: "+e, http.StatusUnauthorized)
 		return
 	}
-	state := r.URL.Query().Get("state")
 	if subtle.ConstantTimeCompare(
 		[]byte(tx.State), []byte(state)) != 1 {
 		o.auditFailure("failed", hostOnly(r.Host))
@@ -1143,11 +1160,30 @@ func (c *txCodec) cookieName() string {
 	return c.name
 }
 
+// cookieNameFor derives a per-flow cookie name from the OIDC `state`.
+// Concurrent logins in one browser (several tabs, or a second app whose
+// auth probe races the first) carry distinct states, so their
+// transaction cookies no longer overwrite each other and the losing
+// callback no longer lands on "session expired".
+func (c *txCodec) cookieNameFor(state string) string {
+	base := c.cookieName()
+	if state == "" {
+		return base
+	}
+	mac := hmac.New(sha256.New, c.secret)
+	mac.Write([]byte(state))
+	h := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if len(h) > 10 {
+		h = h[:10]
+	}
+	return base + "_" + h
+}
+
 func (c *txCodec) set(w http.ResponseWriter, tx oidcTx) {
 	raw, _ := json.Marshal(tx)
 	body := base64.RawURLEncoding.EncodeToString(raw)
 	http.SetCookie(w, &http.Cookie{
-		Name:     c.cookieName(),
+		Name:     c.cookieNameFor(tx.State),
 		Value:    body + "." + c.sign(body),
 		Path:     "/auth/callback",
 		MaxAge:   int(oidcTxTTL.Seconds()),
@@ -1157,8 +1193,8 @@ func (c *txCodec) set(w http.ResponseWriter, tx oidcTx) {
 	})
 }
 
-func (c *txCodec) read(r *http.Request) (oidcTx, bool) {
-	cookie, err := r.Cookie(c.cookieName())
+func (c *txCodec) read(r *http.Request, state string) (oidcTx, bool) {
+	cookie, err := r.Cookie(c.cookieNameFor(state))
 	if err != nil {
 		return oidcTx{}, false
 	}
@@ -1183,9 +1219,9 @@ func (c *txCodec) read(r *http.Request) (oidcTx, bool) {
 	return tx, true
 }
 
-func (c *txCodec) clear(w http.ResponseWriter) {
+func (c *txCodec) clear(w http.ResponseWriter, state string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     c.cookieName(),
+		Name:     c.cookieNameFor(state),
 		Value:    "",
 		Path:     "/auth/callback",
 		MaxAge:   -1,
@@ -1196,6 +1232,79 @@ func (c *txCodec) clear(w http.ResponseWriter) {
 }
 
 func (c *txCodec) sign(body string) string {
+	mac := hmac.New(sha256.New, c.secret)
+	mac.Write([]byte(body))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// rtCodec carries the validated returnTo across the OIDC round trip in
+// a small, dedicated, short-lived cookie (Path=/). Unlike the
+// transaction cookie it can be read on ANY path, so an expired/missing
+// transaction can still point "Restart the sign-in" back at the app
+// instead of the login host's default.
+type rtCodec struct {
+	name   string
+	secret []byte
+	secure bool
+	now    func() time.Time
+}
+
+func (c *rtCodec) cookieName() string {
+	if c.name == "" {
+		return oidcRtCookie
+	}
+	return c.name
+}
+
+func (c *rtCodec) set(w http.ResponseWriter, returnTo string) {
+	if strings.TrimSpace(returnTo) == "" {
+		c.clear(w)
+		return
+	}
+	body := base64.RawURLEncoding.EncodeToString([]byte(returnTo))
+	http.SetCookie(w, &http.Cookie{
+		Name:     c.cookieName(),
+		Value:    body + "." + c.sign(body),
+		Path:     "/",
+		MaxAge:   int(oidcTxTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   c.secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (c *rtCodec) read(r *http.Request) string {
+	cookie, err := r.Cookie(c.cookieName())
+	if err != nil {
+		return ""
+	}
+	body, sig, ok := strings.Cut(cookie.Value, ".")
+	if !ok || body == "" || sig == "" {
+		return ""
+	}
+	if !hmac.Equal([]byte(sig), []byte(c.sign(body))) {
+		return ""
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(body)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func (c *rtCodec) clear(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     c.cookieName(),
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   c.secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (c *rtCodec) sign(body string) string {
 	mac := hmac.New(sha256.New, c.secret)
 	mac.Write([]byte(body))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))

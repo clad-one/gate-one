@@ -146,7 +146,7 @@ type BoltStore struct {
 	ttl  time.Duration
 
 	mu         sync.RWMutex
-	revoked    map[string]int64 // sid key -> unix expiry
+	revoked    map[string]subRevocation // sid key -> revocation window
 	subRevoked map[string]subRevocation
 
 	key     []byte
@@ -186,7 +186,7 @@ func OpenBoltStore(path string, ttl time.Duration) (*BoltStore, error) {
 		db:         db,
 		path:       path,
 		ttl:        ttl,
-		revoked:    map[string]int64{},
+		revoked:    map[string]subRevocation{},
 		subRevoked: map[string]subRevocation{},
 		stop:       make(chan struct{}),
 		done:       make(chan struct{}),
@@ -236,11 +236,18 @@ func OpenBoltStore(path string, ttl time.Duration) (*BoltStore, error) {
 			return err
 		}
 		if err := revoked.ForEach(func(k, v []byte) error {
-			exp := decodeExpiry(v)
-			if exp > now {
-				s.revoked[string(k)] = exp
-			} else if err := revoked.Delete(k); err != nil {
-				return err
+			revokedAt, exp, ok := decodeSub(v)
+			if !ok {
+				// Legacy value: a bare expiry without revokedAt.
+				// Keep the session revoked for anything issued
+				// before now; later logins are allowed again.
+				revokedAt, exp, ok = now, decodeExpiry(v), true
+			}
+			if !ok || exp <= now {
+				return revoked.Delete(k)
+			}
+			s.revoked[string(k)] = subRevocation{
+				revokedAt: revokedAt, expires: exp,
 			}
 			return nil
 		}); err != nil {
@@ -293,14 +300,15 @@ func (s *BoltStore) Revoke(
 	if expires.IsZero() {
 		expires = time.Now().Add(s.ttl)
 	}
+	revokedAt := time.Now()
 	if sid != "" {
-		if err := s.revokeSID(issuer, sid, expires); err != nil {
+		if err := s.revokeSID(issuer, sid, revokedAt, expires); err != nil {
 			return err
 		}
 	}
 	if sub != "" {
 		if err := s.RevokeSubject(
-			context.Background(), issuer, sub, time.Now(), expires,
+			context.Background(), issuer, sub, revokedAt, expires,
 		); err != nil {
 			return err
 		}
@@ -308,17 +316,21 @@ func (s *BoltStore) Revoke(
 	return nil
 }
 
-func (s *BoltStore) revokeSID(issuer, sid string, expires time.Time) error {
+func (s *BoltStore) revokeSID(
+	issuer, sid string, revokedAt, expires time.Time,
+) error {
 	key := revKey("sid", issuer, sid)
 	s.mu.Lock()
-	s.revoked[key] = expires.Unix()
+	s.revoked[key] = subRevocation{
+		revokedAt: revokedAt.Unix(), expires: expires.Unix(),
+	}
 	s.mu.Unlock()
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(storeBucketRevoked))
 		if b == nil {
 			return errors.New("sessionStore: revoked bucket missing")
 		}
-		return b.Put([]byte(key), encodeExpiry(expires))
+		return b.Put([]byte(key), encodeSub(revokedAt, expires))
 	})
 }
 
@@ -358,8 +370,10 @@ func (s *BoltStore) IsRevoked(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if sid != "" {
-		if exp, ok := s.revoked[revKey("sid", issuer, sid)]; ok && exp > now {
-			return true, nil
+		if e, ok := s.revoked[revKey("sid", issuer, sid)]; ok {
+			if sidRevoked(e, now, time.Time{}) {
+				return true, nil
+			}
 		}
 	}
 	if sub != "" {
@@ -384,8 +398,10 @@ func (s *BoltStore) CheckRevoked(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if sid != "" {
-		if exp, ok := s.revoked[revKey("sid", issuer, sid)]; ok && exp > now {
-			return true, nil
+		if e, ok := s.revoked[revKey("sid", issuer, sid)]; ok {
+			if sidRevoked(e, now, issuedAt) {
+				return true, nil
+			}
 		}
 	}
 	if sub == "" {
@@ -460,8 +476,8 @@ func (s *BoltStore) gc() {
 
 	s.mu.Lock()
 	expired := make([]string, 0)
-	for k, exp := range s.revoked {
-		if exp <= now {
+	for k, e := range s.revoked {
+		if e.expires <= now {
 			delete(s.revoked, k)
 			expired = append(expired, k)
 		}
@@ -510,9 +526,23 @@ type subRevocation struct {
 	expires   int64
 }
 
+// sidRevoked reports whether a session revocation covers a session
+// issued at issuedAt: only sessions issued at or before the revocation
+// are revoked, so a later login the IdP maps to the same sid is
+// accepted. issuedAt zero is fail-closed.
+func sidRevoked(e subRevocation, now int64, issuedAt time.Time) bool {
+	if e.expires <= now {
+		return false
+	}
+	if issuedAt.IsZero() {
+		return true
+	}
+	return issuedAt.Unix() <= e.revokedAt
+}
+
 type MemoryStore struct {
 	mu         sync.RWMutex
-	revoked    map[string]int64
+	revoked    map[string]subRevocation
 	subRevoked map[string]subRevocation
 	jti        map[string]int64
 	key        []byte
@@ -525,7 +555,7 @@ func NewMemoryStore() *MemoryStore {
 	_, _ = rand.Read(key)
 	_, _ = rand.Read(id)
 	return &MemoryStore{
-		revoked:    map[string]int64{},
+		revoked:    map[string]subRevocation{},
 		subRevoked: map[string]subRevocation{},
 		jti:        map[string]int64{},
 		key:        key,
@@ -554,7 +584,9 @@ func (s *MemoryStore) Revoke(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if sid != "" {
-		s.revoked[revKey("sid", issuer, sid)] = exp
+		s.revoked[revKey("sid", issuer, sid)] = subRevocation{
+			revokedAt: time.Now().Unix(), expires: exp,
+		}
 	}
 	if sub != "" {
 		s.subRevoked[revKey("sub", issuer, sub)] = subRevocation{
@@ -593,8 +625,10 @@ func (s *MemoryStore) IsRevoked(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if sid != "" {
-		if exp, ok := s.revoked[revKey("sid", issuer, sid)]; ok && exp > now {
-			return true, nil
+		if e, ok := s.revoked[revKey("sid", issuer, sid)]; ok {
+			if sidRevoked(e, now, time.Time{}) {
+				return true, nil
+			}
 		}
 	}
 	if sub != "" {
@@ -634,8 +668,10 @@ func (s *MemoryStore) CheckRevoked(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if sid != "" {
-		if exp, ok := s.revoked[revKey("sid", issuer, sid)]; ok && exp > now {
-			return true, nil
+		if e, ok := s.revoked[revKey("sid", issuer, sid)]; ok {
+			if sidRevoked(e, now, issuedAt) {
+				return true, nil
+			}
 		}
 	}
 	if sub == "" {

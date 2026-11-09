@@ -254,7 +254,9 @@ func newTestOIDCWith(
 
 func findCookie(rec *httptest.ResponseRecorder, name string) *http.Cookie {
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == name {
+		// The transaction cookie is suffixed per flow
+		// (gate_one_oidc_tx_<hash>); match the base name too.
+		if c.Name == name || strings.HasPrefix(c.Name, name+"_") {
 			return c
 		}
 	}
