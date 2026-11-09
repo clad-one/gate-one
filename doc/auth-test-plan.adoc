@@ -1171,6 +1171,8 @@ Tests present:
 * `TestAC_AUTH_15_DegradedStartupAndReload` (`internal/proxy`)
 * `TestAC_AUTH_18_RedisRevocationStore` (`internal/authn`)
 * `TestAC_AUTH_18_RedisTTL` (`internal/authn`)
+* `TestAC_AUTH_18_RedisCheckRevokedCombined` (`internal/authn`) — sid and
+  sub are both timestamped; a new session on a reused sid is accepted
 * `TestAC_AUTH_18_IAMRedisStore` (`internal/iam`)
 * `TestAC_AUTH_19_JWTImmediateRevocation` (`internal/authn`)
 * `TestAC_AUTH_19_RedisFailClosedAndImmediateRevocation` (`internal/proxy`)
@@ -1183,6 +1185,12 @@ Tests present:
 * `TestAC_AUTH_24_SubjectRevocationTimestamp` (`internal/authn`)
 * `TestAC_AUTH_24_JWTGlobalLogout` (`internal/authn`)
 * `TestAC_AUTH_25_RevocationTTLFromDiscovery` (`internal/authn`)
+* `TestAC_AUTH_SidRevocationIsTimestamped` (`internal/authn`) — a login
+  that reuses a revoked `sid` after a logout is accepted
+* `TestOIDCConcurrentFlowsKeepSeparateTxCookies` (`internal/authn`) — the
+  transaction cookie is per flow (no clobber between concurrent logins)
+* `TestOIDCTxExpiredKeepsReturnTo` (`internal/authn`) — the expired-login
+  page still points back at the originating application
 * `TestAC_AUTH_26_RefreshTTLWarning` (`internal/authn`)
 * `TestAC_AUTH_26_StartupWarning` (`internal/authn`)
 * `TestAC_AUTH_26_CheckWarnsOnMissingTTL` (`cmd/gate-one`)

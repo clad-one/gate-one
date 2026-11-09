@@ -142,7 +142,7 @@
         },
         "defaultAppUrl": {
           "type": "string",
-          "description": "Application to send a bare visit to THIS provider's login host root to. Overrides the global defaultAppUrl for this login host. Must be a route host bound to this provider or a host covered by its cookieDomain."
+          "description": "Application to send a bare visit to THIS provider's login host root to. Overrides the global defaultAppUrl for this login host. Must be a route host bound to this provider or a host covered by its cookieDomain. Prefer a neutral page rather than one application."
         },
         "verifyUrl": {
           "type": "string",
@@ -370,7 +370,7 @@
         "revocationTtlSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the embedded IAM), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout."
+          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the embedded IAM), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout. A revocation covers only sessions/tokens issued before it, so a later sign-in is accepted (a user is never locked out by their own logout)."
         },
         "dev": {
           "type": "object",
@@ -444,7 +444,7 @@
     },
     "defaultAppUrl": {
       "type": "string",
-      "description": "Global fallback for a bare visit to a login host root (302), preserving the query string. A provider's own defaultAppUrl wins for its login host. Email verification/account links must carry a return target; use defaultAppUrl only as an operational fallback."
+      "description": "Global fallback for a bare visit to a login host root (302), preserving the query string. A provider's own defaultAppUrl wins for its login host. Email verification/account links must carry a return target; use defaultAppUrl only as an operational fallback. Point it at a neutral page (e.g. your landing), not at one application."
     },
     "oidc": {
       "type": "object",
@@ -2174,7 +2174,7 @@
         "revocationTtlSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the embedded IAM), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout."
+          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the embedded IAM), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout. A revocation covers only sessions/tokens issued before it, so a later sign-in is accepted (a user is never locked out by their own logout)."
         },
         "legacyTokenCookies": {
           "type": "boolean",
@@ -2242,7 +2242,7 @@
         },
         "defaultAppUrl": {
           "type": "string",
-          "description": "Application to send a bare visit to this provider's login host root to. Must be a route host of this provider (or a host covered by its cookieDomain). Overrides the group/global fallback for this domain."
+          "description": "Application to send a bare visit to this provider's login host root to. Must be a route host of this provider (or a host covered by its cookieDomain). Overrides the group/global fallback for this domain. Prefer a neutral page rather than one application."
         }
       }
     }

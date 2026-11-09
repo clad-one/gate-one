@@ -353,9 +353,11 @@ default `./gate-one-state.db` relative to the config file):
 * `/backchannel-logout` validates the OIDC logout token (signature,
   `iss`, `aud`, `iat`, `events`, `sid`/`sub`, replay `jti`) and records
   the revocation synchronously;
-* `sid` revokes one session; `sub` revokes every session of the user
-  issued **before** the revocation timestamp (a new login after logout
-  remains possible);
+* both `sid` and `sub` revocations carry the instant they happened and
+  cover only sessions/tokens issued **before** it: `sid` revokes one
+  session, `sub` every session of the user, and a login after a logout
+  is always accepted (an IdP that reuses a `sid` cannot lock the user
+  out);
 * the revocation is checked **before** the gateway identity cache, so a
   cached identity cannot survive a logout;
 * entries expire after `revocationTtlSeconds`, default: issuer's
@@ -374,7 +376,11 @@ in bbolt); set it when multiple instances must accept the same cookie.
 Logout clears the cookie, revokes the session `sid` locally (a copied
 cookie cannot be replayed), and redirects to the IdP
 `end_session_endpoint` with `id_token_hint` and
-`post_logout_redirect_uri` when the IdP advertises one. The ID token is
+`post_logout_redirect_uri` when the IdP advertises one. The
+`post_logout_redirect_uri` sent is the originating application host: the
+IdP must have it registered, or the end-session is rejected and the IdP
+SSO session survives the logout (the next visit signs the user back in).
+The ID token is
 kept only for that hint. In native mode the refresh token is not stored
 by Gate One; with `legacyTokenCookies` (migration, see below) the
 access/refresh/id tokens are mirrored in cookies for auth-bridge, the
