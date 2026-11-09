@@ -28,7 +28,7 @@ import (
 
 func TestAC_AUTH_01_GoogleLoginCreatesSession(t *testing.T) {
 	google := newFakeGoogle(t)
-	b, srv := newTestBroker(t, google)
+	b, srv := newTestIAM(t, google)
 	_ = b
 
 	verifier := "verifier-0123456789-0123456789-0123456789"
@@ -164,7 +164,7 @@ func TestAC_AUTH_09_IdentityAdapterConformance(t *testing.T) {
 	// generic conformance suite is exercised in pkg/identityadapter.
 	// Here we assert the IAM emits a conformant discovery + JWKS.
 	google := newFakeGoogle(t)
-	b, srv := newTestBroker(t, google)
+	b, srv := newTestIAM(t, google)
 	_ = b
 
 	resp, err := http.Get(srv.URL + "/t/mycompany/.well-known/openid-configuration")
@@ -205,7 +205,7 @@ func TestAC_AUTH_09_IdentityAdapterConformance(t *testing.T) {
 
 func TestAC_AUTH_09_ClientCredentials(t *testing.T) {
 	google := newFakeGoogle(t)
-	b, srv := newTestBroker(t, google)
+	b, srv := newTestIAM(t, google)
 	_ = b
 
 	form := url.Values{}
@@ -244,9 +244,9 @@ func TestAC_AUTH_09_ClientCredentials(t *testing.T) {
 	}
 }
 
-func TestAC_AUTH_13_BrokerRejectsBadRedirect(t *testing.T) {
+func TestAC_AUTH_13_IAMRejectsBadRedirect(t *testing.T) {
 	google := newFakeGoogle(t)
-	_, srv := newTestBroker(t, google)
+	_, srv := newTestIAM(t, google)
 	resp, err := http.Get(srv.URL + "/t/mycompany/authorize?client_id=cladone-go&" +
 		"redirect_uri=https://evil.test/cb&response_type=code&scope=openid&state=x")
 	if err != nil {
@@ -258,7 +258,7 @@ func TestAC_AUTH_13_BrokerRejectsBadRedirect(t *testing.T) {
 	}
 }
 
-func newTestBroker(t *testing.T, google *fakeGoogle) (*IAM, *httptest.Server) {
+func newTestIAM(t *testing.T, google *fakeGoogle) (*IAM, *httptest.Server) {
 	t.Helper()
 	cfg := &Config{
 		PublicURL: "http://placeholder.test",
@@ -335,10 +335,10 @@ func verifyJWT(
 	return claims
 }
 
-func TestAC_AUTH_18_BrokerRedisStore(t *testing.T) {
+func TestAC_AUTH_18_IAMRedisStore(t *testing.T) {
 	mr := miniredis.RunT(t)
 	google := newFakeGoogle(t)
-	cfg := testBrokerConfig(google)
+	cfg := testIAMConfig(google)
 	cfg.Redis = &RedisConfig{
 		URL:        "redis://" + mr.Addr() + "/0",
 		AuthPrefix: "test:auth:v1:",
@@ -396,7 +396,7 @@ func TestAC_AUTH_18_BrokerRedisStore(t *testing.T) {
 	}
 }
 
-func testBrokerConfig(google *fakeGoogle) *Config {
+func testIAMConfig(google *fakeGoogle) *Config {
 	return &Config{
 		PublicURL: "https://iam.test",
 		Tenants: []Tenant{{
@@ -419,7 +419,7 @@ func testBrokerConfig(google *fakeGoogle) *Config {
 
 func TestAC_AUTH_09_GoogleAdapterConformance(t *testing.T) {
 	google := newFakeGoogle(t)
-	tnt := testBrokerConfig(google).Tenants[0]
+	tnt := testIAMConfig(google).Tenants[0]
 	a, err := newOIDCAdapter(context.Background(), tnt,
 		"https://iam.test", nil, time.Now, rand.Reader)
 	if err != nil {
@@ -430,7 +430,7 @@ func TestAC_AUTH_09_GoogleAdapterConformance(t *testing.T) {
 
 func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
 	google := newFakeGoogle(t)
-	tnt := testBrokerConfig(google).Tenants[0]
+	tnt := testIAMConfig(google).Tenants[0]
 	a, err := newOIDCAdapter(context.Background(), tnt,
 		"https://iam.test", nil, time.Now, rand.Reader)
 	if err != nil {
@@ -440,7 +440,7 @@ func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
 		Tenant: "mycompany",
 		Params: map[string]string{
 			"iam_state": "flow-1",
-			"nonce":        "nonce-adapter",
+			"nonce":     "nonce-adapter",
 		},
 		Header: map[string][]string{},
 	})
@@ -487,7 +487,7 @@ func TestAC_AUTH_09_GoogleAdapterStartContinue(t *testing.T) {
 	}
 }
 
-func TestAC_AUTH_20_BrokerKeyRotation(t *testing.T) {
+func TestAC_AUTH_20_IAMKeyRotation(t *testing.T) {
 	google := newFakeGoogle(t)
 	dir := t.TempDir()
 	writeKey := func(name string) (string, ed25519.PublicKey) {
@@ -504,7 +504,7 @@ func TestAC_AUTH_20_BrokerKeyRotation(t *testing.T) {
 	}
 	k1, _ := writeKey("k1.key")
 	k2, pub2 := writeKey("k2.key")
-	cfg := testBrokerConfig(google)
+	cfg := testIAMConfig(google)
 	cfg.Tenants[0].KeyFiles = []string{k1, k2}
 	b, err := New(context.Background(), cfg)
 	if err != nil {
@@ -539,7 +539,7 @@ func TestAC_AUTH_20_BrokerKeyRotation(t *testing.T) {
 func TestAC_AUTH_21_RevokeWithConfig(t *testing.T) {
 	mr := miniredis.RunT(t)
 	google := newFakeGoogle(t)
-	cfg := testBrokerConfig(google)
+	cfg := testIAMConfig(google)
 	cfg.Redis = &RedisConfig{
 		URL:        "redis://" + mr.Addr() + "/0",
 		AuthPrefix: "test:revoke:v1:",
@@ -567,7 +567,7 @@ func TestAC_AUTH_21_RevokeWithConfig(t *testing.T) {
 
 func TestAC_AUTH_22_LogoutRevokesSharedSID(t *testing.T) {
 	google := newFakeGoogle(t)
-	b, srv := newTestBroker(t, google)
+	b, srv := newTestIAM(t, google)
 	ctx := context.Background()
 	rt := b.tenants["mycompany"]
 

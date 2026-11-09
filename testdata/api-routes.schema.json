@@ -318,7 +318,7 @@
             },
             "prefix": {
               "type": "string",
-              "description": "Shared revocation key prefix. Default cladone:auth:v1:. Must match the broker's redis.authPrefix."
+              "description": "Shared revocation key prefix. Default cladone:auth:v1:. Must match the embedded IAM's redis.authPrefix."
             },
             "dialTimeoutMs": {
               "type": "integer",
@@ -357,7 +357,7 @@
         "revocationTtlSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the broker), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout."
+          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the embedded IAM), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout."
         },
         "dev": {
           "type": "object",
@@ -2027,7 +2027,7 @@
             },
             "prefix": {
               "type": "string",
-              "description": "Shared revocation key prefix. Default cladone:auth:v1:. Must match the broker's redis.authPrefix."
+              "description": "Shared revocation key prefix. Default cladone:auth:v1:. Must match the embedded IAM's redis.authPrefix."
             },
             "dialTimeoutMs": {
               "type": "integer",
@@ -2067,7 +2067,7 @@
         "revocationTtlSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the broker), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout."
+          "description": "Retention of revocation entries. Default: the issuer's advertised refresh-token TTL (cladone_refresh_token_ttl_seconds, e.g. the embedded IAM), else 30 days; never shorter than the session TTL. Must cover the refresh-token lifetime for a global logout."
         },
         "legacyTokenCookies": {
           "type": "boolean",

@@ -81,7 +81,7 @@ M2M client
     {
       "id": "mycompany",
       "clientId": "cladone-go",
-      "clientSecretEnv": "MYCOMPANY_BROKER_CLIENT_SECRET",
+      "clientSecretEnv": "MYCOMPANY_IAM_CLIENT_SECRET",
       "redirectUris": [
         "https://login.mycompany.example.com/auth/callback"
       ],

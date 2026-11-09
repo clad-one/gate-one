@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-test("session cookies: RP domain-wide, broker host-only, SameSite=Lax", async ({
+test("session cookies: RP domain-wide, IAM host-only, SameSite=Lax", async ({
   page,
   context,
 }) => {
@@ -16,11 +16,11 @@ test("session cookies: RP domain-wide, broker host-only, SameSite=Lax", async ({
   expect(rp!.sameSite).toBe("Lax");
   expect(rp!.secure).toBe(false); // local stack is HTTP
 
-  const broker = cookies.find((c) => c.name === "cladone_broker_sid");
-  expect(broker, JSON.stringify(cookies)).toBeTruthy();
-  expect(broker!.domain.replace(/^\./, "")).toBe("auth.mycompany.localhost");
-  expect(broker!.path).toBe("/t/mycompany");
-  expect(broker!.httpOnly).toBe(true);
-  expect(broker!.sameSite).toBe("Lax");
-  expect(broker!.secure).toBe(false);
+  const iam = cookies.find((c) => c.name === "cladone_iam_sid");
+  expect(iam, JSON.stringify(cookies)).toBeTruthy();
+  expect(iam!.domain.replace(/^\./, "")).toBe("auth.mycompany.localhost");
+  expect(iam!.path).toBe("/t/mycompany");
+  expect(iam!.httpOnly).toBe(true);
+  expect(iam!.sameSite).toBe("Lax");
+  expect(iam!.secure).toBe(false);
 });

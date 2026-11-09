@@ -5,7 +5,7 @@ test("logout in one tab probes the other tab through the storage event", async (
   request,
 }) => {
   // The previous test may have logged out less than a second ago; the
-  // broker's sub revocation is stored with second granularity.
+  // IAM's sub revocation is stored with second granularity.
   await new Promise((resolve) => setTimeout(resolve, 1100));
 
   const tabA = await context.newPage();

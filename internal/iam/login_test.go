@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func newLoginTestBroker(t *testing.T) (*IAM, *tenantRuntime) {
+func newLoginTestIAM(t *testing.T) (*IAM, *tenantRuntime) {
 	t.Helper()
 	old := pbkdf2Iterations
 	pbkdf2Iterations = 1000
@@ -107,7 +107,7 @@ func postLogin(
 }
 
 func TestLocalLoginFlow(t *testing.T) {
-	b, _ := newLoginTestBroker(t)
+	b, _ := newLoginTestIAM(t)
 	putTestUser(t, b, "alice@app.test", "long-enough-pass", true)
 
 	verifier := "verifier-0123456789-0123456789-0123456789-0123456789"
@@ -186,7 +186,7 @@ func TestLocalLoginFlow(t *testing.T) {
 }
 
 func TestLocalLoginRejectsUnverifiedAndBadCSRF(t *testing.T) {
-	b, _ := newLoginTestBroker(t)
+	b, _ := newLoginTestIAM(t)
 	putTestUser(t, b, "bob@app.test", "long-enough-pass", false)
 
 	rec := httptest.NewRecorder()
@@ -214,7 +214,7 @@ func TestLocalLoginRejectsUnverifiedAndBadCSRF(t *testing.T) {
 }
 
 func TestLocalLoginDisabled(t *testing.T) {
-	b, rt := newLoginTestBroker(t)
+	b, rt := newLoginTestIAM(t)
 	rt.cfg.LocalAccounts = false
 	rec := httptest.NewRecorder()
 	b.Handler().ServeHTTP(rec, httptest.NewRequest(
@@ -225,7 +225,7 @@ func TestLocalLoginDisabled(t *testing.T) {
 }
 
 func TestLocalLoginUnknownFlow(t *testing.T) {
-	b, _ := newLoginTestBroker(t)
+	b, _ := newLoginTestIAM(t)
 	rec := httptest.NewRecorder()
 	b.Handler().ServeHTTP(rec, httptest.NewRequest(
 		http.MethodGet, "https://iam.test/t/mycompany/login?flow=unknown", nil))
@@ -235,7 +235,7 @@ func TestLocalLoginUnknownFlow(t *testing.T) {
 }
 
 func TestIdPChooser(t *testing.T) {
-	b, rt := newLoginTestBroker(t)
+	b, rt := newLoginTestIAM(t)
 	rt.cfg.Upstreams = map[string]GoogleConfig{
 		"google":    {DisplayName: "Google"},
 		"microsoft": {DisplayName: "Microsoft"},
@@ -263,7 +263,7 @@ func TestIdPChooser(t *testing.T) {
 }
 
 func TestIdPUnknownRejected(t *testing.T) {
-	b, rt := newLoginTestBroker(t)
+	b, rt := newLoginTestIAM(t)
 	rt.cfg.Upstreams = map[string]GoogleConfig{"google": {DisplayName: "Google"}}
 	rt.adapterOrder = []string{"google"}
 

@@ -65,13 +65,13 @@ WHATSOEVER ARISING FROM THE USE OF THE SOFTWARE.
 6. EXCEPTION FOR PLUGINS AND EXTENSIONS
 
 6.1 Plugins and extensions that do not implement authentication or
-authorization and do not run in the authentication broker (the "Extension
+authorization and do not run in the authentication IAM (the "Extension
 Plugins") may be distributed under the license of their choice, including
 proprietary, commercial or closed source.
 
 6.2 This exception does not apply to:
 • plugins, adapters or modules that implement authentication or
-  authorization (including broker IdP adapters);
+  authorization (including IAM IdP adapters);
 • any component that embeds, copies or derives from the Software.
 
 6.3 Extension Plugins must:

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func newLogoutTestBroker(t *testing.T) *IAM {
+func newLogoutTestIAM(t *testing.T) *IAM {
 	t.Helper()
 	b := &IAM{
 		cfg: &Config{
@@ -47,7 +47,7 @@ func doLogout(t *testing.T, b *IAM, browserID string) *httptest.ResponseRecorder
 }
 
 func TestLogoutUpstreamRPInitiated(t *testing.T) {
-	b := newLogoutTestBroker(t)
+	b := newLogoutTestIAM(t)
 	ctx := context.Background()
 	const bid = "browser-1"
 	if err := b.store.PutUpstream(ctx, "mycompany", bid, &upstreamSession{
@@ -113,7 +113,7 @@ func TestLogoutUpstreamRPInitiated(t *testing.T) {
 }
 
 func TestLogoutWithoutUpstreamEndSessionFallsBack(t *testing.T) {
-	b := newLogoutTestBroker(t)
+	b := newLogoutTestIAM(t)
 	ctx := context.Background()
 	const bid = "browser-2"
 	if err := b.store.PutUpstream(ctx, "mycompany", bid, &upstreamSession{
@@ -133,7 +133,7 @@ func TestLogoutWithoutUpstreamEndSessionFallsBack(t *testing.T) {
 }
 
 func TestLogoutWithoutUpstreamSession(t *testing.T) {
-	b := newLogoutTestBroker(t)
+	b := newLogoutTestIAM(t)
 	rec := doLogout(t, b, "")
 	if rec.Code != http.StatusFound {
 		t.Fatalf("logout = %d", rec.Code)

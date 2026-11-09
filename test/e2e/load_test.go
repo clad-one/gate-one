@@ -254,11 +254,11 @@ func TestChaos_RedisOutageUnderLoad(t *testing.T) {
 	t.Logf("outage: authenticated 502, public 200, recovery 200")
 }
 
-// TestChaos_BrokerSlow checks the steady-state path does not depend on
+// TestChaos_IAMSlow checks the steady-state path does not depend on
 // the IAM: a slow IAM makes login slow but leaves established
 // sessions fast.
-func TestChaos_BrokerSlow(t *testing.T) {
-	s := newStack(t, stackOptions{mycompanyBrokerDelay: 200 * time.Millisecond})
+func TestChaos_IAMSlow(t *testing.T) {
+	s := newStack(t, stackOptions{mycompanyIAMDelay: 200 * time.Millisecond})
 	s.setUser("alice@mycompany.test")
 
 	t0 := time.Now()
@@ -372,7 +372,7 @@ func TestLoad_RevocationUnderLoad(t *testing.T) {
 // one. The old session must stay valid (overlap) and a new login must
 // succeed with the new key (JWKS refresh on unknown kid).
 func TestLoad_KeyRotationOverlap(t *testing.T) {
-	s := newStack(t, stackOptions{mycompanyBrokerProxy: true})
+	s := newStack(t, stackOptions{mycompanyIAMProxy: true})
 	s.setUser("alice@mycompany.test")
 	s.login("https://app.mycompany.test/")
 
@@ -391,14 +391,14 @@ func TestLoad_KeyRotationOverlap(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := *s.mycompanyCfg
-	cfg.PublicURL = s.brokerProxy.URL()
+	cfg.PublicURL = s.iamProxy.URL()
 	tenant := cfg.Tenants[0]
 	tenant.KeyFiles = []string{s.mycompanyKeyFile, key2}
 	cfg.Tenants = []iam.Tenant{tenant}
 
-	b2, srv2, _ := newBroker(t, &cfg)
-	b2.SetPublicURL(s.brokerProxy.URL())
-	s.brokerProxy.SetTarget(srv2.URL)
+	b2, srv2, _ := newIAM(t, &cfg)
+	b2.SetPublicURL(s.iamProxy.URL())
+	s.iamProxy.SetTarget(srv2.URL)
 
 	// Overlap: the old token was signed by key1, which the new JWKS
 	// still publishes. Force a full verification (bypass the identity
@@ -427,7 +427,7 @@ func TestLoad_KeyRotationOverlap(t *testing.T) {
 	}
 
 	// Both keys are published during the overlap window.
-	resp, err := http.Get(s.brokerProxy.URL() + "/t/mycompany/jwks.json")
+	resp, err := http.Get(s.iamProxy.URL() + "/t/mycompany/jwks.json")
 	if err != nil {
 		t.Fatal(err)
 	}

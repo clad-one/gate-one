@@ -98,7 +98,7 @@ func TestAC_AUTH_02_CrossTenantTokenRejected(t *testing.T) {
 	}
 }
 
-func TestAC_AUTH_06_BrokerDownDegradesOnlyTenant(t *testing.T) {
+func TestAC_AUTH_06_IAMDownDegradesOnlyTenant(t *testing.T) {
 	priv, pub := testKey(t)
 	_, jwksURL := testJWKS(t, pub, "contoso-1")
 	bad := httptest.NewServer(http.HandlerFunc(
@@ -211,7 +211,7 @@ func TestAC_AUTH_14_InvalidTokenVsUnavailable(t *testing.T) {
 		t.Fatalf("expired = %d, want 401", rec.Code)
 	}
 
-	// Cached key: a valid token still works with the broker down.
+	// Cached key: a valid token still works with the IAM down.
 	jwksSrv.Close()
 	if rec := doAuthRequest(gw, "mycompany.test", valid); rec.Code != 200 {
 		t.Fatalf("cached valid = %d, want 200", rec.Code)
@@ -220,7 +220,7 @@ func TestAC_AUTH_14_InvalidTokenVsUnavailable(t *testing.T) {
 	if rec := doAuthRequest(gw, "mycompany.test", expired); rec.Code != 401 {
 		t.Fatalf("cached expired = %d, want 401", rec.Code)
 	}
-	// Unknown kid requires a fetch; broker down = 502.
+	// Unknown kid requires a fetch; IAM down = 502.
 	unknown := testToken(t, priv, "k-other", map[string]any{
 		"iss": "https://auth.test/t/mycompany", "sub": "u",
 		"aud": "cladone-go", "exp": now.Add(time.Minute).Unix(),

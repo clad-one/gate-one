@@ -27,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"cladone/gate-one/internal/iam"
 	"cladone/gate-one/internal/core"
+	"cladone/gate-one/internal/iam"
 	"cladone/gate-one/internal/proxy"
 	"cladone/gate-one/internal/testutil/fakegoogle"
 	"cladone/gate-one/internal/testutil/netchaos"
@@ -53,17 +53,17 @@ const (
 )
 
 type stackOptions struct {
-	mycompanyBrokerDown bool
-	// mycompanyBrokerDelay injects a per-request delay into the mycompany broker
+	mycompanyIAMDown bool
+	// mycompanyIAMDelay injects a per-request delay into the mycompany iam
 	// handler (0 = none). Adjustable at runtime via s.mycompanyDelay.
-	mycompanyBrokerDelay time.Duration
+	mycompanyIAMDelay time.Duration
 	// redisDelay injects a per-direction TCP delay in front of the
 	// shared Redis (0 = direct connection).
 	redisDelay time.Duration
-	// mycompanyBrokerProxy puts a stable, swappable HTTP proxy in front of
+	// mycompanyIAMProxy puts a stable, swappable HTTP proxy in front of
 	// the mycompany IAM so a key rotation can replace the IAM
 	// instance behind the same public URL.
-	mycompanyBrokerProxy bool
+	mycompanyIAMProxy bool
 	// redisHA replaces the miniredis URL with a real Sentinel cluster
 	// (TLS + ACL). Used by the e2e_ha build tag against the local
 	// Redis HA stack.
@@ -109,8 +109,8 @@ func (r *redisHAConfig) sessionStoreJSON(prefix string) string {
 		r.Username, r.TLSCaFile, r.TLSServerName, prefix)
 }
 
-// brokerRedis renders the IAM redis block (same cluster).
-func (r *redisHAConfig) brokerRedis(dataPrefix string) *iam.RedisConfig {
+// iamRedis renders the IAM redis block (same cluster).
+func (r *redisHAConfig) iamRedis(dataPrefix string) *iam.RedisConfig {
 	return &iam.RedisConfig{
 		MasterName:          r.MasterName,
 		SentinelAddrs:       r.SentinelAddrs,
@@ -139,21 +139,21 @@ type Stack struct {
 	fakeSrv *httptest.Server
 	redis   *miniredis.Miniredis
 
-	mycompanyBroker *iam.IAM
-	mycompanySrv    *httptest.Server
-	mycompanyCfg    *iam.Config
-	mycompanyDelay  *netchaos.HTTPDelay
+	mycompanyIAM   *iam.IAM
+	mycompanySrv   *httptest.Server
+	mycompanyCfg   *iam.Config
+	mycompanyDelay *netchaos.HTTPDelay
 
 	// Set when the mycompany IAM sits behind a stable proxy (key
 	// rotation test).
-	brokerProxy      *netchaos.HTTPProxy
+	iamProxy         *netchaos.HTTPProxy
 	mycompanyKeyFile string
 
 	redisProxy *netchaos.DelayProxy
 
-	contosoBroker *iam.IAM
-	contosoSrv    *httptest.Server
-	contosoCfg    *iam.Config
+	contosoIAM *iam.IAM
+	contosoSrv *httptest.Server
+	contosoCfg *iam.Config
 
 	gw1    *proxy.Gateway
 	gw1Srv *httptest.Server
@@ -230,7 +230,7 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 	sessionStore := fmt.Sprintf(
 		`{"type":"redis","url":"redis://%s/0","prefix":%q}`,
 		redisAddr, authPrefix)
-	brokerRedis := func(id string) *iam.RedisConfig {
+	iamRedis := func(id string) *iam.RedisConfig {
 		return &iam.RedisConfig{
 			URL:        "redis://" + redisAddr + "/0",
 			Prefix:     "e2e:iam:" + id + ":",
@@ -239,12 +239,12 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 	}
 	if opts.redisHA != nil {
 		sessionStore = opts.redisHA.sessionStoreJSON(opts.redisHA.AuthPrefix)
-		brokerRedis = opts.redisHA.brokerRedis
+		iamRedis = opts.redisHA.iamRedis
 	}
 
-	s.mycompanyCfg = newBrokerConfig(
-		"mycompany", s.fakeSrv.URL, brokerRedis("mycompany"), mycompanyDomain)
-	if opts.mycompanyBrokerProxy {
+	s.mycompanyCfg = newIAMConfig(
+		"mycompany", s.fakeSrv.URL, iamRedis("mycompany"), mycompanyDomain)
+	if opts.mycompanyIAMProxy {
 		// A stable key file so the rotated config can keep the old
 		// key in keyFiles (overlap window).
 		kf := filepath.Join(t.TempDir(), "mycompany.key")
@@ -254,32 +254,32 @@ func newStack(t *testing.T, opts stackOptions) *Stack {
 		s.mycompanyKeyFile = kf
 		s.mycompanyCfg.Tenants[0].KeyFiles = []string{kf}
 	}
-	s.mycompanyBroker, s.mycompanySrv, s.mycompanyDelay = newBroker(t, s.mycompanyCfg)
-	if opts.mycompanyBrokerDelay > 0 {
-		s.mycompanyDelay.SetDelay(opts.mycompanyBrokerDelay)
+	s.mycompanyIAM, s.mycompanySrv, s.mycompanyDelay = newIAM(t, s.mycompanyCfg)
+	if opts.mycompanyIAMDelay > 0 {
+		s.mycompanyDelay.SetDelay(opts.mycompanyIAMDelay)
 	}
-	if opts.mycompanyBrokerDown {
+	if opts.mycompanyIAMDown {
 		// Close only the HTTP surface: the IAM object (and its
 		// Redis client) stays alive so t.Cleanup closes it once.
 		s.mycompanySrv.Close()
 	}
-	if opts.mycompanyBrokerProxy {
+	if opts.mycompanyIAMProxy {
 		bp, err := netchaos.NewHTTPProxy(s.mycompanySrv.URL)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(bp.Close)
-		s.brokerProxy = bp
-		s.mycompanyBroker.SetPublicURL(bp.URL())
+		s.iamProxy = bp
+		s.mycompanyIAM.SetPublicURL(bp.URL())
 	}
 
-	s.contosoCfg = newBrokerConfig(
-		"contoso", s.fakeSrv.URL, brokerRedis("contoso"), contosoDomain)
-	s.contosoBroker, s.contosoSrv, _ = newBroker(t, s.contosoCfg)
+	s.contosoCfg = newIAMConfig(
+		"contoso", s.fakeSrv.URL, iamRedis("contoso"), contosoDomain)
+	s.contosoIAM, s.contosoSrv, _ = newIAM(t, s.contosoCfg)
 
 	mycompanyIssuer := s.mycompanySrv.URL
-	if s.brokerProxy != nil {
-		mycompanyIssuer = s.brokerProxy.URL()
+	if s.iamProxy != nil {
+		mycompanyIssuer = s.iamProxy.URL()
 	}
 
 	// usageJSON renders the per-node usage block (its own WAL dir and
@@ -434,7 +434,7 @@ func NewStack(t *testing.T) *Stack {
 	return newStack(t, stackOptions{})
 }
 
-func newBrokerConfig(
+func newIAMConfig(
 	id, fakeURL string, redis *iam.RedisConfig, domain string,
 ) *iam.Config {
 	return &iam.Config{
@@ -473,7 +473,7 @@ func newBrokerConfig(
 	}
 }
 
-func newBroker(
+func newIAM(
 	t *testing.T, cfg *iam.Config,
 ) (*iam.IAM, *httptest.Server, *netchaos.HTTPDelay) {
 	t.Helper()

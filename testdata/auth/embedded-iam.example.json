@@ -39,7 +39,7 @@
       "accessTokenTtlSeconds": 600,
       "idTokenTtlSeconds": 600,
       "refreshTokenTtlSeconds": 2592000,
-      "clientSecretEnv": "MYCOMPANY_BROKER_CLIENT_SECRET",
+      "clientSecretEnv": "MYCOMPANY_IAM_CLIENT_SECRET",
       "postLogoutRedirectUris": [
         "https://app.mycompany.example.com/"
       ],

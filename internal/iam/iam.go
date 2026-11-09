@@ -676,7 +676,7 @@ func (b *IAM) authorize(w http.ResponseWriter, r *http.Request, rt *tenantRuntim
 		Header:     r.Header.Clone(),
 		Params: map[string]string{
 			"iam_state": flowID,
-			"nonce":        nonce,
+			"nonce":     nonce,
 		},
 	})
 	if err != nil {

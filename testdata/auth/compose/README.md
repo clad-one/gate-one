@@ -66,7 +66,7 @@ curl -X POST 'http://idp.mycompany.localhost:9000/__control/rotate'
 curl 'http://idp.mycompany.localhost:9000/__control/state'
 ```
 
-Broker down per tenant:
+IAM down per tenant:
 
 ```bash
 docker compose -f testdata/auth/compose/compose.yaml stop iam-mycompany

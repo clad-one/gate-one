@@ -88,7 +88,7 @@ func (f *fakeMailer) SendVerification(_ context.Context, to, link string) error 
 	return f.err
 }
 
-func newAccountsTestBroker(t *testing.T) (*IAM, *tenantRuntime, *fakeMailer) {
+func newAccountsTestIAM(t *testing.T) (*IAM, *tenantRuntime, *fakeMailer) {
 	t.Helper()
 	old := pbkdf2Iterations
 	pbkdf2Iterations = 1000
@@ -131,7 +131,7 @@ func doJSON(
 }
 
 func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
-	b, rt, mail := newAccountsTestBroker(t)
+	b, rt, mail := newAccountsTestIAM(t)
 
 	rec := doJSON(t, b, http.MethodPost,
 		"https://iam.test/t/mycompany/register", "s3cret",
@@ -224,7 +224,7 @@ func TestRegisterThenVerifyReturnsToApp(t *testing.T) {
 }
 
 func TestRegisterValidation(t *testing.T) {
-	b, _, _ := newAccountsTestBroker(t)
+	b, _, _ := newAccountsTestIAM(t)
 	cases := []struct {
 		name string
 		body string
@@ -244,7 +244,7 @@ func TestRegisterValidation(t *testing.T) {
 }
 
 func TestRegisterMailerFailure(t *testing.T) {
-	b, _, mail := newAccountsTestBroker(t)
+	b, _, mail := newAccountsTestIAM(t)
 	mail.err = context.DeadlineExceeded
 	rec := doJSON(t, b, http.MethodPost,
 		"https://iam.test/t/mycompany/register", "s3cret",

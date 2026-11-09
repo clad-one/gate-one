@@ -13,7 +13,7 @@ import (
 
 func TestEffectiveRightsMappingsAndUserGrants(t *testing.T) {
 	google := newFakeGoogle(t)
-	cfg := testBrokerConfig(google)
+	cfg := testIAMConfig(google)
 	cfg.Tenants[0].AdminEmails = []string{"admin@mycompany.test"}
 	cfg.Tenants[0].Mappings = []MappingRule{
 		{
@@ -63,7 +63,7 @@ func TestEffectiveRightsMappingsAndUserGrants(t *testing.T) {
 
 func TestDirectoryLocalAndFederatedGrants(t *testing.T) {
 	google := newFakeGoogle(t)
-	cfg := testBrokerConfig(google)
+	cfg := testIAMConfig(google)
 	ctx := context.Background()
 	d, err := OpenDirectory(ctx, cfg)
 	if err != nil {
@@ -119,7 +119,7 @@ func TestDirectoryLocalAndFederatedGrants(t *testing.T) {
 
 func TestWriteTokensCarriesScopesAndAssignedClaims(t *testing.T) {
 	google := newFakeGoogle(t)
-	b, _ := newTestBroker(t, google)
+	b, _ := newTestIAM(t, google)
 	rt := b.tenants["mycompany"]
 	rec := httptest.NewRecorder()
 	b.writeTokens(
@@ -166,7 +166,7 @@ func TestMappingValidationRejectsReservedClaim(t *testing.T) {
 
 func TestUpsertFederatedUserKeepsSingleIdentity(t *testing.T) {
 	google := newFakeGoogle(t)
-	b, _ := newTestBroker(t, google)
+	b, _ := newTestIAM(t, google)
 	rt := b.tenants["mycompany"]
 	ctx := context.Background()
 	first, err := b.upsertFederatedUser(ctx, rt,
@@ -237,7 +237,7 @@ func TestRedisUsersSingleIdentityAndLocalEmail(t *testing.T) {
 
 func TestConfigRejectsReservedMappingClaim(t *testing.T) {
 	google := newFakeGoogle(t)
-	cfg := testBrokerConfig(google)
+	cfg := testIAMConfig(google)
 	cfg.Tenants[0].Mappings = []MappingRule{{
 		Claim:  "groups",
 		Values: []string{"admins"},

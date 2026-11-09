@@ -228,12 +228,12 @@ for target in "${TARGETS[@]}"; do
 		-o "spdx-json=$DIST/gate-one_${VERSION}_${os}_${arch}.spdx.json" >/dev/null
 	rm -rf "$stage"
 
-	# --- cladone-auth (broker) -------------------------------------
-	broker_bin="cladone-auth"
-	[ "$os" = "windows" ] && broker_bin="cladone-auth.exe"
+	# --- cladone-auth (embedded IAM) -------------------------------
+	iam_bin="cladone-auth"
+	[ "$os" = "windows" ] && iam_bin="cladone-auth.exe"
 
-	broker_stage="$DIST/stage/cladone-auth_${VERSION}_${os}_${arch}"
-	mkdir -p "$broker_stage/schemas" "$broker_stage/examples"
+	iam_stage="$DIST/stage/cladone-auth_${VERSION}_${os}_${arch}"
+	mkdir -p "$iam_stage/schemas" "$iam_stage/examples"
 
 	echo "building cladone-auth ${os}/${arch}…"
 	(
@@ -241,30 +241,30 @@ for target in "${TARGETS[@]}"; do
 		CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" "$go_bin" build \
 			-trimpath \
 			-ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
-			-o "$broker_stage/$broker_bin" ./cmd/cladone-auth
+			-o "$iam_stage/$iam_bin" ./cmd/cladone-auth
 	)
 
 	if [ -n "$PRODUCT" ] && [ -f "$PRODUCT/schemas/embedded-iam.schema.json" ]; then
-		cp "$PRODUCT"/schemas/embedded-iam.schema.json "$broker_stage/schemas/"
+		cp "$PRODUCT"/schemas/embedded-iam.schema.json "$iam_stage/schemas/"
 	fi
-	if [ -n "$PRODUCT" ] && [ -f "$PRODUCT/examples/embedded-iam/broker.json" ]; then
-		cp "$PRODUCT"/examples/embedded-iam/broker.json "$broker_stage/examples/"
+	if [ -n "$PRODUCT" ] && [ -f "$PRODUCT/examples/embedded-iam/embedded-iam.json" ]; then
+		cp "$PRODUCT"/examples/embedded-iam/embedded-iam.json "$iam_stage/examples/"
 	elif [ -f "$SRC"/testdata/auth/embedded-iam.example.json ]; then
-		cp "$SRC"/testdata/auth/embedded-iam.example.json "$broker_stage/examples/"
+		cp "$SRC"/testdata/auth/embedded-iam.example.json "$iam_stage/examples/"
 	fi
 	cp "$SRC"/LICENSE "$SRC"/LICENSE.fr.md "$SRC"/README.md "$SRC"/VERSION \
-		"$broker_stage/" 2>/dev/null || true
+		"$iam_stage/" 2>/dev/null || true
 
-	broker_archive="$DIST/cladone-auth_${VERSION}_${os}_${arch}${ext}"
+	iam_archive="$DIST/cladone-auth_${VERSION}_${os}_${arch}${ext}"
 	if [ "$os" = "windows" ]; then
-		( cd "$broker_stage" && zip -qr "$broker_archive" . )
+		( cd "$iam_stage" && zip -qr "$iam_archive" . )
 	else
-		tar -czf "$broker_archive" -C "$broker_stage" .
+		tar -czf "$iam_archive" -C "$iam_stage" .
 	fi
-	"$syft_bin" "dir:$broker_stage" \
+	"$syft_bin" "dir:$iam_stage" \
 		--source-name "cladone-auth" --source-version "$VERSION" \
 		-o "spdx-json=$DIST/cladone-auth_${VERSION}_${os}_${arch}.spdx.json" >/dev/null
-	rm -rf "$broker_stage"
+	rm -rf "$iam_stage"
 
 	# --- demo IdP (fake Google, demos only) -------------------------
 	# Local and VPS demos need an OIDC issuer that runs offline. It is

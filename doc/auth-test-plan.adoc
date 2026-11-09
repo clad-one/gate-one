@@ -463,7 +463,7 @@ It is used to test the conformance suite itself, then the IAM.
 
 | AC-AUTH-06
 | Degraded mode per tenant
-| `TestAC_AUTH_06_BrokerDownDegradesOnlyTenant`
+| `TestAC_AUTH_06_IAMDownDegradesOnlyTenant`
 | two-tenants, down toggle
 | e2e
 
@@ -535,7 +535,7 @@ It is used to test the conformance suite itself, then the IAM.
 
 | AC-AUTH-18
 | Immediate and shared Redis revocation
-| `TestAC_AUTH_18_RedisRevocationStore`, `TestAC_AUTH_18_BrokerRedisStore`
+| `TestAC_AUTH_18_RedisRevocationStore`, `TestAC_AUTH_18_IAMRedisStore`
 | miniredis
 | PR
 
@@ -671,7 +671,7 @@ Subtests:
 
 === AC-AUTH-06 — Degraded mode per tenant
 
-`TestAC_AUTH_06_BrokerDownDegradesOnlyTenant`
+`TestAC_AUTH_06_IAMDownDegradesOnlyTenant`
 
 Scenario:
 
@@ -880,7 +880,7 @@ Packages:
 | `TestAC_AUTH_04_KeyRotationKeepsSessions`, `TestAC_AUTH_08_JWTRejectsInvalidTokens`, `TestAC_AUTH_14_InvalidTokenVsUnavailable`
 
 | `internal/proxy`
-| `TestAC_AUTH_01_GoogleLoginCreatesSession`, `TestAC_AUTH_02_CrossTenantTokenRejected`, `TestAC_AUTH_03_MCPValidationUsesJWKSOnly`, `TestAC_AUTH_05_BackchannelLogoutRevokesSession`, `TestAC_AUTH_06_BrokerDownDegradesOnlyTenant`, `TestAC_AUTH_12_PerRouteIsolation`, `TestAC_AUTH_15_DegradedStartupAndReload`
+| `TestAC_AUTH_01_GoogleLoginCreatesSession`, `TestAC_AUTH_02_CrossTenantTokenRejected`, `TestAC_AUTH_03_MCPValidationUsesJWKSOnly`, `TestAC_AUTH_05_BackchannelLogoutRevokesSession`, `TestAC_AUTH_06_IAMDownDegradesOnlyTenant`, `TestAC_AUTH_12_PerRouteIsolation`, `TestAC_AUTH_15_DegradedStartupAndReload`
 
 | `internal/iam`
 | `TestAC_AUTH_01_GoogleLoginCreatesSession`, `TestAC_AUTH_09_IdentityAdapterConformance`, `TestAC_AUTH_11_EnrichmentOptional`
@@ -1157,7 +1157,7 @@ Tests present:
 * `TestAC_AUTH_02_CrossTenantTokenRejected` (`internal/proxy`)
 * `TestAC_AUTH_03_MCPValidationUsesJWKSOnly` (`internal/authn`)
 * `TestAC_AUTH_04_KeyRotationKeepsSessions` (`internal/authn`)
-* `TestAC_AUTH_06_BrokerDownDegradesOnlyTenant` (`internal/proxy`)
+* `TestAC_AUTH_06_IAMDownDegradesOnlyTenant` (`internal/proxy`)
 * `TestAC_AUTH_07_ProviderPluginRejected` (`internal/core`)
 * `TestAC_AUTH_08_JWTRejectsInvalidTokens` (`internal/authn`)
 * `TestAC_AUTH_09_IdentityAdapterConformance` (`pkg/identityadapter/conformance`, `internal/iam`)
@@ -1166,17 +1166,17 @@ Tests present:
 * `TestAC_AUTH_11_EnrichmentOptional` (`pkg/identityadapter/conformance`)
 * `TestAC_AUTH_12_PerRouteIsolation` (`internal/proxy`)
 * `TestAC_AUTH_13_ConfigValidation` (`internal/core`)
-* `TestAC_AUTH_13_BrokerRejectsBadRedirect` (`internal/iam`)
+* `TestAC_AUTH_13_IAMRejectsBadRedirect` (`internal/iam`)
 * `TestAC_AUTH_14_InvalidTokenVsUnavailable` (`internal/proxy`, `internal/authn`)
 * `TestAC_AUTH_15_DegradedStartupAndReload` (`internal/proxy`)
 * `TestAC_AUTH_18_RedisRevocationStore` (`internal/authn`)
 * `TestAC_AUTH_18_RedisTTL` (`internal/authn`)
-* `TestAC_AUTH_18_BrokerRedisStore` (`internal/iam`)
+* `TestAC_AUTH_18_IAMRedisStore` (`internal/iam`)
 * `TestAC_AUTH_19_JWTImmediateRevocation` (`internal/authn`)
 * `TestAC_AUTH_19_RedisFailClosedAndImmediateRevocation` (`internal/proxy`)
 * `TestAC_AUTH_16_PluginManifestV2` (`pkg/pluginmanifest`)
 * `TestAC_AUTH_17_NoSecretLeak` (`internal/proxy`)
-* `TestAC_AUTH_20_BrokerKeyRotation` (`internal/iam`)
+* `TestAC_AUTH_20_IAMKeyRotation` (`internal/iam`)
 * `TestAC_AUTH_21_RevokeWithConfig` (`internal/iam`)
 * `TestAC_AUTH_22_LogoutRevokesSharedSID` (`internal/iam`)
 * `TestAC_AUTH_23_CrossInstanceRevocation` (`internal/proxy`)

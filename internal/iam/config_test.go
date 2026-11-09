@@ -2,7 +2,7 @@ package iam
 
 import "testing"
 
-func TestAC_AUTH_13_BrokerLocalRedirectURIs(t *testing.T) {
+func TestAC_AUTH_13_IAMLocalRedirectURIs(t *testing.T) {
 	ok := []string{
 		"https://login.example.com/auth/callback",
 		"http://localhost:8080/auth/callback",
@@ -97,7 +97,7 @@ func TestAC_AUTH_13_GoogleClientIDEnv(t *testing.T) {
 	}
 }
 
-func TestAC_AUTH_13_BrokerPostLogoutWildcard(t *testing.T) {
+func TestAC_AUTH_13_IAMPostLogoutWildcard(t *testing.T) {
 	cases := []struct {
 		list []string
 		raw  string

@@ -182,10 +182,10 @@ func TestE2E_Revoke_SID_SUB(t *testing.T) {
 	}
 }
 
-// TestE2E_BrokerDown_PerTenant starts with the mycompany broker unreachable:
+// TestE2E_IAMDown_PerTenant starts with the mycompany iam unreachable:
 // mycompany routes are degraded (502) while contoso still logs in.
-func TestE2E_BrokerDown_PerTenant(t *testing.T) {
-	s := newStack(t, stackOptions{mycompanyBrokerDown: true})
+func TestE2E_IAMDown_PerTenant(t *testing.T) {
+	s := newStack(t, stackOptions{mycompanyIAMDown: true})
 
 	resp, err := s.noRedirect.Get("https://app.mycompany.test/")
 	if err != nil {

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestBrokerRedisOptionsSentinelWiring(t *testing.T) {
+func TestIAMRedisOptionsSentinelWiring(t *testing.T) {
 	opts, err := redisOptions(RedisConfig{
 		SentinelAddrs:    []string{"s1:26379", "s2:26379"},
 		MasterName:       "authmaster",
@@ -35,7 +35,7 @@ func TestBrokerRedisOptionsSentinelWiring(t *testing.T) {
 	}
 }
 
-func TestBrokerRedisOptionsSentinelTLS(t *testing.T) {
+func TestIAMRedisOptionsSentinelTLS(t *testing.T) {
 	opts, err := redisOptions(RedisConfig{
 		SentinelAddrs: []string{"s1:26379"},
 		MasterName:    "authmaster",
@@ -56,7 +56,7 @@ func TestBrokerRedisOptionsSentinelTLS(t *testing.T) {
 	}
 }
 
-func TestBrokerRedisOptionsURLRejectsSentinelTLS(t *testing.T) {
+func TestIAMRedisOptionsURLRejectsSentinelTLS(t *testing.T) {
 	_, err := redisOptions(RedisConfig{
 		URL: "redis://127.0.0.1:6379/0",
 		TLS: true,
@@ -66,7 +66,7 @@ func TestBrokerRedisOptionsURLRejectsSentinelTLS(t *testing.T) {
 	}
 }
 
-func TestBrokerRedisOptionsTLSCaInvalid(t *testing.T) {
+func TestIAMRedisOptionsTLSCaInvalid(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(path, []byte("not a pem"), 0o600); err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestBrokerRedisOptionsTLSCaInvalid(t *testing.T) {
 	}
 }
 
-func TestBrokerRedisConfigSentinelValidation(t *testing.T) {
+func TestIAMRedisConfigSentinelValidation(t *testing.T) {
 	base := func() *Config {
 		return &Config{
 			PublicURL: "https://iam.test",
@@ -149,7 +149,7 @@ func TestBrokerRedisConfigSentinelValidation(t *testing.T) {
 	}
 }
 
-func TestBrokerRedisRetryable(t *testing.T) {
+func TestIAMRedisRetryable(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
