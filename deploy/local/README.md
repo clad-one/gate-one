@@ -13,11 +13,13 @@ No domain, no DNS entry, no external identity provider.
 | `getting-started` | Gate One in front of a static site | `gate-one` |
 | `account-panel` | an application rendering its own account panel | `gate-one` |
 | `injectable-ux` | injection, UI gating, nonce CSP | `gate-one` |
+| `turnstile` | Cloudflare Turnstile gate: whole page and action-only | `gate-one`, internet |
 | `usage-events` | signed plugin, WAL, events | `gate-one`, Go |
 
 These use the loopback-only `dev` provider: `alice`/`alice` (user) and
 `bob`/`bob` (admin). `run.sh` starts a static server and Gate One, and
-prints the URL.
+prints the URL. The `turnstile` demo has no identity provider: the
+gate is the only protection (Cloudflare test keys).
 
 ## Docker Compose (real OIDC chain)
 

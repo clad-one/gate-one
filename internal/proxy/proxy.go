@@ -711,6 +711,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		)
 		rp.ModifyResponse = func(resp *http.Response) error {
 			resp.Header.Del(GatewayForbiddenHeader)
+			// Same rule for the Turnstile gate marker: a backend 403
+			// must never make the injected script believe a challenge
+			// is pending (the header is only emitted by the gateway).
+			resp.Header.Del(TurnstileGateHeader)
 			if st, _ := resp.Request.Context().
 				Value(usageReqKey{}).(*usageReqState); st != nil {
 				st.readResponse(resp)
@@ -2213,6 +2217,14 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Turnstile gate: the reserved endpoint exchanges a token for a
+	// clearance cookie. Intercepted before routing (the path is not a
+	// route of any application).
+	if g.turnstile != nil && ctx.Path == TurnstileVerifyPath {
+		g.turnstile.serveVerify(w, r, ctx)
+		return
+	}
+
 	// Native provider login host (dev, later OIDC): a dedicated
 	// virtual host served BEFORE route matching, exactly like the
 	// production login.<domain>. Per-route providers can each host
@@ -2579,8 +2591,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//
-	// Turnstile: verify the anti-robot token BEFORE the backend (and
-	// after the rate limit, so a flood does not burn Siteverify
+	// Turnstile gate: a protected path without a valid clearance is
+	// answered here (challenge page or 403 turnstile_required), after
+	// the rate limit.
+	//
+	if g.turnstile.gate(w, r, ctx) {
+		return
+	}
+
+	//
+	// Turnstile forms: verify the anti-robot token BEFORE the backend
+	// (and after the rate limit, so a flood does not burn Siteverify
 	// calls). Only matching hosts/paths/methods are concerned.
 	//
 	if g.turnstile.enforce(w, r, ctx) {

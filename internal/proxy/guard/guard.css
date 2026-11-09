@@ -3,6 +3,7 @@ html.cladone-authed [data-gtw-auth-hidden='after']{display:none !important}
 html:not(.cladone-evaluated) [data-gtw-roles],html:not(.cladone-evaluated) [data-gtw-scopes],html:not(.cladone-evaluated) [data-gtw-claims]{display:none !important}
 html:not(.cladone-authed) [data-gtw-auth]{cursor:pointer}
 [data-gtw-gated-off]{display:none !important}
+.cladone-turnstile-gate{position:fixed;right:12px;bottom:12px;z-index:2147483645}
 .cladone-userbadge{position:fixed;top:0;z-index:2147483646;background:#20242e;color:#fff;padding:.46em .92em;text-align:left;border:1px solid #fff;border-top:0;border-radius:0 0 .62em .62em;max-width:21.5em;box-shadow:0 4px 18px rgba(0,0,0,.3);max-height:2.3em;overflow:hidden;transition:opacity .2s ease,max-height .25s ease;cursor:default;opacity:0;pointer-events:none}
 .cladone-userbadge-left{left:12px}
 .cladone-userbadge-right{right:12px}

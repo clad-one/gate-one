@@ -214,3 +214,108 @@ func TestPathsOverlap(t *testing.T) {
 		}
 	}
 }
+
+func TestTurnstileModeAndGateDefaults(t *testing.T) {
+	t.Setenv("TEST_TURNSTILE_SECRET", "secret")
+	cfg, err := loadAuthTest(t, turnstileConfigJSON(`{
+		"siteKey": "0x4AAAA",
+		"secretEnv": "TEST_TURNSTILE_SECRET"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := cfg.Turnstile
+	if ts.Mode != TurnstileModeForms || !ts.FormsEnabled() || ts.GateEnabled() {
+		t.Fatalf("default mode = %q forms=%v gate=%v",
+			ts.Mode, ts.FormsEnabled(), ts.GateEnabled())
+	}
+	if ts.ClearanceTTL().Seconds() != 1800 {
+		t.Fatalf("clearance TTL = %v", ts.ClearanceTTL())
+	}
+
+	gate, err := loadAuthTest(t, turnstileConfigJSON(`{
+		"siteKey": "0x4AAAA",
+		"secretEnv": "TEST_TURNSTILE_SECRET",
+		"mode": "gate",
+		"paths": ["/*"]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gt := gate.Turnstile
+	if !gt.GateEnabled() || gt.FormsEnabled() {
+		t.Fatalf("gate mode: forms=%v gate=%v",
+			gt.FormsEnabled(), gt.GateEnabled())
+	}
+	if gt.ChallengeAppearance() != "interaction-only" {
+		t.Fatalf("appearance = %q", gt.ChallengeAppearance())
+	}
+	for _, p := range []string{"/healthz", "/readyz", "/__gate-one/x",
+		"/favicon.ico", "/robots.txt"} {
+		if !gt.Exempt(p) {
+			t.Errorf("%s should be exempt", p)
+		}
+	}
+	if gt.Exempt("/api/process") {
+		t.Error("/api/process should be gated")
+	}
+}
+
+func TestTurnstileClearanceSecret(t *testing.T) {
+	t.Setenv("TEST_TURNSTILE_SECRET", "secret")
+	t.Setenv("TEST_TURNSTILE_CLEARANCE", "clearance-secret")
+
+	derived, err := loadAuthTest(t, turnstileConfigJSON(`{
+		"siteKey": "k", "secretEnv": "TEST_TURNSTILE_SECRET"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dedicated, err := loadAuthTest(t, turnstileConfigJSON(`{
+		"siteKey": "k", "secretEnv": "TEST_TURNSTILE_SECRET",
+		"clearanceSecretEnv": "TEST_TURNSTILE_CLEARANCE"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(derived.Turnstile.ClearanceSecret) != 32 {
+		t.Fatalf("derived key length = %d", len(derived.Turnstile.ClearanceSecret))
+	}
+	if string(derived.Turnstile.ClearanceSecret) ==
+		string(dedicated.Turnstile.ClearanceSecret) {
+		t.Fatal("dedicated and derived keys must differ")
+	}
+	if string(dedicated.Turnstile.ClearanceSecret) != "clearance-secret" {
+		t.Fatal("dedicated key not read from the environment")
+	}
+}
+
+func TestTurnstileGateConfigRejects(t *testing.T) {
+	t.Setenv("TEST_TURNSTILE_SECRET", "secret")
+	cases := []struct {
+		name  string
+		block string
+		want  string
+	}{
+		{"bad_mode",
+			`{"siteKey":"k","secretEnv":"TEST_TURNSTILE_SECRET","mode":"waf"}`,
+			"turnstile.mode"},
+		{"bad_ttl",
+			`{"siteKey":"k","secretEnv":"TEST_TURNSTILE_SECRET","clearanceTtlSeconds":5}`,
+			"clearanceTtlSeconds"},
+		{"bad_appearance",
+			`{"siteKey":"k","secretEnv":"TEST_TURNSTILE_SECRET","challenge":{"appearance":"sometimes"}}`,
+			"challenge.appearance"},
+		{"bad_exempt",
+			`{"siteKey":"k","secretEnv":"TEST_TURNSTILE_SECRET","exemptPaths":["api/*"]}`,
+			"exemptPaths"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := loadAuthTest(t, turnstileConfigJSON(c.block))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+		})
+	}
+}

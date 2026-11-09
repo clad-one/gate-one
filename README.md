@@ -259,6 +259,12 @@ does not change. `siteKey` is public, the secret is read from
 the pages and forms, so one block covers several hosts without
 duplication.
 
+`mode: "gate"` protects a whole page (or only the action paths) with a
+challenge served at the original URL and a signed 30-minute clearance
+cookie; `mode: "both"` combines the gate and the form verification.
+`deploy/local/turnstile` demonstrates both (`./run.sh gate` and
+`./run.sh api`) with Cloudflare's test keys.
+
 It protects only traffic that passes through this Gate One instance: a
 second ingress, an internal caller or a published port bypasses it.
 Network isolation (only Gate One can reach the application) remains the

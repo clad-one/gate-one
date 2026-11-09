@@ -21,10 +21,20 @@ function renderTurnstile(cfg) {
     /const turnstileScriptTmpl = `([\s\S]*?)`\n\n\/\/ buildTurnstileScript/
   );
   if (!m) throw new Error("turnstile script template not found");
+  const full = Object.assign({
+    gate: false,
+    formsEnabled: true,
+    preclearance: false,
+    appearance: "always",
+    verify: "/__gate-one/turnstile/verify",
+    gateHeader: "X-Gate-One-Turnstile",
+    methods: ["POST"],
+    header: "X-Turnstile-Response",
+  }, cfg);
   return m[1]
     .replace(/^<script>/, "")
     .replace(/<\/script>$/, "")
-    .replace("__CFG__", JSON.stringify(cfg));
+    .replace("__CFG__", JSON.stringify(full));
 }
 
 const html = `<!DOCTYPE html><html><body>
@@ -38,22 +48,28 @@ const html = `<!DOCTYPE html><html><body>
 <form id="other" method="post"><button type="submit">Other</button></form>
 </body></html>`;
 
-function mkWindow(script) {
+function mkWindow(script, opts = {}) {
   const dom = new JSDOM(html, {
-    url: "http://app.test/contact/",
-    runScripts: "outside-only",
+    url: opts.url || "http://app.test/contact/",
+    runScripts: "dangerously",
     pretendToBeVisual: true,
   });
   const w = dom.window;
-  const state = { rendered: [], fetched: null };
+  const state = { rendered: [], fetched: null, calls: [] };
   w.turnstile = {
-    render: (el, opts) => { state.rendered.push({ el, opts }); },
+    render: (el, opts) => { state.rendered.push({ el, opts }); return state.rendered.length; },
   };
   w.fetch = async (input, init) => {
     state.fetched = { input, init };
-    return { ok: true };
+    state.calls.push(String(input));
+    if (opts.fetch) return opts.fetch(input, init);
+    return { ok: true, status: 200, headers: { get: () => null } };
   };
-  w.eval(script);
+  const s = w.document.createElement("script");
+  s.setAttribute("data-gtw-turnstile-cleared", opts.cleared ? "true" : "false");
+  s.setAttribute("data-gtw-turnstile-forms", opts.forms === false ? "false" : "true");
+  s.textContent = script;
+  w.document.body.appendChild(s);
   return { w, state };
 }
 
@@ -178,3 +194,90 @@ console.log(
   failures === 0 ? "TURNSTILE SCRIPT OK" : `TURNSTILE SCRIPT: ${failures} failure(s)`
 );
 globalThis.__uiFailures = (globalThis.__uiFailures || 0) + failures;
+
+// ── gate: pre-clearance at page load ──
+{
+  const script = renderTurnstile({
+    siteKey: "k",
+    forms: [],
+    gate: true,
+    formsEnabled: false,
+    preclearance: true,
+    appearance: "interaction-only",
+  });
+  let verified = false;
+  const { w, state } = mkWindow(script, {
+    cleared: false,
+    forms: false,
+    url: "http://app.test/app",
+    fetch: async (input) => {
+      if (String(input) === "/__gate-one/turnstile/verify") {
+        verified = true;
+        return { ok: true, status: 204, headers: { get: () => null } };
+      }
+      return { ok: true, status: 200, headers: { get: () => null } };
+    },
+  });
+  state.rendered.length === 1
+    ? ok("turnstile gate: preclearance widget rendered at page load")
+    : fail(`turnstile gate: ${state.rendered.length} preclearance widgets`);
+  const box = w.document.querySelector(".cladone-turnstile-gate");
+  box
+    ? ok("turnstile gate: fixed gate container present")
+    : fail("turnstile gate: gate container missing");
+  state.rendered[0].opts.appearance === "interaction-only"
+    ? ok("turnstile gate: interaction-only appearance")
+    : fail("turnstile gate: appearance not passed");
+  state.rendered[0].opts.callback("gate-token");
+  await new Promise((r) => setTimeout(r, 30));
+  verified
+    ? ok("turnstile gate: token exchanged for a clearance")
+    : fail("turnstile gate: verify endpoint not called");
+}
+
+// ── gate: 403 turnstile_required is queued and replayed ──
+{
+  const script = renderTurnstile({
+    siteKey: "k",
+    forms: [],
+    gate: true,
+    formsEnabled: false,
+    preclearance: false,
+    appearance: "interaction-only",
+  });
+  let cleared = false;
+  let apiCalls = 0;
+  const { w, state } = mkWindow(script, {
+    cleared: false,
+    forms: false,
+    url: "http://app.test/app",
+    fetch: async (input) => {
+      if (String(input) === "/__gate-one/turnstile/verify") {
+        cleared = true;
+        return { ok: true, status: 204, headers: { get: () => null } };
+      }
+      if (String(input) === "/api/process") {
+        apiCalls++;
+        if (!cleared) {
+          return { status: 403, ok: false, headers: { get: (h) =>
+            h === "X-Gate-One-Turnstile" ? "required" : null } };
+        }
+        return { status: 200, ok: true, headers: { get: () => null } };
+      }
+      return { status: 200, ok: true, headers: { get: () => null } };
+    },
+  });
+  const pending = w.fetch("/api/process", { method: "POST", body: "{}" });
+  await new Promise((r) => setTimeout(r, 30));
+  state.rendered.length === 1
+    ? ok("turnstile gate: 403 opens the challenge widget")
+    : fail(`turnstile gate: no challenge for 403 (${state.rendered.length})`);
+  state.rendered[0].opts.callback("gate-token");
+  const res = await pending;
+  res.status === 200
+    ? ok("turnstile gate: request replayed after clearance")
+    : fail(`turnstile gate: replay status ${res.status}`);
+  apiCalls === 2
+    ? ok("turnstile gate: backend path attempted exactly twice")
+    : fail(`turnstile gate: api calls = ${apiCalls}`);
+}

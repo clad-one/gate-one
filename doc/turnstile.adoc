@@ -2,20 +2,48 @@
 :toc: left
 :toclevels: 3
 
-Gate One can protect form pages with Cloudflare Turnstile. The block is
-**platform-wide**: one place in the configuration, every matching page
-gets the widget, and every matching POST is verified before the backend
-sees it. It works on pages Gate One already proxies, without changing
-the application.
+Gate One can protect form pages and whole applications with Cloudflare
+Turnstile. The block is **platform-wide**: one place in the configuration,
+every matching page gets the widget or the challenge, and every matching
+request is checked before the backend sees it. It works on pages Gate One
+already proxies, without changing the application.
+
+== Modes
+
+[cols="1,2,2",options="header"]
+|===
+| Mode | Protects | Mechanism
+
+| `forms` (default) | form submissions | widget injected into the matching
+forms; every matching POST is verified with Siteverify
+| `gate` | whole pages or actions (`paths`) | the first request gets a
+challenge page at its own URL; solving it sets a signed clearance cookie;
+the following requests pass without a new Siteverify call
+| `both` | gate + form submissions | the gate applies, and form POSTs are
+verified too
+|===
+
+`gate` is the right choice for an application with no form (a public
+tool, an API-driven frontend): there is no POST to verify, and the page
+itself must be protected.
+
+`both` is useful when the gate protects the site but a particular form
+still needs a fresh, single-use token.
 
 == What it does
 
 . On an HTML page whose path matches, Gate One injects a small script
   before `</body>`.
-. The script renders the Turnstile widget in every matching form and
-  keeps the hidden `cf-turnstile-response` input in sync.
+. In `forms` mode, the script renders the Turnstile widget in every
+  matching form and keeps the hidden `cf-turnstile-response` input in
+  sync.
+. In `gate` mode, a protected request without a clearance is answered:
+  a challenge page at the original URL for a navigation, a
+  `403 turnstile_required` for a fetch/API call. The script solves the
+  challenge (in the background when `preclearance` is on), exchanges the
+  token for a clearance cookie and replays the queued requests.
 . A matching POST is verified with the Cloudflare **Siteverify** API
-  before the backend; a missing, expired or invalid token is refused.
+  before the backend.
 
 == What it does not do
 
@@ -31,18 +59,11 @@ instance**. It is not a replacement for network isolation:
 The invariant is: **the application is reachable only through the
 verification point**. In practice, restrict the application's network
 access to the Gate One instance (or its sidecar) and deny everything
-else. Adding the check in Gate One does not create that isolation.
+else.
 
-A global block also avoids the other bypass: forgetting the policy on one
-host or one route of the same instance. It does not help across separate
-configurations.
-
-When Gate One cannot be the only path (heterogeneous ingresses, an
-application reachable internally), put a small verifying sidecar in
-front of the application instead: every ingress points at it, it verifies
-the token once and forwards the POST to the backend, which is reachable
-only through the sidecar. The Gate One block remains the right choice
-when this instance is the single entry point.
+A gate also blocks search-engine crawlers: if the site must stay
+indexable, gate only the action paths (`paths: ["/api/*"]`) and leave the
+pages public.
 
 == Configuration
 
@@ -50,15 +71,16 @@ when this instance is the single entry point.
 ----
 {
   "turnstile": {
-    "enabled": true,
+    "mode": "gate",
     "siteKey": "0x4AAAAAAA...",
     "secretEnv": "TURNSTILE_SECRET",
     "hosts": ["app.example.com"],
-    "paths": ["/contact/*", "/register"],
-    "methods": ["POST"],
-    "forms": ["form#contact", "form[data-turnstile]"],
-    "action": "contact",
-    "hostname": "app.example.com"
+    "paths": ["/*"],
+    "exemptPaths": ["/mcp", "/openapi.json"],
+    "clearanceTtlSeconds": 1800,
+    "clearanceSecretEnv": "TURNSTILE_CLEARANCE_SECRET",
+    "challenge": { "appearance": "interaction-only" },
+    "preclearance": true
   }
 }
 ----
@@ -67,25 +89,36 @@ when this instance is the single entry point.
 |===
 | Field | Meaning | Default
 
-| `enabled` | Explicit switch for templated configs. Absent = enabled
-when the block is present. | true
+| `mode` | `forms`, `gate` or `both`. | `forms`
 | `siteKey` | Public widget key. Cloudflare binds it to a domain list:
 declare every public hostname. | required
-| `secretEnv` | Environment variable holding the secret key. The secret
-is never read from the file and never sent to the browser. | required
+| `secretEnv` | Environment variable holding the secret key. | required
 | `hosts` | Exact hostnames or a leading `*.` wildcard. Empty = every
 route. | all
-| `paths` | Route-path grammar: `/contact/*` (prefix on a path
-boundary), an exact path, `/*`. Empty = every path. | all
-| `methods` | Verified methods: `POST`, `PUT`, `PATCH`, `DELETE`. | POST
+| `paths` | Route-path grammar: `/contact/*`, an exact path, `/*`.
+`forms`: pages with forms + POST paths. `gate`: protected paths (page
+or action). | all
+| `methods` | Verified methods in `forms`/`both`: `POST`, `PUT`,
+`PATCH`, `DELETE`. | POST
 | `forms` | CSS selectors of the forms receiving the widget. Empty =
 every POST form. | all POST forms
 | `action` | Optional action sent with the widget and required in the
-Siteverify answer (1-32 chars: letters, digits, `_`, `-`). | none
-| `hostname` | Optional expected hostname in the Siteverify answer. |
-none
+Siteverify answer. | none
+| `hostname` | Optional expected hostname in the Siteverify answer
+(the page host, not the POST host). | none
 | `tokenHeader` | Header accepted in addition to the form field, for
 fetch/SPA clients. | `X-Turnstile-Response`
+| `exemptPaths` | Never gated in `gate`/`both` (machine endpoints,
+webhooks, MCP). Built-ins always exempt: `/healthz`, `/readyz`,
+`/__gate-one/*`, `/favicon.ico`, `/robots.txt`. | none
+| `clearanceTtlSeconds` | Clearance cookie lifetime (60-604800). | 1800
+| `clearanceSecretEnv` | HMAC key for the clearance cookie. Empty =
+derived from the Turnstile secret (rotating it invalidates every
+clearance). | derived
+| `challenge.appearance` | Turnstile render appearance: `always`,
+`execute`, `interaction-only`. | `interaction-only` in gate
+| `preclearance` | `gate`/`both`: solve the challenge in the background
+when a page is served without clearance. | true
 |===
 
 The secret must be present on **every replica** (same value) and is read
@@ -98,26 +131,63 @@ export TURNSTILE_SECRET=...
 gate-one -check -config api-routes.json
 ----
 
+== Gate flow
+
+. `GET /` without a clearance → Gate One answers with a challenge page
+  **at the same URL** (status 403, `Cache-Control: no-store`), not the
+  application. The backend is not called.
+. The page runs the widget (invisible unless Cloudflare requires an
+  interaction) and posts the token to
+  `/__gate-one/turnstile/verify`.
+. Gate One calls Siteverify, checks `hostname`/`action`, sets the
+  `gate_one_turnstile` cookie (`HttpOnly`, `Secure` on HTTPS,
+  `SameSite=Lax`, 30 min) and answers `303` to the original URL.
+. The browser reloads the page with the cookie; Gate One verifies the
+  cookie locally (HMAC) and proxies. No new Siteverify call until the
+  cookie expires.
+
+A form POST without clearance is refused with a readable page (serving a
+challenge there would lose the submitted data). An API/fetch call gets
+`403 {"error":"turnstile_required"}` with the `X-Gate-One-Turnstile:
+required` marker; the injected script opens the challenge, exchanges the
+token and replays the request. The backend sees **one** call: the
+rejected request never reaches it.
+
+=== Action-only gate
+
+To keep the pages public and protect only the expensive action:
+
+[source,json]
+----
+"turnstile": {
+  "mode": "gate",
+  "paths": ["/api/*"],
+  "exemptPaths": ["/mcp"],
+  "preclearance": true
+}
+----
+
+The page loads normally and the script pre-clears in the background, so
+the first action is a single backend call. If the user acts before the
+clearance, the 403/replay path covers it.
+
 == Injection behaviour
 
-The injected script is a normal Gate One injection:
-
-* only `frontend` routes returning HTML are modified; JSON, assets and
-  redirects are untouched;
-* it runs once per page, before `</body>`;
-* it renders only into forms whose method is POST (a form without
-  `method` defaults to GET and is skipped);
-* with `forms` empty, every POST form is covered; with selectors, only
-  the matching forms;
-* a form marked `data-gtw-turnstile="off"` is always skipped;
-* dynamically added forms (SPA) are picked up by a debounced
-  `MutationObserver`;
-* submitting before the widget resolves is blocked client-side, and the
-  widget is scrolled into view — the token is the server's decision, the
-  script only makes the failure understandable;
-* same-origin mutating `fetch` calls automatically carry the token in
-  `tokenHeader`, so an SPA form needs no application change. A request
-  that sets its own header wins.
+* only `frontend` routes returning HTML are modified;
+* `gate`/`both` inject on every matching page of the host (the challenge
+  may be triggered by an API call from any page); `forms` injects on the
+  pages overlapping `paths`;
+* the script runs once per page, before `</body>`;
+* forms: only POST forms (`method` absent = GET, skipped), `forms`
+  selectors if set, `data-gtw-turnstile="off"` to opt out; dynamic forms
+  are picked up (debounced `MutationObserver`);
+* submitting a form without a token is blocked client-side and the
+  widget is scrolled into view;
+* same-origin mutating `fetch` calls carry the token in `tokenHeader`
+  when a form token is available;
+* the script tag carries two per-request attributes
+  (`data-gtw-turnstile-cleared`, `data-gtw-turnstile-forms`); the script
+  bytes — and therefore its CSP hash — do not change.
 
 The site key is public and appears in the page. Never put the **secret**
 in an injection bundle: bundles are rendered to the browser.
@@ -128,25 +198,22 @@ For every matching request, Gate One reads the token:
 
 * from the configured header (`X-Turnstile-Response` by default), then
 * from the body: `application/x-www-form-urlencoded`,
-  `application/json` (key `cf-turnstile-response` or
-  `cfTurnstileResponse`), or `multipart/form-data`.
+  `application/json` (key `cf-turnstile-response`, `cfTurnstileResponse`
+  or `token`), or `multipart/form-data`.
 
 It calls Siteverify with the secret, the token and the client IP (last
-`X-Forwarded-For` hop, like the rate limiter), then checks:
-
-* `success` (Cloudflare's decision);
-* `hostname` when configured;
-* `action` when configured.
+`X-Forwarded-For` hop, like the rate limiter), then checks `success`,
+`hostname` and `action` when configured.
 
 Tokens are **single-use** and expire after 300 seconds: never retry
 Siteverify with the same token, and never verify it a second time in the
 backend. Gate One consumes the token; the application must not call
 Siteverify for the same submission.
 
-The check runs **after** the rate limit (a flood does not burn Siteverify
-calls) and **before** the backend, delegated credentials and forwarding.
-The token and the secret are never logged and never written to usage
-events.
+The verify endpoint is rate-limited per IP (30 calls/minute), and the
+check runs after the route rate limit (a flood does not burn Siteverify
+calls) and before the backend. The token and the secret are never logged
+and never written to usage events.
 
 == Failure modes
 
@@ -154,16 +221,18 @@ events.
 |===
 | Situation | Status | Body
 
-| Missing token | `403` | readable page for a navigation, `{"error":"turnstile_failed"}` otherwise
-| Invalid / expired token | `403` | same, with an "expired" message when Cloudflare says `timeout-or-duplicate`
-| Hostname mismatch (configured) | `403` | same
-| Action mismatch (configured) | `403` | same
-| Siteverify unreachable, timeout or non-200 | `503` | readable page / `{"error":"turnstile_unavailable"}`, `Retry-After: 5`
+| Missing/invalid/expired token (`forms`) | `403` | readable page for a navigation, `{"error":"turnstile_failed"}` otherwise
+| Missing clearance, navigation (`gate`) | `403` | challenge page at the original URL
+| Missing clearance, fetch/API (`gate`) | `403` | `{"error":"turnstile_required"}`, `X-Gate-One-Turnstile: required`
+| Missing clearance, form POST (`gate`) | `403` | readable page (the data cannot be replayed)
+| Invalid token at the verify endpoint | `403` | the challenge page again, with a message
+| Too many verify calls from one IP | `429` | `Retry-After`
+| Siteverify unreachable, timeout or non-200 | `503` | readable page / `turnstile_unavailable`, `Retry-After: 5`
 |===
 
-A Siteverify outage is deliberately **not** a 403: telling a human "you
-failed the robot check" because Cloudflare is down would be wrong. It is
-fail-closed (the backend is never reached) with a distinct error.
+A Siteverify outage is deliberately **not** a 403: it is fail-closed with
+a distinct error, and **existing clearance cookies keep working** (their
+signature is checked locally).
 
 == Content Security Policy
 
@@ -174,60 +243,49 @@ Turnstile needs two origins in the page's policy:
 * `frame-src` must allow `https://challenges.cloudflare.com`.
 
 When a route declares a `csp` block, Gate One appends those sources to
-the directive the browser actually uses, in all modes:
+the directive the browser actually uses, in all modes (`nonce`, `hash`,
+`merge`). A directive absent with a `default-src` fallback is widened
+there; with no directive and no `default-src`, the browser imposes no
+restriction and nothing is added.
 
-* `nonce`/`hash`: added to the emitted policy;
-* `merge`: appended to the origin's policy (a union — no source is
-  removed);
-* a directive absent with a `default-src` fallback is widened there;
-* with no directive and no `default-src`, the browser imposes no
-  restriction and nothing is added (adding a restrictive directive would
-  break the page).
+The challenge page is gateway-generated with its own nonce-based CSP
+(scripts and frame from Cloudflare, `form-action 'self'`).
 
-The inline loader script is nonced or hashed by the existing CSP
-machinery. Without a `csp` block on the route, Gate One adds no policy and
-the page's own CSP (if any) must allow the two origins.
+== Local demo
 
-Pre-clearance mode additionally needs `connect-src 'self'`; this block
-does not enable pre-clearance.
+`deploy/local/turnstile` runs on `*.localhost` with Cloudflare's test
+keys (internet required: `api.js` and Siteverify are real):
 
-== Local testing
-
-Cloudflare publishes test keys:
-
-[cols="1,2",options="header"]
-|===
-| Key | Value
-
-| Always-passing site key | `1x00000000000000000000AA`
-| Always-blocking site key | `2x00000000000000000000AB`
-| Always-passing secret | `1x0000000000000000000000000000000AA`
-| Always-failing secret | `2x0000000000000000000000000000000AA`
-|===
-
-Use them in a development configuration; production keys reject the
-dummy tokens.
+[source,bash]
+----
+./run.sh gate   # the whole page is gated  (paths: ["/*"])
+./run.sh api    # only the action is gated (paths: ["/api/*"])
+# http://app.demo.localhost:3000/
+----
 
 == Operational notes
 
 * **Secret**: one per widget, same on every replica, rotated in the
   Cloudflare dashboard and the environment.
+* **Clearance key**: a dedicated `clearanceSecretEnv` lets you invalidate
+  every clearance without touching the widget secret; the derived key
+  couples both rotations.
 * **Rate limit**: keep a `rateLimit` on the protected route; it runs
   before Siteverify.
 * **Privacy**: the client IP is sent to Cloudflare for validation.
-  Mention it in the privacy notice; it is the same data Cloudflare
-  already sees if the site is behind its edge.
+  Mention it in the privacy notice.
 * **Rolling restart**: a configuration reload (`SIGHUP`) recreates the
-  gateway, including the Turnstile runtime; an invalid block is refused
-  and the previous configuration stays active.
+  gateway, including the Turnstile runtime.
 * **Monitoring**: `TURNSTILE ... result=ok|missing|failed|unavailable`
-  log lines carry the host and path, never the token. A spike in
-  `unavailable` means the Siteverify dependency is degraded.
+  and `TURNSTILE gate granted` log lines carry the host and path, never
+  the token. A spike in `unavailable` means the Siteverify dependency is
+  degraded.
 
 == When not to use it
 
-* For an authenticated area: Gate One's SSO is a stronger control; a
-  bot cannot log in.
+* For an authenticated area: Gate One's SSO is a stronger control.
 * As a substitute for network isolation: see the limitation above.
 * On a form whose backend already implements Siteverify: verify in one
   place only (the token is single-use).
+* On a site that must stay indexable, with `paths: ["/*"]`: crawlers do
+  not solve challenges.

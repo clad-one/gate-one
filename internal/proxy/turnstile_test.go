@@ -410,3 +410,209 @@ func TestTurnstileTokenExtraction(t *testing.T) {
 		t.Fatal("an oversized token was accepted")
 	}
 }
+
+func turnstileGateGateway(
+	t *testing.T, backend, block string,
+) *Gateway {
+	t.Helper()
+	return turnstileTestGateway(t, backend, block, "")
+}
+
+func TestTurnstileGateChallengesThenClears(t *testing.T) {
+	var calls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "text/html")
+			io.WriteString(w, "<html><body>app</body></html>")
+		}))
+	defer backend.Close()
+	sv := turnstileSiteverify(t, "app.dev.test", "gate")
+	gw := turnstileGateGateway(t, backend.URL,
+		`{"siteKey":"0x4AAAA","secretEnv":"TEST_TURNSTILE_SECRET",
+		  "mode":"gate","paths":["/*"],"action":"gate"}`)
+	gw.turnstile.endpoint = sv.URL
+
+	// 1. No clearance: the challenge page is served at the original
+	// URL and the backend is NOT called.
+	req := httptest.NewRequest(http.MethodGet, "http://app.dev.test/", nil)
+	req.Host = "app.dev.test"
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Accept", "text/html")
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("challenge status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Checking your browser") ||
+		!strings.Contains(rec.Body.String(), TurnstileVerifyPath) {
+		t.Fatalf("challenge page missing: %s", rec.Body.String())
+	}
+	if calls.Load() != 0 {
+		t.Fatal("the backend was called before the challenge")
+	}
+
+	// 2. Wrong token: challenge again, no cookie.
+	form := url.Values{}
+	form.Set(core.TurnstileFormField, "nope")
+	form.Set("returnTo", "/")
+	req = httptest.NewRequest(http.MethodPost,
+		"http://app.dev.test"+TurnstileVerifyPath,
+		strings.NewReader(form.Encode()))
+	req.Host = "app.dev.test"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Accept", "text/html")
+	rec = httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("bad token status = %d", rec.Code)
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("a clearance cookie was set for an invalid token")
+	}
+
+	// 3. Good token: 303 + clearance cookie.
+	form.Set(core.TurnstileFormField, "good")
+	req = httptest.NewRequest(http.MethodPost,
+		"http://app.dev.test"+TurnstileVerifyPath,
+		strings.NewReader(form.Encode()))
+	req.Host = "app.dev.test"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Accept", "text/html")
+	rec = httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("verify status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/" {
+		t.Fatalf("redirect = %q", loc)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("no clearance cookie")
+	}
+	var clearance *http.Cookie
+	for _, c := range cookies {
+		if c.Name == turnstileClearanceCookie {
+			clearance = c
+		}
+	}
+	if clearance == nil || !clearance.HttpOnly {
+		t.Fatalf("clearance cookie = %+v", clearance)
+	}
+
+	// 4. With the cookie: the backend is reached.
+	req = httptest.NewRequest(http.MethodGet, "http://app.dev.test/", nil)
+	req.Host = "app.dev.test"
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Accept", "text/html")
+	req.AddCookie(clearance)
+	rec = httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "app") {
+		t.Fatalf("cleared status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("backend calls = %d, want 1", calls.Load())
+	}
+
+	// 5. Tampered cookie: challenged again.
+	bad := *clearance
+	bad.Value = strings.Replace(bad.Value, "v1.", "v1.9", 1)
+	req = httptest.NewRequest(http.MethodGet, "http://app.dev.test/", nil)
+	req.Host = "app.dev.test"
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Accept", "text/html")
+	req.AddCookie(&bad)
+	rec = httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("tampered cookie status = %d", rec.Code)
+	}
+}
+
+func TestTurnstileGateAPIRequiresClearance(t *testing.T) {
+	var calls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			io.WriteString(w, "ok")
+		}))
+	defer backend.Close()
+	sv := turnstileSiteverify(t, "app.dev.test", "gate")
+	gw := turnstileGateGateway(t, backend.URL,
+		`{"siteKey":"0x4AAAA","secretEnv":"TEST_TURNSTILE_SECRET",
+		  "mode":"gate","paths":["/api/*"],"action":"gate",
+		  "exemptPaths":["/mcp"]}`)
+	gw.turnstile.endpoint = sv.URL
+
+	req := httptest.NewRequest(http.MethodPost,
+		"http://app.dev.test/api/process", strings.NewReader("{}"))
+	req.Host = "app.dev.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if rec.Header().Get(TurnstileGateHeader) != "required" {
+		t.Fatal("missing gate marker header")
+	}
+	if !strings.Contains(rec.Body.String(), "turnstile_required") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+	if calls.Load() != 0 {
+		t.Fatal("the backend was called without clearance")
+	}
+
+	// A page outside /api/* is not gated.
+	req = httptest.NewRequest(http.MethodGet, "http://app.dev.test/", nil)
+	req.Host = "app.dev.test"
+	rec = httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public page status = %d", rec.Code)
+	}
+
+	// Exempt path: not gated.
+	req = httptest.NewRequest(http.MethodPost,
+		"http://app.dev.test/mcp", strings.NewReader("{}"))
+	req.Host = "app.dev.test"
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exempt status = %d", rec.Code)
+	}
+}
+
+func TestTurnstileGateInjectsPreclearanceOnEveryPage(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			io.WriteString(w, "<html><body>app</body></html>")
+		}))
+	defer backend.Close()
+	gw := turnstileGateGateway(t, backend.URL,
+		`{"siteKey":"0x4AAAA","secretEnv":"TEST_TURNSTILE_SECRET",
+		  "mode":"gate","paths":["/api/*"]}`)
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.dev.test/other", nil)
+	req.Host = "app.dev.test"
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, "challenges.cloudflare.com/turnstile") {
+		t.Fatalf("preclearance script missing: %s", body)
+	}
+	if !strings.Contains(body, `data-gtw-turnstile-cleared="false"`) {
+		t.Fatalf("cleared attribute missing: %s", body)
+	}
+	if !strings.Contains(body, `"gate":true`) {
+		t.Fatalf("gate flag missing from the script: %s", body)
+	}
+}

@@ -171,10 +171,7 @@ func buildInjectors(
 	// path (a route may serve several page prefixes).
 	var cspExtra *cspExtraSources
 	if ts != nil && ts.injectsRoute(route) && ts.script != "" {
-		injectors = append(injectors, &turnstileInjector{
-			cfg:    ts.cfg,
-			script: ts.script,
-		})
+		injectors = append(injectors, &turnstileInjector{rt: ts})
 		injectedHTML = append(injectedHTML, ts.script)
 		cspExtra = turnstileCSPSources()
 	}

@@ -1,0 +1,25 @@
+{
+  "turnstile": {
+    "mode": "gate",
+    "siteKey": "1x00000000000000000000AA",
+    "secretEnv": "TURNSTILE_SECRET",
+    "paths": [
+      "/api/*"
+    ],
+    "exemptPaths": [
+      "/healthz"
+    ],
+    "clearanceTtlSeconds": 1800,
+    "challenge": {
+      "appearance": "interaction-only"
+    }
+  },
+  "routes": [
+    {
+      "host": "app.demo.localhost",
+      "path": "/*",
+      "frontend": true,
+      "backend": "http://127.0.0.1:8081"
+    }
+  ]
+}

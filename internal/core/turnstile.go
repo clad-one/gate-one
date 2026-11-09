@@ -16,11 +16,14 @@ package core
 // there (AC-AUTH-07).
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // DefaultTurnstileTokenHeader: the header accepted in addition to the
@@ -31,11 +34,36 @@ const DefaultTurnstileTokenHeader = "X-Turnstile-Response"
 // TurnstileFormField is the hidden input Turnstile adds to a form.
 const TurnstileFormField = "cf-turnstile-response"
 
+// Turnstile modes.
+const (
+	// TurnstileModeForms: inject the widget into forms and verify the
+	// configured methods (the historical behaviour).
+	TurnstileModeForms = "forms"
+	// TurnstileModeGate: challenge the first request to a protected
+	// path, set a signed clearance cookie, let the following requests
+	// through without a new Siteverify call.
+	TurnstileModeGate = "gate"
+	// TurnstileModeBoth: gate the site AND verify form submissions.
+	TurnstileModeBoth = "both"
+)
+
+// DefaultTurnstileClearanceTTL is the clearance cookie lifetime (30
+// minutes).
+const DefaultTurnstileClearanceTTL = 1800
+
+// clearanceKeyLabel: domain separation when the clearance key is
+// derived from the Turnstile secret.
+const clearanceKeyLabel = "gate-one/turnstile/clearance/v1"
+
 // TurnstileConfig is the top-level "turnstile" block.
 type TurnstileConfig struct {
 	// Enabled: presence of the block enables it; explicit false
 	// disables it (templated configs). Default true.
 	Enabled *bool `json:"enabled,omitempty"`
+
+	// Mode selects the protection: "forms" (default), "gate" or
+	// "both".
+	Mode string `json:"mode,omitempty"`
 
 	// SiteKey is the public widget key (safe in the page).
 	SiteKey string `json:"siteKey"`
@@ -73,14 +101,122 @@ type TurnstileConfig struct {
 	// Default X-Turnstile-Response.
 	TokenHeader string `json:"tokenHeader,omitempty"`
 
+	// ExemptPaths are never gated (gate/both): health, machine
+	// endpoints, webhooks. The built-in exemptions (/healthz, /readyz,
+	// /__gate-one/*, /favicon.ico, /robots.txt) always apply.
+	ExemptPaths []string `json:"exemptPaths,omitempty"`
+
+	// ClearanceTTLSeconds is the lifetime of the gate clearance
+	// cookie. Default 1800 (30 minutes).
+	ClearanceTTLSeconds int `json:"clearanceTtlSeconds,omitempty"`
+
+	// ClearanceSecretEnv names the environment variable holding the
+	// HMAC key signing the clearance cookie. Empty = derived from the
+	// Turnstile secret with domain separation (rotating the Turnstile
+	// secret then invalidates every clearance).
+	ClearanceSecretEnv string `json:"clearanceSecretEnv,omitempty"`
+	ClearanceSecret    []byte `json:"-"`
+
+	// Challenge tunes the challenge page/widget (gate/both).
+	Challenge *TurnstileChallenge `json:"challenge,omitempty"`
+
+	// Preclearance makes the injected script solve the challenge in
+	// the background when a page is served without a clearance
+	// (default true in gate/both). The first user action then needs a
+	// single backend call.
+	Preclearance *bool `json:"preclearance,omitempty"`
+
 	// Endpoint overrides the Siteverify URL (tests only; not part of
 	// the public schema).
 	Endpoint string `json:"-"`
 }
 
+// TurnstileChallenge tunes the challenge page (gate/both).
+type TurnstileChallenge struct {
+	// Appearance: "always", "execute" or "interaction-only" (Turnstile
+	// render option). Default "interaction-only" for gate/both: the
+	// widget stays hidden unless Cloudflare requires an interaction.
+	Appearance string `json:"appearance,omitempty"`
+}
+
 // Active reports whether the block is enabled.
 func (t *TurnstileConfig) Active() bool {
 	return t != nil && (t.Enabled == nil || *t.Enabled)
+}
+
+// FormsEnabled reports whether form widgets are injected and form
+// submissions verified.
+func (t *TurnstileConfig) FormsEnabled() bool {
+	return t != nil && (t.Mode == "" ||
+		t.Mode == TurnstileModeForms || t.Mode == TurnstileModeBoth)
+}
+
+// GateEnabled reports whether the gate (challenge + clearance cookie)
+// is active.
+func (t *TurnstileConfig) GateEnabled() bool {
+	return t != nil && (t.Mode == TurnstileModeGate ||
+		t.Mode == TurnstileModeBoth)
+}
+
+// PreclearanceEnabled: background challenge on a served page.
+func (t *TurnstileConfig) PreclearanceEnabled() bool {
+	if t == nil || !t.GateEnabled() {
+		return false
+	}
+	if t.Preclearance == nil {
+		return true
+	}
+	return *t.Preclearance
+}
+
+// ClearanceTTL returns the clearance cookie lifetime.
+func (t *TurnstileConfig) ClearanceTTL() time.Duration {
+	secs := DefaultTurnstileClearanceTTL
+	if t != nil && t.ClearanceTTLSeconds > 0 {
+		secs = t.ClearanceTTLSeconds
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// ChallengeAppearance: the Turnstile render appearance of the
+// challenge widget.
+func (t *TurnstileConfig) ChallengeAppearance() string {
+	if t != nil && t.Challenge != nil && t.Challenge.Appearance != "" {
+		return t.Challenge.Appearance
+	}
+	if t != nil && t.GateEnabled() {
+		return "interaction-only"
+	}
+	return "always"
+}
+
+// Exempt reports whether path is never gated. The built-in exemptions
+// protect probes, the gateway's own endpoints and the SEO files.
+func (t *TurnstileConfig) Exempt(path string) bool {
+	if path == "" {
+		return false
+	}
+	switch path {
+	case "/healthz", "/readyz", "/favicon.ico", "/robots.txt":
+		return true
+	}
+	if strings.HasPrefix(path, "/__gate-one/") {
+		return true
+	}
+	if t == nil {
+		return false
+	}
+	for _, p := range t.ExemptPaths {
+		if PathMatches(p, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// AppliesTo reports whether the block covers (host, path).
+func (t *TurnstileConfig) AppliesTo(host, path string) bool {
+	return t.Active() && t.MatchesHost(host) && t.MatchesPath(path)
 }
 
 var turnstileActionPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -251,6 +387,16 @@ func (c *Config) resolveTurnstile() error {
 		return nil
 	}
 
+	t.Mode = strings.ToLower(strings.TrimSpace(t.Mode))
+	switch t.Mode {
+	case "":
+		t.Mode = TurnstileModeForms
+	case TurnstileModeForms, TurnstileModeGate, TurnstileModeBoth:
+	default:
+		return fmt.Errorf(
+			"turnstile.mode: %q (expected forms, gate or both)", t.Mode)
+	}
+
 	t.SiteKey = strings.TrimSpace(t.SiteKey)
 	if t.SiteKey == "" {
 		return fmt.Errorf("turnstile: siteKey is required")
@@ -368,6 +514,73 @@ func (c *Config) resolveTurnstile() error {
 				t.Hostname)
 		}
 		t.Hostname = h
+	}
+
+	if t.ClearanceTTLSeconds < 0 {
+		return fmt.Errorf(
+			"turnstile.clearanceTtlSeconds: must be positive")
+	}
+	if t.ClearanceTTLSeconds == 0 {
+		t.ClearanceTTLSeconds = DefaultTurnstileClearanceTTL
+	}
+	if t.ClearanceTTLSeconds < 60 || t.ClearanceTTLSeconds > 604800 {
+		return fmt.Errorf(
+			"turnstile.clearanceTtlSeconds: %d (bounds 60-604800)",
+			t.ClearanceTTLSeconds)
+	}
+
+	t.ClearanceSecretEnv = strings.TrimSpace(t.ClearanceSecretEnv)
+	if t.ClearanceSecretEnv != "" {
+		secret, ok := os.LookupEnv(t.ClearanceSecretEnv)
+		if !ok || strings.TrimSpace(secret) == "" {
+			return fmt.Errorf(
+				"turnstile: environment variable %s is empty",
+				t.ClearanceSecretEnv)
+		}
+		t.ClearanceSecret = []byte(strings.TrimSpace(secret))
+	} else {
+		mac := hmac.New(sha256.New, []byte(t.Secret))
+		mac.Write([]byte(clearanceKeyLabel))
+		t.ClearanceSecret = mac.Sum(nil)
+	}
+
+	exempt := make([]string, 0, len(t.ExemptPaths))
+	seenExempt := map[string]bool{}
+	for _, raw := range t.ExemptPaths {
+		p := strings.TrimSpace(raw)
+		if p == "" || !strings.HasPrefix(p, "/") {
+			return fmt.Errorf(
+				"turnstile.exemptPaths: %q: a path must start with /", raw)
+		}
+		if strings.ContainsAny(p, "? \t\r\n") {
+			return fmt.Errorf(
+				"turnstile.exemptPaths: %q: no query/whitespace", raw)
+		}
+		if p != "/*" &&
+			(strings.Count(p, "*") > 1 ||
+				(strings.Contains(p, "*") && !strings.HasSuffix(p, "/*"))) {
+			return fmt.Errorf(
+				"turnstile.exemptPaths: %q: * is only allowed as a trailing /*", raw)
+		}
+		if !seenExempt[p] {
+			seenExempt[p] = true
+			exempt = append(exempt, p)
+		}
+	}
+	t.ExemptPaths = exempt
+
+	if t.Challenge != nil {
+		a := strings.ToLower(strings.TrimSpace(t.Challenge.Appearance))
+		switch a {
+		case "":
+			t.Challenge.Appearance = ""
+		case "always", "execute", "interaction-only":
+			t.Challenge.Appearance = a
+		default:
+			return fmt.Errorf(
+				"turnstile.challenge.appearance: %q "+
+					"(expected always, execute or interaction-only)", a)
+		}
 	}
 
 	t.TokenHeader = strings.TrimSpace(t.TokenHeader)

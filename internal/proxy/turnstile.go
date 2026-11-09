@@ -1,18 +1,20 @@
 package proxy
 
-// Cloudflare Turnstile: platform-wide form bot check.
+// Cloudflare Turnstile: platform-wide bot protection for form pages
+// and whole applications.
 //
-// Two halves, both driven by the same top-level "turnstile" block:
+// Two complementary modes, selected by turnstile.mode:
 //
-//   - injection: a small script is added before </body> on matching
-//     HTML pages. It renders the widget in every matching form and
-//     keeps a hidden cf-turnstile-response input in sync. It also
-//     attaches the token to same-origin mutating fetch calls, so SPA
-//     forms work without application code.
-//   - verification: every matching request is checked with Siteverify
-//     BEFORE the backend. A missing/invalid token is a 403 (readable
-//     page for a navigation, JSON otherwise); a Siteverify outage is a
-//     503 (fail closed, never "you are a bot").
+//   - forms: a small script is injected into matching pages, renders
+//     the widget in matching forms and every matching POST is verified
+//     with Siteverify before the backend.
+//   - gate: the first request to a protected path is answered with a
+//     gateway-served challenge page (at the original URL, no redirect);
+//     solving it sets a signed clearance cookie, and the following
+//     requests go through without another Siteverify call. The injected
+//     script also pre-clears in the background and exchanges a 403
+//     "turnstile_required" for a clearance + replay.
+//   - both: gate AND form verification.
 //
 // The token is read from ctx.RawBody (BuildContext already buffers and
 // restores the request body), or from the configured header for
@@ -25,6 +27,9 @@ package proxy
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -34,6 +39,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,14 +50,28 @@ const (
 	turnstileSiteverifyURL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 	turnstileTimeout       = 5 * time.Second
 	turnstileMaxTokenLen   = 2048
+
+	// TurnstileVerifyPath is the reserved endpoint that exchanges a
+	// token for a clearance cookie. It is intercepted before routing.
+	TurnstileVerifyPath = "/__gate-one/turnstile/verify"
+
+	// TurnstileGateHeader marks a 403 that only asks for a challenge
+	// (the request never reached the backend).
+	TurnstileGateHeader = "X-Gate-One-Turnstile"
+	turnstileGateValue  = "required"
+
+	turnstileClearanceCookie = "gate_one_turnstile"
+	turnstileVerifyLimit     = 30 // Siteverify calls per IP per minute
 )
 
-// turnstileRuntime is the gateway-wide verifier and script factory.
+// turnstileRuntime is the gateway-wide verifier, gate and script
+// factory.
 type turnstileRuntime struct {
-	cfg      *core.TurnstileConfig
-	client   *http.Client
-	endpoint string
-	script   string
+	cfg           *core.TurnstileConfig
+	client        *http.Client
+	endpoint      string
+	script        string
+	verifyLimiter *limiter
 }
 
 func newTurnstileRuntime(cfg *core.Config) *turnstileRuntime {
@@ -59,34 +79,43 @@ func newTurnstileRuntime(cfg *core.Config) *turnstileRuntime {
 		return nil
 	}
 	rt := &turnstileRuntime{
-		cfg:      cfg.Turnstile,
-		client:   &http.Client{Timeout: turnstileTimeout},
-		endpoint: turnstileSiteverifyURL,
+		cfg:           cfg.Turnstile,
+		client:        &http.Client{Timeout: turnstileTimeout},
+		endpoint:      turnstileSiteverifyURL,
+		verifyLimiter: newLimiter(time.Minute),
 	}
 	if rt.cfg.Endpoint != "" {
 		rt.endpoint = rt.cfg.Endpoint
 	}
 	rt.script = buildTurnstileScript(rt.cfg)
 	log.Printf(
-		"TURNSTILE enabled hosts=%v paths=%v methods=%v forms=%d action=%q",
+		"TURNSTILE enabled mode=%s hosts=%v paths=%v methods=%v "+
+			"forms=%d exempt=%v action=%q clearance=%s",
+		rt.cfg.Mode,
 		rt.cfg.Hosts,
 		rt.cfg.Paths,
 		rt.cfg.Methods,
 		len(rt.cfg.Forms),
+		rt.cfg.ExemptPaths,
 		rt.cfg.Action,
+		rt.cfg.ClearanceTTL(),
 	)
 	return rt
 }
 
 // injectsRoute: whether the script may be added to this route's HTML.
-// Path filtering happens per request; this only skips routes that can
-// never serve a protected page (avoids forcing gzip for nothing).
+// Gate mode injects on every frontend page of a matching host (the
+// challenge may be triggered by an API call from any page); forms mode
+// only on pages overlapping the configured paths.
 func (t *turnstileRuntime) injectsRoute(route *core.Route) bool {
 	if t == nil || route == nil || !route.Frontend {
 		return false
 	}
 	if !t.cfg.MatchesHost(route.Host) {
 		return false
+	}
+	if t.cfg.GateEnabled() {
+		return true
 	}
 	if len(t.cfg.Paths) == 0 {
 		return true
@@ -99,11 +128,11 @@ func (t *turnstileRuntime) injectsRoute(route *core.Route) bool {
 	return false
 }
 
-// applies: whether the request must be verified.
-func (t *turnstileRuntime) applies(
+// appliesTo: whether the forms verification covers this request.
+func (t *turnstileRuntime) appliesTo(
 	host, path, method string,
 ) bool {
-	if t == nil {
+	if t == nil || !t.cfg.FormsEnabled() {
 		return false
 	}
 	return t.cfg.MatchesHost(host) &&
@@ -111,14 +140,349 @@ func (t *turnstileRuntime) applies(
 		t.cfg.MatchesMethod(method)
 }
 
-// enforce verifies the token. It answers and returns true when the
+// gateApplies: whether the request must carry a clearance.
+func (t *turnstileRuntime) gateApplies(host, path string) bool {
+	if t == nil || !t.cfg.GateEnabled() {
+		return false
+	}
+	if !t.cfg.AppliesTo(host, path) {
+		return false
+	}
+	return !t.cfg.Exempt(path)
+}
+
+// ── clearance cookie ────────────────────────────────────────────────
+
+func (t *turnstileRuntime) clearanceValue(host string, exp int64) string {
+	payload := "v1|" + core.NormalizeHostPattern(host) +
+		"|" + strconv.FormatInt(exp, 10)
+	mac := hmac.New(sha256.New, t.cfg.ClearanceSecret)
+	mac.Write([]byte(payload))
+	return "v1." + strconv.FormatInt(exp, 10) + "." +
+		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (t *turnstileRuntime) validClearance(host, value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 || parts[0] != "v1" {
+		return false
+	}
+	exp, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || time.Now().Unix() >= exp {
+		return false
+	}
+	want := t.clearanceValue(host, exp)
+	return hmac.Equal([]byte(want), []byte(value))
+}
+
+// cleared: the request carries a valid clearance for host.
+func (t *turnstileRuntime) cleared(r *http.Request, host string) bool {
+	if t == nil || !t.cfg.GateEnabled() || r == nil {
+		return true
+	}
+	c, err := r.Cookie(turnstileClearanceCookie)
+	if err != nil || c == nil {
+		return false
+	}
+	return t.validClearance(host, c.Value)
+}
+
+func (t *turnstileRuntime) setClearance(
+	w http.ResponseWriter, r *http.Request, host string,
+) {
+	ttl := t.cfg.ClearanceTTL()
+	exp := time.Now().Add(ttl).Unix()
+	http.SetCookie(w, &http.Cookie{
+		Name:     turnstileClearanceCookie,
+		Value:    t.clearanceValue(host, exp),
+		Path:     "/",
+		MaxAge:   int(ttl.Seconds()),
+		HttpOnly: true,
+		Secure:   clientScheme(r) == "https",
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// ── gate enforcement ────────────────────────────────────────────────
+
+// gate answers the request and returns true when the caller must stop.
+func (t *turnstileRuntime) gate(
+	w http.ResponseWriter,
+	r *http.Request,
+	ctx *RequestContext,
+) bool {
+	if t == nil || ctx == nil ||
+		!t.gateApplies(ctx.Host, ctx.Path) {
+		return false
+	}
+	if r.Method == http.MethodOptions {
+		return false
+	}
+	if t.cleared(r, ctx.Host) {
+		return false
+	}
+	if isDocumentNavigation(r) &&
+		(r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		t.serveChallenge(w, r, requestReturnTo(r), "")
+		return true
+	}
+	if isDocumentNavigation(r) {
+		// A form POST without clearance: serving the challenge here
+		// would lose the submitted data. A readable 403 lets the user
+		// go back and complete the verification.
+		writeTurnstileRequired(w, r)
+		return true
+	}
+	w.Header().Set(TurnstileGateHeader, turnstileGateValue)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = io.WriteString(w,
+		`{"error":"turnstile_required",`+
+			`"error_description":"complete the anti-robot verification"}`)
+	return true
+}
+
+// requestReturnTo: the original path and query, for the challenge
+// form. The value is validated again on the way back.
+func requestReturnTo(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return "/"
+	}
+	p := r.URL.EscapedPath()
+	if p == "" {
+		p = "/"
+	}
+	if r.URL.RawQuery != "" {
+		p += "?" + r.URL.RawQuery
+	}
+	return p
+}
+
+// safeReturnTo refuses anything that is not a local absolute path.
+func safeReturnTo(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || v[0] != '/' || strings.HasPrefix(v, "//") ||
+		strings.ContainsAny(v, "\\\r\n") {
+		return "/"
+	}
+	return v
+}
+
+// ── challenge page ──────────────────────────────────────────────────
+
+func (t *turnstileRuntime) serveChallenge(
+	w http.ResponseWriter,
+	r *http.Request,
+	returnTo, errMsg string,
+) {
+	nonce := newCSPNonce()
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'none'; "+
+			"script-src 'nonce-"+nonce+"' https://challenges.cloudflare.com; "+
+			"frame-src https://challenges.cloudflare.com; "+
+			"style-src 'nonce-"+nonce+"'; img-src data:; "+
+			"form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = io.WriteString(w, t.challengeHTML(returnTo, nonce, errMsg))
+}
+
+func (t *turnstileRuntime) challengeHTML(
+	returnTo, nonce, errMsg string,
+) string {
+	cfg := core.AsciiJSON(map[string]string{
+		"siteKey":    t.cfg.SiteKey,
+		"action":     t.cfg.Action,
+		"appearance": t.cfg.ChallengeAppearance(),
+	}, `{"siteKey":""}`)
+	errBlock := ""
+	if errMsg != "" {
+		errBlock = `<p class="err">` + html.EscapeString(errMsg) + `</p>`
+	}
+	return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verification required</title>
+<style nonce="` + nonce + `">
+body{margin:0;min-height:100vh;display:grid;place-items:center;
+font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;
+background:#f4f5f7;color:#1c1f23}
+main{max-width:560px;padding:28px;background:#fff;border:1px solid #e2e6ea;
+border-radius:14px}
+h1{font-size:20px;margin:0 0 8px}p{margin:0 0 10px;color:#5c6470}
+p.err{color:#a33;font-weight:600}
+#w{min-height:65px}
+</style>
+<script nonce="` + nonce + `" async defer
+ src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"></script>
+</head><body><main>
+<h1>Checking your browser</h1>
+<p id="msg">This page protects the application from automated abuse.
+The check runs automatically; no account is created.</p>
+` + errBlock + `
+<form id="f" method="post" action="` + TurnstileVerifyPath + `">
+<input type="hidden" name="returnTo" value="` + html.EscapeString(returnTo) + `">
+<input type="hidden" name="` + core.TurnstileFormField + `" id="tok" value="">
+<div id="w"></div>
+</form>
+<noscript><p class="err">JavaScript is required for the verification.</p></noscript>
+</main>
+<script nonce="` + nonce + `">
+(function () {
+  var CFG = ` + cfg + `;
+  var form = document.getElementById("f");
+  var tok = document.getElementById("tok");
+  var msg = document.getElementById("msg");
+  function submit(t) { tok.value = t; form.submit(); }
+  function render() {
+    if (!window.turnstile) { setTimeout(render, 200); return; }
+    try {
+      turnstile.render(document.getElementById("w"), {
+        sitekey: CFG.siteKey,
+        action: CFG.action || undefined,
+        appearance: CFG.appearance || "interaction-only",
+        callback: submit,
+        "expired-callback": function () {
+          tok.value = "";
+          if (msg) msg.textContent = "The check expired, retrying…";
+        },
+        "error-callback": function () {
+          if (msg) msg.textContent =
+            "The verification could not run. Reload to retry.";
+        }
+      });
+    } catch (e) {
+      if (msg) msg.textContent = "The verification could not start. Reload to retry.";
+    }
+  }
+  render();
+})();
+</script>
+</body></html>`
+}
+
+// ── verify endpoint ─────────────────────────────────────────────────
+
+// serveVerify handles POST /__gate-one/turnstile/verify: token ->
+// Siteverify -> clearance cookie -> 303 (navigation) or 204 (fetch).
+func (t *turnstileRuntime) serveVerify(
+	w http.ResponseWriter,
+	r *http.Request,
+	ctx *RequestContext,
+) {
+	if t == nil || ctx == nil || !t.cfg.GateEnabled() ||
+		!t.cfg.MatchesHost(ctx.Host) {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if ok, wait := t.verifyLimiter.allow(
+		"verify|"+clientIP(r), turnstileVerifyLimit); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(
+			int(wait.Seconds())+1))
+		http.Error(w, "too many verifications", http.StatusTooManyRequests)
+		return
+	}
+
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(u.Host, r.Host) {
+			http.Error(w, "cross-origin verification refused",
+				http.StatusForbidden)
+			return
+		}
+	}
+
+	navigation := isDocumentNavigation(r) || isBrowserRequest(r)
+	returnTo := safeReturnTo(r.FormValue("returnTo"))
+
+	token, ok := turnstileToken(r, ctx, t.cfg.TokenHeaderName())
+	if !ok {
+		t.verifyFailed(w, r, navigation, returnTo, "Verification missing or invalid.")
+		return
+	}
+
+	result, err := t.verify(r, token)
+	if err != nil {
+		log.Printf("TURNSTILE verify host=%s result=unavailable: %v",
+			ctx.Host, err)
+		if navigation {
+			t.serveChallenge(w, r, returnTo,
+				"The verification service is unavailable. Retry in a moment.")
+			return
+		}
+		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w,
+			`{"error":"turnstile_unavailable"}`)
+		return
+	}
+	if !result.Success {
+		log.Printf("TURNSTILE verify host=%s result=failed codes=%v",
+			ctx.Host, result.ErrorCodes)
+		t.verifyFailed(w, r, navigation, returnTo,
+			"Verification failed or expired. Retry.")
+		return
+	}
+	if t.cfg.Hostname != "" &&
+		!strings.EqualFold(result.Hostname, t.cfg.Hostname) {
+		log.Printf(
+			"TURNSTILE verify host=%s result=hostname_mismatch got=%q want=%q",
+			ctx.Host, result.Hostname, t.cfg.Hostname)
+		t.verifyFailed(w, r, navigation, returnTo, "Verification refused.")
+		return
+	}
+	if t.cfg.Action != "" && result.Action != t.cfg.Action {
+		log.Printf(
+			"TURNSTILE verify host=%s result=action_mismatch got=%q want=%q",
+			ctx.Host, result.Action, t.cfg.Action)
+		t.verifyFailed(w, r, navigation, returnTo, "Verification refused.")
+		return
+	}
+
+	t.setClearance(w, r, ctx.Host)
+	log.Printf("TURNSTILE gate granted host=%s path=%q", ctx.Host, returnTo)
+	if navigation {
+		http.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (t *turnstileRuntime) verifyFailed(
+	w http.ResponseWriter, r *http.Request, navigation bool,
+	returnTo, msg string,
+) {
+	if navigation {
+		t.serveChallenge(w, r, returnTo, msg)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = io.WriteString(w,
+		`{"error":"turnstile_failed",`+
+			`"error_description":"anti-robot verification required"}`)
+}
+
+// ── forms enforcement ───────────────────────────────────────────────
+
+// enforce verifies a form POST. It answers and returns true when the
 // request must be rejected.
 func (t *turnstileRuntime) enforce(
 	w http.ResponseWriter,
 	r *http.Request,
 	ctx *RequestContext,
 ) bool {
-	if t == nil || ctx == nil || !t.applies(ctx.Host, ctx.Path, ctx.Method) {
+	if t == nil || ctx == nil ||
+		!t.appliesTo(ctx.Host, ctx.Path, ctx.Method) {
 		return false
 	}
 
@@ -245,7 +609,7 @@ func turnstileToken(
 			return "", false
 		}
 		for _, key := range []string{
-			core.TurnstileFormField, "cfTurnstileResponse",
+			core.TurnstileFormField, "cfTurnstileResponse", "token",
 		} {
 			if v, ok := m[key].(string); ok {
 				v = strings.TrimSpace(v)
@@ -345,6 +709,28 @@ func writeTurnstileFailed(
 			`"anti-robot verification required"}`)
 }
 
+// writeTurnstileRequired: a gated form POST without clearance.
+func writeTurnstileRequired(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(TurnstileGateHeader, turnstileGateValue)
+	if isDocumentNavigation(r) || isBrowserRequest(r) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, turnstilePage(
+			"Verification required",
+			"Your browser has not completed the anti-robot verification.",
+			"Go back, reload the page, complete the check, then submit again.",
+			turnstileBackURL(r),
+		))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = io.WriteString(w,
+		`{"error":"turnstile_required",`+
+			`"error_description":"complete the anti-robot verification"}`)
+}
+
 // writeTurnstileUnavailable: Siteverify is unreachable. Fail closed,
 // but with a distinct 503 so a human is not told they failed.
 func writeTurnstileUnavailable(w http.ResponseWriter, r *http.Request) {
@@ -405,11 +791,10 @@ background:#2563eb;color:#fff;text-decoration:none;font-weight:600}
 </main></body></html>`
 }
 
-// turnstileInjector inserts the widget script before </body> on
-// matching pages (streaming, like the custom injector).
+// turnstileInjector inserts the widget/preclearance script before
+// </body> (streaming, like the custom injector).
 type turnstileInjector struct {
-	cfg    *core.TurnstileConfig
-	script string
+	rt *turnstileRuntime
 }
 
 func (i *turnstileInjector) name() string { return "turnstile" }
@@ -419,14 +804,32 @@ func (i *turnstileInjector) modify(resp *http.Response) error {
 		return nil
 	}
 	path := requestPathOut(resp.Request)
-	if !i.cfg.MatchesPath(path) {
+	cfg := i.rt.cfg
+	if !cfg.GateEnabled() && !cfg.MatchesPath(path) {
 		return nil
 	}
-	resp.Body = newInjectStream(resp.Body, i.script, "body-end")
+	host := requestHostOut(resp.Request)
+	cleared := i.rt.cleared(resp.Request, host)
+	formsOnPage := cfg.FormsEnabled() && cfg.MatchesPath(path)
+	script := i.rt.scriptFor(cleared, formsOnPage)
+	resp.Body = newInjectStream(resp.Body, script, "body-end")
 	resp.Header.Del("Content-Length")
 	resp.Header.Del("Content-Encoding")
 	resp.ContentLength = -1
 	return nil
+}
+
+// scriptFor adds per-request attributes to the static script. Only the
+// attributes change: the script bytes hashed by the CSP stay identical.
+func (t *turnstileRuntime) scriptFor(cleared, forms bool) string {
+	attrs := ` data-gtw-turnstile-cleared="` +
+		strconv.FormatBool(cleared) + `"`
+	if forms {
+		attrs += ` data-gtw-turnstile-forms="true"`
+	} else {
+		attrs += ` data-gtw-turnstile-forms="false"`
+	}
+	return strings.Replace(t.script, "<script>", "<script"+attrs+">", 1)
 }
 
 // turnstileScriptTmpl: the injected script. __CFG__ is replaced by the
@@ -437,12 +840,12 @@ const turnstileScriptTmpl = `<script>
   if (window.__gateOneTurnstile) return;
   window.__gateOneTurnstile = true;
   var SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+  var el = document.currentScript;
+  var cleared = el && el.getAttribute("data-gtw-turnstile-cleared") === "true";
+  var formsOnPage = el && el.getAttribute("data-gtw-turnstile-forms") === "true";
   var token = "";
   var state = { loading: false, queue: [] };
-
-  function syncToken(v) {
-    token = String(v || "");
-  }
+  var gateBox = null, gateWidget = null, gateQueue = [];
 
   function load(cb) {
     if (window.turnstile) return cb();
@@ -461,15 +864,72 @@ const turnstileScriptTmpl = `<script>
         state.loading = false;
         if (window.console) console.warn("turnstile: api.js failed to load");
       };
+      s.nonce = el && el.nonce ? el.nonce : "";
       (document.head || document.documentElement).appendChild(s);
       return;
     }
     state.queue.push(cb);
   }
 
+  // ── gate: pre-clearance and 403 recovery ──
+  function gateBoxEl() {
+    if (!gateBox) {
+      gateBox = document.createElement("div");
+      gateBox.className = "cladone-turnstile-gate";
+      document.body.appendChild(gateBox);
+    }
+    return gateBox;
+  }
+
+  function exchange(tokenValue) {
+    return fetch(CFG.verify, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json",
+                 "Accept": "application/json" },
+      body: JSON.stringify({ "cf-turnstile-response": tokenValue })
+    }).then(function (res) {
+      if (res.ok) { cleared = true; flushGate(); return true; }
+      return false;
+    }).catch(function () { return false; });
+  }
+
+  function flushGate() {
+    var q = gateQueue.splice(0, gateQueue.length);
+    for (var i = 0; i < q.length; i++) {
+      try { q[i].resolve(); } catch (e) {}
+    }
+    if (gateBox) {
+      gateBox.textContent = "";
+      gateBox = null;
+      gateWidget = null;
+    }
+  }
+
+  function ensureGate() {
+    if (cleared || gateWidget) return;
+    load(function () {
+      var box = gateBoxEl();
+      try {
+        gateWidget = window.turnstile.render(box, {
+          sitekey: CFG.siteKey,
+          action: CFG.action || undefined,
+          appearance: CFG.appearance || "interaction-only",
+          callback: function (t) { exchange(t); },
+          "error-callback": function () { gateWidget = null; },
+          "expired-callback": function () {}
+        });
+      } catch (e) {
+        if (window.console) console.warn("turnstile: gate render failed", e);
+      }
+    });
+  }
+
+  // ── forms: widget injection ──
+  function syncToken(v) { token = String(v || ""); }
+
   function isPost(form) {
-    var m = (form.getAttribute("method") || "get").toLowerCase();
-    return m === "post";
+    return (form.getAttribute("method") || "get").toLowerCase() === "post";
   }
 
   function targetForms() {
@@ -491,9 +951,6 @@ const turnstileScriptTmpl = `<script>
     return out;
   }
 
-  // Turnstile injects its own hidden cf-turnstile-response input when
-  // the widget is inside a form; reuse it (one input only), or create
-  // one when that injection did not happen.
   function inputFor(form) {
     var i = form.querySelector('input[name="cf-turnstile-response"]');
     if (!i) {
@@ -541,8 +998,6 @@ const turnstileScriptTmpl = `<script>
     }
     form.addEventListener("submit", function (ev) {
       if (inputFor(form).value) return;
-      // api.js never loaded: do not trap the form. The server answers
-      // the readable 403 page instead of a dead button.
       if (!window.turnstile) return;
       ev.preventDefault();
       box.setAttribute("aria-busy", "true");
@@ -551,6 +1006,7 @@ const turnstileScriptTmpl = `<script>
   }
 
   function scan() {
+    if (!formsOnPage || !CFG.formsEnabled) return;
     var forms = targetForms();
     if (!forms.length) return;
     load(function () {
@@ -560,7 +1016,6 @@ const turnstileScriptTmpl = `<script>
     });
   }
 
-  // SPA/dynamic forms: re-scan (debounced) when the DOM changes.
   var pending = 0;
   function schedule() {
     if (pending) return;
@@ -572,43 +1027,63 @@ const turnstileScriptTmpl = `<script>
     });
   } catch (e) {}
 
-  // Same-origin mutating fetches carry the token automatically: an SPA
-  // form needs no application code. A request with its own header wins.
-  var methods = CFG.methods || ["POST"];
-  if (window.fetch) {
-    var origFetch = window.fetch;
+  // ── fetch: pre-clearance recovery and form token header ──
+  var origFetch = window.fetch;
+  if (origFetch) {
     window.fetch = function (input, init) {
-      try {
-        if (!token) return origFetch.apply(this, arguments);
-        var method = String(
-          (init && init.method) ||
-          (input && input.method) ||
-          "GET").toUpperCase();
-        if (methods.indexOf(method) === -1) {
-          return origFetch.apply(this, arguments);
-        }
-        var here = location.origin;
-        if (input && input.url) {
-          var u = new URL(input.url, location.href);
-          if (u.origin !== here) return origFetch.apply(this, arguments);
-          var h = new Headers(input.headers || {});
-          if (!h.has(CFG.header)) h.set(CFG.header, token);
-          return origFetch.call(this, new Request(input, { headers: h }), init);
-        }
-        var u2 = new URL(String(input), location.href);
-        if (u2.origin !== here) return origFetch.apply(this, arguments);
-        var h2 = new Headers((init && init.headers) || {});
-        if (!h2.has(CFG.header)) h2.set(CFG.header, token);
-        var ni = {};
-        for (var k in (init || {})) { ni[k] = init[k]; }
-        ni.headers = h2;
-        return origFetch.call(this, input, ni);
-      } catch (e) {
-        return origFetch.apply(this, arguments);
+      var args = [input, init];
+      var replayable = true;
+      if (input && typeof input === "object" && input.clone) {
+        try { input = input.clone(); args = [input, init]; }
+        catch (e) { replayable = false; }
       }
+      try {
+        if (token) {
+          var method = String(
+            (init && init.method) || (input && input.method) || "GET").toUpperCase();
+          if ((CFG.methods || ["POST"]).indexOf(method) !== -1) {
+            var here = location.origin;
+            if (input && input.url) {
+              var u = new URL(input.url, location.href);
+              if (u.origin === here) {
+                var h = new Headers(input.headers || {});
+                if (!h.has(CFG.header)) h.set(CFG.header, token);
+                input = new Request(input, { headers: h });
+                args = [input, init];
+              }
+            } else {
+              var u2 = new URL(String(input), location.href);
+              if (u2.origin === here) {
+                var h2 = new Headers((init && init.headers) || {});
+                if (!h2.has(CFG.header)) h2.set(CFG.header, token);
+                var ni = {};
+                for (var k in (init || {})) { ni[k] = init[k]; }
+                ni.headers = h2;
+                args = [input, ni];
+              }
+            }
+          }
+        }
+      } catch (e) {}
+      return origFetch.apply(this, args).then(function (res) {
+        if (!CFG.gate || cleared || !replayable) return res;
+        if (res.status !== 403 ||
+            res.headers.get(CFG.gateHeader) !== "required") {
+          return res;
+        }
+        return new Promise(function (resolve) {
+          gateQueue.push({ resolve: function () {
+            resolve(origFetch.apply(window, args));
+          }});
+          ensureGate();
+        });
+      });
     };
   }
 
+  if (CFG.gate && CFG.preclearance && !cleared) {
+    ensureGate();
+  }
   scan();
 })();
 </script>`
@@ -616,11 +1091,17 @@ const turnstileScriptTmpl = `<script>
 // buildTurnstileScript returns the exact script injected into pages.
 func buildTurnstileScript(cfg *core.TurnstileConfig) string {
 	type scriptConfig struct {
-		SiteKey string   `json:"siteKey"`
-		Action  string   `json:"action,omitempty"`
-		Forms   []string `json:"forms,omitempty"`
-		Methods []string `json:"methods"`
-		Header  string   `json:"header"`
+		SiteKey      string   `json:"siteKey"`
+		Action       string   `json:"action,omitempty"`
+		Forms        []string `json:"forms,omitempty"`
+		Methods      []string `json:"methods"`
+		Header       string   `json:"header"`
+		Gate         bool     `json:"gate"`
+		FormsEnabled bool     `json:"formsEnabled"`
+		Preclearance bool     `json:"preclearance"`
+		Appearance   string   `json:"appearance,omitempty"`
+		Verify       string   `json:"verify"`
+		GateHeader   string   `json:"gateHeader"`
 	}
 	forms := append([]string(nil), cfg.Forms...)
 	methods := append([]string(nil), cfg.Methods...)
@@ -628,11 +1109,17 @@ func buildTurnstileScript(cfg *core.TurnstileConfig) string {
 		methods = []string{"POST"}
 	}
 	raw := core.AsciiJSON(scriptConfig{
-		SiteKey: cfg.SiteKey,
-		Action:  cfg.Action,
-		Forms:   forms,
-		Methods: methods,
-		Header:  cfg.TokenHeaderName(),
+		SiteKey:      cfg.SiteKey,
+		Action:       cfg.Action,
+		Forms:        forms,
+		Methods:      methods,
+		Header:       cfg.TokenHeaderName(),
+		Gate:         cfg.GateEnabled(),
+		FormsEnabled: cfg.FormsEnabled(),
+		Preclearance: cfg.PreclearanceEnabled(),
+		Appearance:   cfg.ChallengeAppearance(),
+		Verify:       TurnstileVerifyPath,
+		GateHeader:   TurnstileGateHeader,
 	}, `{"siteKey":""}`)
 	return strings.Replace(turnstileScriptTmpl, "__CFG__", raw, 1)
 }

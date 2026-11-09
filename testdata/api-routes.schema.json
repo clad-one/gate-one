@@ -553,6 +553,11 @@
           "type": "boolean",
           "description": "Explicit switch for templated configurations. Absent = enabled when the block is present."
         },
+        "mode": {
+          "type": "string",
+          "enum": ["forms", "gate", "both"],
+          "description": "Protection mode. forms: inject the widget into forms and verify the configured methods. gate: challenge the first request to a protected path, set a signed clearance cookie (clearanceTtlSeconds) and let the following requests through without a new Siteverify call; a form POST without clearance is refused (the submitted data cannot be replayed), an API/fetch call gets 403 turnstile_required. both: gate AND form verification. Default forms."
+        },
         "siteKey": {
           "type": "string",
           "minLength": 1,
@@ -617,6 +622,37 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9-]+$",
           "description": "Header accepted in addition to the cf-turnstile-response form field, for fetch/SPA clients. Default X-Turnstile-Response. The injected script attaches the token to same-origin mutating fetches automatically."
+        },
+        "exemptPaths": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Paths never gated in gate/both mode (machine endpoints, webhooks, MCP). The route.path grammar applies (/api/webhooks/*, exact path). Built-in exemptions always apply: /healthz, /readyz, /__gate-one/*, /favicon.ico, /robots.txt. OPTIONS requests are never gated."
+        },
+        "clearanceTtlSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 604800,
+          "description": "Lifetime of the gate clearance cookie. Default 1800 (30 minutes). A visitor who solved the challenge is not challenged again before it expires; rotating the signing key invalidates every clearance."
+        },
+        "clearanceSecretEnv": {
+          "type": "string",
+          "description": "Environment variable holding the HMAC key that signs the clearance cookie. Optional: when empty, the key is derived from the Turnstile secret with domain separation (rotating that secret then invalidates every clearance). A dedicated key lets you rotate clearances without touching the widget secret. Must be identical on every replica."
+        },
+        "challenge": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Challenge page tuning (gate/both).",
+          "properties": {
+            "appearance": {
+              "type": "string",
+              "enum": ["always", "execute", "interaction-only"],
+              "description": "Turnstile render appearance of the challenge widget. Default interaction-only in gate/both: the widget stays hidden unless Cloudflare requires an interaction. always shows it; execute renders without running the challenge until executed."
+            }
+          }
+        },
+        "preclearance": {
+          "type": "boolean",
+          "description": "gate/both: the injected script solves the challenge in the background when a page is served without clearance, so the first user action needs a single backend call. Default true. The 403 turnstile_required + replay remains the fallback."
         }
       }
     },
