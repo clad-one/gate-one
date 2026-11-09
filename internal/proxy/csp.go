@@ -73,6 +73,29 @@ type cspInjector struct {
 	// the hash is appended to the origin policy (and to our own
 	// policy in hash mode), so no unsafe-inline is needed.
 	styles []string
+	// extra: sources a feature needs in the policy (Turnstile's
+	// script/frame origins). Appended to the directive the browser
+	// actually uses; never weakens an existing source.
+	extra *cspExtraSources
+}
+
+// cspExtraSources: extra sources per directive family, requested by an
+// injector installed in the same chain.
+type cspExtraSources struct {
+	script  []string
+	frame   []string
+	connect []string
+}
+
+// turnstileCSPSources: the Cloudflare origins the widget needs
+// (official CSP reference: script-src + frame-src). connect-src 'self'
+// is only required in pre-clearance mode, which this block does not
+// enable.
+func turnstileCSPSources() *cspExtraSources {
+	return &cspExtraSources{
+		script: []string{"https://challenges.cloudflare.com"},
+		frame:  []string{"https://challenges.cloudflare.com"},
+	}
 }
 
 func (i *cspInjector) name() string { return "csp" }
@@ -167,6 +190,20 @@ func (i *cspInjector) policyString(nonce string) string {
 		}
 	}
 
+	// Feature sources (Turnstile): append to the directive the browser
+	// actually uses. For frame/connect, a missing directive with a
+	// default-src fallback is widened; with no default-src at all the
+	// browser imposes no restriction, so nothing is added (adding a
+	// restrictive directive would break the page).
+	if i.extra != nil {
+		if len(i.extra.script) > 0 {
+			directives[scriptTarget] = dedupeStrings(append(
+				directives[scriptTarget], i.extra.script...))
+		}
+		i.addFallbackSources(directives, "frame-src", i.extra.frame)
+		i.addFallbackSources(directives, "connect-src", i.extra.connect)
+	}
+
 	names := make([]string, 0, len(directives))
 	for name := range directives {
 		names = append(names, name)
@@ -191,13 +228,36 @@ func (i *cspInjector) policyString(nonce string) string {
 	return b.String()
 }
 
+// addFallbackSources appends sources to name, or to default-src when
+// name is absent. A policy with neither leaves the family unrestricted:
+// adding name would wrongly restrict it.
+func (i *cspInjector) addFallbackSources(
+	directives map[string][]string,
+	name string,
+	sources []string,
+) {
+	if len(sources) == 0 {
+		return
+	}
+	target := name
+	if _, ok := directives[name]; !ok {
+		if _, ok := directives["default-src"]; !ok {
+			return // unrestricted: nothing to widen
+		}
+		target = "default-src"
+	}
+	directives[target] = dedupeStrings(append(directives[target], sources...))
+}
+
 // amendOrigin appends the injected scripts' hashes to the origin's
 // enforced policy. A policy without script-src/script-src-elem nor
 // default-src leaves scripts unrestricted — our injections already
 // pass, nothing to add.
 func (i *cspInjector) amendOrigin(resp *http.Response) {
 
-	if len(i.hashes) == 0 && len(i.styles) == 0 {
+	if len(i.hashes) == 0 && len(i.styles) == 0 &&
+		(i.extra == nil || (len(i.extra.script) == 0 &&
+			len(i.extra.frame) == 0 && len(i.extra.connect) == 0)) {
 		return
 	}
 	values := resp.Header.Values("Content-Security-Policy")
@@ -221,6 +281,20 @@ func (i *cspInjector) amendOrigin(resp *http.Response) {
 			[]string{"style-src-elem", "style-src", "default-src"},
 			i.styles,
 		)
+		// Feature sources (Turnstile): same union, official
+		// precedence. A policy with no matching directive and no
+		// default-src leaves the family unrestricted — untouched.
+		if i.extra != nil {
+			p = appendSourcesToPolicy(p,
+				[]string{"script-src-elem", "script-src", "default-src"},
+				i.extra.script)
+			p = appendSourcesToPolicy(p,
+				[]string{"frame-src", "default-src"},
+				i.extra.frame)
+			p = appendSourcesToPolicy(p,
+				[]string{"connect-src", "default-src"},
+				i.extra.connect)
+		}
 		amended = append(amended, p)
 	}
 	resp.Header["Content-Security-Policy"] = amended

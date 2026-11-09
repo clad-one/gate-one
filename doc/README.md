@@ -16,6 +16,7 @@ repository and are published at
 | `auth-iam.adoc` | `cladone-auth` internals: tenants, upstreams, mappings, users, policy, degraded mode, key rotation. |
 | `auth-test-plan.adoc` | Authentication test plan: behaviour decisions, fixtures, traceability matrix and the detailed cases. |
 | `plugins.adoc` | Plugin and usage-event internals: taxonomy, invariants, the event contract, WAL durability, the signed manifest and licensing. |
+| `turnstile.adoc` | Cloudflare Turnstile: platform-wide configuration, injection behaviour, Siteverify verification, failure modes, CSP and the multi-ingress limitation. |
 
 ## User guides that are not internal
 

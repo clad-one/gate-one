@@ -143,6 +143,10 @@ type Gateway struct {
 	// extension plugins). nil = no events produced.
 	usage *usageRuntime
 
+	// turnstile is the platform-wide Cloudflare Turnstile check
+	// (verification + script injection). nil = disabled.
+	turnstile *turnstileRuntime
+
 	// inflight tracks requests for graceful Close on reload/shutdown.
 	inflight  sync.WaitGroup
 	closeOnce sync.Once
@@ -310,6 +314,9 @@ func (g *Gateway) Close() error {
 				first = err
 			}
 		}
+		if g.turnstile != nil && g.turnstile.client != nil {
+			g.turnstile.client.CloseIdleConnections()
+		}
 	})
 	return first
 }
@@ -359,6 +366,11 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		gw.loginHandler = defaultProvider.loginHandler
 		gw.loginHost = defaultProvider.loginHost
 	}
+
+	// Turnstile: built once (Siteverify client + injected script). The
+	// block is global; routes only decide whether the script may be
+	// injected and whether a request must be verified.
+	gw.turnstile = newTurnstileRuntime(cfg)
 
 	var routes []*compiledRoute
 
@@ -512,6 +524,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			rwPlan != nil ||
 			pathPlan != nil ||
 			route.InjectionBundle() != nil ||
+			gw.turnstile.injectsRoute(route) ||
 			// nonce mode rewrites the HTML: the body must be plain
 			// text (a brotli/zstd body would be stamped as bytes and
 			// corrupted).
@@ -524,6 +537,10 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			// ModifyResponse and the rewritten URLs keep the browser
 			// on the origin it called (demo :3000 included).
 			clientHost := req.Host
+			clientPath := ""
+			if req.URL != nil {
+				clientPath = req.URL.Path
+			}
 			if stripPrefix != "" {
 				stripRequestPrefix(req.URL, stripPrefix)
 				// Standard hint for frameworks that build links
@@ -542,6 +559,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			ctx := context.WithValue(
 				req.Context(), clientSchemeKey, clientScheme(req))
 			ctx = context.WithValue(ctx, clientHostKey, clientHost)
+			ctx = context.WithValue(ctx, clientPathKey, clientPath)
 			*req = *req.WithContext(ctx)
 			if injectsBody {
 				req.Header.Set("Accept-Encoding", "gzip")
@@ -684,7 +702,8 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		// proxied response, before the injection chain. The guard
 		// banner trusts only this header.
 		chain := chainInjectors(
-			buildInjectors(cfg, route, u, rwPlan, pathPlan, injectsBody),
+			buildInjectors(cfg, route, u, rwPlan, pathPlan, injectsBody,
+				gw.turnstile),
 		)
 		rp.ModifyResponse = func(resp *http.Response) error {
 			resp.Header.Del(GatewayForbiddenHeader)
@@ -1540,16 +1559,7 @@ func stripRequestPrefix(u *url.URL, prefix string) {
 }
 
 func matchPath(routePath, reqPath string) bool {
-	if routePath == "/*" {
-		return true
-	}
-
-	if strings.HasSuffix(routePath, "/*") {
-		base := strings.TrimSuffix(routePath, "/*")
-		return reqPath == base || strings.HasPrefix(reqPath, base+"/")
-	}
-
-	return reqPath == routePath
+	return core.PathMatches(routePath, reqPath)
 }
 
 func normalizeHost(h string) string {
@@ -2046,6 +2056,28 @@ type clientHostKeyT struct{}
 
 var clientHostKey = new(clientHostKeyT)
 
+// clientPathKey: same freeze for the CLIENT path (before stripPrefix
+// or any route-level rewrite). Body injectors that target a path
+// prefix (Turnstile) read the value the browser actually asked for.
+type clientPathKeyT struct{}
+
+var clientPathKey = new(clientPathKeyT)
+
+// requestPathOut: the client path for ModifyResponse injectors
+// (resp.Request = outgoing request): the value frozen by the
+// Director before stripPrefix, otherwise the outgoing path.
+func requestPathOut(r *http.Request) string {
+	if r != nil {
+		if v, ok := r.Context().Value(clientPathKey).(string); ok && v != "" {
+			return v
+		}
+		if r.URL != nil {
+			return r.URL.Path
+		}
+	}
+	return ""
+}
+
 // requestHostOut: the client host for ModifyResponse injectors
 // (resp.Request = outgoing request): the value frozen by the
 // Director before the upstream policy rewrites it. Empty = absent.
@@ -2532,6 +2564,15 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 429 + Retry-After when the window is full.
 	//
 	if enforceLimits(w, r, cr, ctx) {
+		return
+	}
+
+	//
+	// Turnstile: verify the anti-robot token BEFORE the backend (and
+	// after the rate limit, so a flood does not burn Siteverify
+	// calls). Only matching hosts/paths/methods are concerned.
+	//
+	if g.turnstile.enforce(w, r, ctx) {
 		return
 	}
 

@@ -1663,6 +1663,13 @@ type Config struct {
 	// plugins). Absent = no events are produced.
 	Usage *UsageConfig `json:"usage,omitempty"`
 
+	// Turnstile enables the platform-wide Cloudflare Turnstile bot check
+	// for form pages: the widget is injected into matching HTML pages and
+	// matching POSTs are verified with Siteverify before the backend.
+	// It only covers traffic that goes through this Gate One instance;
+	// network isolation remains required. Absent = disabled.
+	Turnstile *TurnstileConfig `json:"turnstile,omitempty"`
+
 	// PublisherFeed is the optional signed publisher feed (compatible
 	// components + revocations). Absent = no feed is consulted.
 	PublisherFeed *PublisherFeedConfig `json:"publisherFeed,omitempty"`
@@ -2356,6 +2363,12 @@ func LoadWithOptions(path string, opts LoadOptions) (*Config, error) {
 
 	// Usage bus: WAL directory, HMAC secrets and plugin subscriptions.
 	if err := cfg.resolveUsage(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
+	// Turnstile: normalize the selectors and read the Siteverify secret
+	// from the environment (a missing secret refuses startup).
+	if err := cfg.resolveTurnstile(); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 

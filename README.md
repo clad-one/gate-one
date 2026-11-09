@@ -249,6 +249,33 @@ Full guide: `doc/auth-providers.adoc`.
 Strict CSP (nonce styles, custom injections, proxified sites):
 <https://clad-one.github.io/gate-one-doc/v0.4.5-docs.9/docs/strict-csp/>.
 
+## Bot protection (Cloudflare Turnstile)
+
+A top-level `turnstile` block adds the Turnstile widget to matching form
+pages and verifies every matching POST with Siteverify **before the
+backend**. It works on pages Gate One already proxies; the application
+does not change. `siteKey` is public, the secret is read from
+`secretEnv` (missing = startup refused). `hosts`/`paths`/`forms` select
+the pages and forms, so one block covers several hosts without
+duplication.
+
+It protects only traffic that passes through this Gate One instance: a
+second ingress, an internal caller or a published port bypasses it.
+Network isolation (only Gate One can reach the application) remains the
+operator's responsibility.
+
+```json
+"turnstile": {
+  "siteKey": "0x4AAAAAAA...",
+  "secretEnv": "TURNSTILE_SECRET",
+  "paths": ["/contact/*"],
+  "action": "contact",
+  "forms": ["form#contact"]
+}
+```
+
+Full guide: `doc/turnstile.adoc`.
+
 ## Build
 
 ```bash

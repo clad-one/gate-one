@@ -346,6 +346,11 @@ func checkOIDCRefreshTTL(w io.Writer, cfg *core.Config) {
 // a config is done by reading startup output (or -check).
 func printRoutes(cfg *core.Config) {
 	out := &strings.Builder{}
+	if t := cfg.Turnstile; t.Active() {
+		fmt.Fprintf(out,
+			"TURNSTILE hosts=%v paths=%v methods=%v forms=%d action=%q\n",
+			t.Hosts, t.Paths, t.Methods, len(t.Forms), t.Action)
+	}
 	if len(cfg.AuthProviders) > 0 {
 		for _, ap := range cfg.AuthProviders {
 			if ap == nil {

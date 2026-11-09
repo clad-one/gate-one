@@ -66,6 +66,7 @@ func buildInjectors(
 	rwPlan *rewritePlan,
 	pathPlan *pathRewritePlan,
 	injectsBody bool,
+	ts *turnstileRuntime,
 ) []injector {
 
 	injectors := make([]injector, 0, 7)
@@ -165,10 +166,23 @@ func buildInjectors(
 		}
 	}
 
+	// Turnstile: the widget script is added before </body> on matching
+	// pages. The block is global; the injector re-checks the request
+	// path (a route may serve several page prefixes).
+	var cspExtra *cspExtraSources
+	if ts != nil && ts.injectsRoute(route) && ts.script != "" {
+		injectors = append(injectors, &turnstileInjector{
+			cfg:    ts.cfg,
+			script: ts.script,
+		})
+		injectedHTML = append(injectedHTML, ts.script)
+		cspExtra = turnstileCSPSources()
+	}
+
 	// CSP: installed LAST so the nonce stamper sees the bytes the
-	// other injectors added (guard, PWA, custom) — no per-feature
-	// nonce plumbing. The hashes of the gateway's own inline scripts
-	// are computed once here, at route compile time.
+	// other injectors added (guard, PWA, custom, Turnstile) — no
+	// per-feature nonce plumbing. The hashes of the gateway's own
+	// inline scripts are computed once here, at route compile time.
 	if csp := route.CSP; csp != nil && csp.Mode != "off" {
 		var hashes []string
 		for _, frag := range injectedHTML {
@@ -201,6 +215,7 @@ func buildInjectors(
 			policy: csp,
 			hashes: hashes,
 			styles: styles,
+			extra:  cspExtra,
 		})
 	}
 

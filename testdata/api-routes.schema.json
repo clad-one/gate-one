@@ -527,6 +527,65 @@
         }
       }
     },
+    "turnstile": {
+      "type": "object",
+      "description": "Platform-wide Cloudflare Turnstile bot check for form pages. Presence enables it (explicit enabled=false disables it in templated configs). The widget is injected into matching HTML pages and every matching request is verified against the Siteverify API BEFORE the backend: a missing/invalid token is answered 403 (readable page for a navigation, JSON otherwise), a Siteverify outage 503 (fail closed). The block is global on purpose: one place to change, no per-host duplication. LIMITATION: it protects only traffic that passes through this Gate One instance; a second ingress, an internal caller or a direct port reaching the application bypasses it. Network isolation (only Gate One can reach the application) remains required. The token is never logged nor written to usage events.",
+      "additionalProperties": false,
+      "required": ["siteKey", "secretEnv"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Explicit switch for templated configurations. Absent = enabled when the block is present."
+        },
+        "siteKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Public Turnstile site key (safe in the page). Cloudflare binds it to a domain list: every public hostname serving the form must be declared there."
+        },
+        "secretEnv": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of the environment variable holding the Turnstile secret key. Required: the secret is only read from the environment, never from this file, and never sent to the browser. Missing/empty variable refuses startup."
+        },
+        "hosts": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Hosts the block applies to: exact hostnames, or a leading *. wildcard on a label boundary (*.example.com). Empty = every route."
+        },
+        "paths": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Paths the block applies to, with the route.path grammar: /contact/* (prefix on a path boundary), an exact path, or /* (everything). Empty = every path. The widget is injected only on matching pages; verification only on matching requests."
+        },
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "enum": ["POST", "PUT", "PATCH", "DELETE"]},
+          "description": "Request methods verified. Default POST. GET/HEAD are never challenged (the page must load before the widget can run)."
+        },
+        "forms": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256},
+          "description": "CSS selectors of the forms that receive the widget. Empty = every POST form on the page. A form marked data-gtw-turnstile=\"off\" is always skipped. An invalid selector is ignored (no injection, no error)."
+        },
+        "action": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,32}$",
+          "description": "Optional action sent with the widget and required in the Siteverify answer (1-32 letters, digits, _ or -). Binds the token to this form: a token obtained for another action is refused."
+        },
+        "hostname": {
+          "type": "string",
+          "description": "Optional expected hostname in the Siteverify answer. Empty = no check (the site key's domain list already constrains it). Useful when one site key serves several hosts and each must be pinned."
+        },
+        "tokenHeader": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+$",
+          "description": "Header accepted in addition to the cf-turnstile-response form field, for fetch/SPA clients. Default X-Turnstile-Response. The injected script attaches the token to same-origin mutating fetches automatically."
+        }
+      }
+    },
     "usage": {
       "type": "object",
       "description": "Out-of-process usage-event bus (WAL + extension plugins). Presence enables it. Events are produced only for the subscribed types; a full durable share is answered with a targeted 503 (health/readyz/auth-probe exempt).",
