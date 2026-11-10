@@ -241,5 +241,6 @@ authorization-code flow and stored refresh token are required.
   the callback never trusts a fresh user-supplied redirect.
 - The broker does not accept provider definitions or endpoints from
   Gate One (no SSRF/secret exfiltration surface).
-- Revocation is best effort; a local disconnect always removes the
-  row.
+- Disconnect pauses; Erase removes the local row. Neither calls the
+  provider: the same credential may be used elsewhere. The user revokes
+  the application authorization at the provider if needed.
