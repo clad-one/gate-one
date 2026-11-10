@@ -410,3 +410,106 @@ func TestDelegatedMCPInjectsToken(t *testing.T) {
 		t.Fatalf("backend Authorization = %q, want Bearer gh-token", gotAuth)
 	}
 }
+
+func TestDelegatedPausedReturns403(t *testing.T) {
+	t.Setenv("DELEGATED_TEST_SECRET", "delegated-secret")
+
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			t.Error("backend must not be called")
+		},
+	))
+	t.Cleanup(backend.Close)
+
+	broker := delegatedBroker(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{
+			"error":"delegation_disabled",
+			"provider":"github",
+			"connect_url":"https://login.test/connections"
+		}`))
+	})
+	bridge := delegatedBridge(t)
+	clearAuthCache()
+	t.Cleanup(clearAuthCache)
+
+	cfg := loadForTest(t, fmt.Sprintf(`{
+		"tokenBroker": {"url": %q, "secretEnv": "DELEGATED_TEST_SECRET"},
+		"routes": [{
+			"host": "api.test", "path": "/*", "backend": %q,
+			"auth": {},
+			"upstream": {"tokenBroker": {"provider": "github"}}
+		}]
+	}`, broker.URL, backend.URL))
+
+	gw, err := New(cfg, WithAuthBridgeURL(bridge.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := doRequestWithHeaders(t, gw, "api.test", "/repos",
+		map[string]string{"Cookie": "access_token=u4"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "delegation_disabled" {
+		t.Fatalf("error = %v", body["error"])
+	}
+	connect, _ := body["connect_url"].(string)
+	if !strings.Contains(connect, "returnTo=") ||
+		!strings.Contains(connect, "api.test") {
+		t.Fatalf("connect_url = %q", connect)
+	}
+}
+
+func TestDelegatedPausedPageRedirects(t *testing.T) {
+	t.Setenv("DELEGATED_TEST_SECRET", "delegated-secret")
+
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			t.Error("backend must not be called")
+		},
+	))
+	t.Cleanup(backend.Close)
+
+	broker := delegatedBroker(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{
+			"error":"delegation_disabled",
+			"provider":"github",
+			"connect_url":"https://login.test/connections"
+		}`))
+	})
+	bridge := delegatedBridge(t)
+	clearAuthCache()
+	t.Cleanup(clearAuthCache)
+
+	cfg := loadForTest(t, fmt.Sprintf(`{
+		"tokenBroker": {"url": %q, "secretEnv": "DELEGATED_TEST_SECRET"},
+		"routes": [{
+			"host": "page.test", "path": "/*", "backend": %q,
+			"frontend": true, "auth": {},
+			"upstream": {"tokenBroker": {"provider": "github"}}
+		}]
+	}`, broker.URL, backend.URL))
+
+	gw, err := New(cfg, WithAuthBridgeURL(bridge.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := doRequestWithHeaders(t, gw, "page.test", "/dashboard",
+		map[string]string{"Cookie": "access_token=u5"})
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); !strings.Contains(loc, "login.test") {
+		t.Fatalf("Location = %q", loc)
+	}
+}

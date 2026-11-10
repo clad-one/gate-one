@@ -165,16 +165,25 @@ func TestDelegatedConfigRejects(t *testing.T) {
 	}
 }
 
-func TestDelegatedIgnoredWithoutRoutes(t *testing.T) {
-	// A tokenBroker block is harmless when no route delegates.
+func TestDelegatedResolvedWithoutRoutes(t *testing.T) {
+	// The Services page (pause/resume/erase) must stay available after
+	// every route stops delegating: a configured broker block is
+	// resolved even with no delegated route.
+	t.Setenv("DELEGATED_CORE_SECRET", "s3cret")
 	cfg, err := loadDelegated(t, `{
-		"tokenBroker": {"secretEnv": "MISSING_DELEGATED_SECRET"},
+		"tokenBroker": {
+			"secretEnv": "DELEGATED_CORE_SECRET",
+			"links": {"services": {"url": "https://login.test/connections"}}
+		},
 		"routes": [{"host":"a.test","path":"/*","backend":"http://backend"}]
 	}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.TokenBroker.SecretValue != "" {
-		t.Fatalf("secret resolved without delegated route")
+	if cfg.TokenBroker.SecretValue != "s3cret" {
+		t.Fatalf("secret not resolved without a delegated route")
+	}
+	if cfg.TokenBroker.BrowserHost != "login.test" {
+		t.Fatalf("browserHost = %q", cfg.TokenBroker.BrowserHost)
 	}
 }

@@ -398,9 +398,8 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			break
 		}
 	}
-	if needsDelegated {
-		if cfg.TokenBroker == nil ||
-			cfg.TokenBroker.URL == "" ||
+	if cfg.TokenBroker != nil {
+		if cfg.TokenBroker.URL == "" ||
 			cfg.TokenBroker.SecretValue == "" {
 			return nil, fmt.Errorf(
 				"upstream.tokenBroker requires tokenBroker configuration")
@@ -413,42 +412,48 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		if err != nil {
 			return nil, err
 		}
+		broker = c
 
-		// Startup only: leave room for Sentinel to converge after a
-		// topology change (the store retries a READONLY replica).
-		ctx, cancel := context.WithTimeout(
-			context.Background(), 15*time.Second)
-		providers, err := c.Providers(ctx)
-		cancel()
-		if err != nil {
-			return nil, fmt.Errorf(
-				"token broker provider validation: %w\n"+
-					"hint: the broker must be reachable at startup to validate "+
-					"delegated providers: start it (make broker-up) before Gate One, "+
-					"or remove the upstream.tokenBroker routes and their mcpSets "+
-					"members (docs/MCP.adoc#token-broker-provider)",
-				err)
-		}
-
-		known := make(map[string]bool, len(providers))
-		for _, p := range providers {
-			known[p.Name] = true
-		}
-		for i := range cfg.Routes {
-			r := &cfg.Routes[i]
-			d := r.UpstreamTokenBroker()
-			if d != nil && !known[d.Provider] && routeExposed(r, live) {
+		// Provider validation is needed only when an exposed route
+		// delegates. The client itself is built whenever the broker is
+		// configured, so the Services page (pause/resume/erase) stays
+		// available even after delegation is removed from every route.
+		if needsDelegated {
+			// Startup only: leave room for Sentinel to converge after a
+			// topology change (the store retries a READONLY replica).
+			ctx, cancel := context.WithTimeout(
+				context.Background(), 15*time.Second)
+			providers, err := c.Providers(ctx)
+			cancel()
+			if err != nil {
 				return nil, fmt.Errorf(
-					"route %s: upstream.tokenBroker.provider %q: unknown or disabled provider\n"+
-						"hint: this route delegates the user's auth to the token broker: "+
-						"configure a %q provider (docs/MCP.adoc#token-broker-provider), "+
-						"or stop delegating / use a shared service token where supported "+
-						"(docs/MCP.adoc#static-service-token), or disable the member that "+
-						"exposes it (member enabled=false)%s",
-					r.Host, d.Provider, d.Provider, setsHint(cfg, r))
+					"token broker provider validation: %w\n"+
+						"hint: the broker must be reachable at startup to validate "+
+						"delegated providers: start it (make broker-up) before Gate One, "+
+						"or remove the upstream.tokenBroker routes and their mcpSets "+
+						"members (docs/MCP.adoc#token-broker-provider)",
+					err)
+			}
+
+			known := make(map[string]bool, len(providers))
+			for _, p := range providers {
+				known[p.Name] = true
+			}
+			for i := range cfg.Routes {
+				r := &cfg.Routes[i]
+				d := r.UpstreamTokenBroker()
+				if d != nil && !known[d.Provider] && routeExposed(r, live) {
+					return nil, fmt.Errorf(
+						"route %s: upstream.tokenBroker.provider %q: unknown or disabled provider\n"+
+							"hint: this route delegates the user's auth to the token broker: "+
+							"configure a %q provider (docs/MCP.adoc#token-broker-provider), "+
+							"or stop delegating / use a shared service token where supported "+
+							"(docs/MCP.adoc#static-service-token), or disable the member that "+
+							"exposes it (member enabled=false)%s",
+						r.Host, d.Provider, d.Provider, setsHint(cfg, r))
+				}
 			}
 		}
-		broker = c
 	}
 
 	// Connector-owned badge links are computed once: account from the
@@ -456,7 +461,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 	// exposed route delegates. The per-route merge (account > services
 	// > application links, dedup by URL) happens at compile time; the
 	// guard only renders the final list.
-	baseLinks := baseUserLinks(cfg, needsDelegated)
+	baseLinks := baseUserLinks(cfg)
 
 	// OpenAPI documents are declared on the page route (openapi
 	// policy) and consumed by the MCP route of the same host: build

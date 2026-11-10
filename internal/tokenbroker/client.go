@@ -40,6 +40,7 @@ type ErrorKind string
 const (
 	KindNotConnected            ErrorKind = "not_connected"
 	KindReauthorizationRequired ErrorKind = "reauthorization_required"
+	KindDelegationDisabled      ErrorKind = "delegation_disabled"
 	KindUnknownProvider         ErrorKind = "unknown_provider"
 	KindUnauthorized            ErrorKind = "unauthorized"
 	KindUpstreamUnavailable     ErrorKind = "upstream_unavailable"
@@ -228,6 +229,12 @@ func (c *Client) Token(
 		}
 	case http.StatusConflict:
 		e.Kind = KindReauthorizationRequired
+	case http.StatusForbidden:
+		if apiErr.Error == string(KindDelegationDisabled) {
+			e.Kind = KindDelegationDisabled
+		} else {
+			e.Kind = KindUnauthorized
+		}
 	case http.StatusUnauthorized:
 		e.Kind = KindUnauthorized
 	case http.StatusBadGateway:
@@ -236,6 +243,59 @@ func (c *Client) Token(
 		e.Kind = KindUnavailable
 	}
 	return nil, e
+}
+
+// Security is the broker's redacted posture (GET /security). It never
+// contains a secret or a token value.
+type Security struct {
+	Status        string   `json:"status"`
+	PublicBaseURL string   `json:"public_base_url"`
+	ReturnToHosts []string `json:"return_to_hosts"`
+	EncryptionKey bool     `json:"encryption_key"`
+	AdminAPI      bool     `json:"admin_api"`
+	RetentionDays int      `json:"retention_days"`
+	Database      struct {
+		Path string `json:"path"`
+		Mode string `json:"mode"`
+	} `json:"database"`
+	Providers []struct {
+		Name            string `json:"name"`
+		PKCE            bool   `json:"pkce"`
+		Refresh         bool   `json:"refresh"`
+		TokenAuthMethod string `json:"token_auth_method"`
+		HTTPS           bool   `json:"https"`
+	} `json:"providers"`
+	Tokens struct {
+		Users   int `json:"users"`
+		Tokens  int `json:"tokens"`
+		Paused  int `json:"paused"`
+		Orphans int `json:"orphans"`
+	} `json:"tokens"`
+}
+
+// Security fetches the redacted posture. The shared secret is used; the
+// admin secret is never needed.
+func (c *Client) Security(ctx context.Context) (*Security, error) {
+	status, body, err := c.get(ctx, c.baseURL+"/security", "")
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, &Error{
+			Kind:    KindUnavailable,
+			Status:  status,
+			Message: "security posture refused",
+		}
+	}
+	var out Security
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, &Error{
+			Kind:    KindInvalidResponse,
+			Status:  status,
+			Message: "invalid security JSON",
+		}
+	}
+	return &out, nil
 }
 
 // Providers lists the enabled providers known by the broker. It is

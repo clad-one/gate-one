@@ -3,7 +3,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { decrypt, encrypt } from "./crypto.js";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export class TokenDecryptionError extends Error {}
 
@@ -37,6 +37,15 @@ const MIGRATIONS = [
 
       CREATE INDEX oauth_states_expires_at
         ON oauth_states (expires_at);
+    `,
+  },
+  {
+    version: 2,
+    sql: `
+      ALTER TABLE tokens
+        ADD COLUMN delegation_enabled INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE tokens ADD COLUMN paused_at INTEGER;
+      ALTER TABLE tokens ADD COLUMN last_used_at INTEGER;
     `,
   },
 ];
@@ -109,7 +118,7 @@ export class TokenStore {
     return true;
   }
 
-  upsertToken({ userId, provider, token }) {
+  upsertToken({ userId, provider, token, enable = false }) {
     const now = Date.now();
     const encryptedAccess = encrypt(this.key, token.accessToken);
     const encryptedRefresh = token.refreshToken
@@ -122,11 +131,11 @@ export class TokenStore {
         INSERT INTO tokens (
           user_id, provider, access_token_enc, refresh_token_enc,
           token_type, scopes, expires_at, refresh_expires_at,
-          created_at, updated_at
+          created_at, updated_at, delegation_enabled, paused_at
         ) VALUES (
           @userId, @provider, @accessTokenEnc, @refreshTokenEnc,
           @tokenType, @scopes, @expiresAt, @refreshExpiresAt,
-          @now, @now
+          @now, @now, 1, NULL
         )
         ON CONFLICT(user_id, provider) DO UPDATE SET
           access_token_enc   = excluded.access_token_enc,
@@ -135,7 +144,12 @@ export class TokenStore {
           scopes             = excluded.scopes,
           expires_at         = excluded.expires_at,
           refresh_expires_at = excluded.refresh_expires_at,
-          updated_at         = excluded.updated_at
+          updated_at         = excluded.updated_at,
+          -- A fresh consent (enable=true) resumes the delegation; a
+          -- refresh keeps the current pause state.
+          delegation_enabled = CASE WHEN @enable THEN 1
+                                    ELSE tokens.delegation_enabled END,
+          paused_at = CASE WHEN @enable THEN NULL ELSE tokens.paused_at END
         `
       )
       .run({
@@ -148,6 +162,7 @@ export class TokenStore {
         expiresAt: token.expiresAt ?? null,
         refreshExpiresAt: token.refreshExpiresAt ?? null,
         now,
+        enable: enable ? 1 : 0,
       });
   }
 
@@ -157,7 +172,8 @@ export class TokenStore {
         `
         SELECT user_id, provider, access_token_enc, refresh_token_enc,
                token_type, scopes, expires_at, refresh_expires_at,
-               created_at, updated_at
+               created_at, updated_at, delegation_enabled, paused_at,
+               last_used_at
         FROM tokens
         WHERE user_id = ? AND provider = ?
         `
@@ -180,6 +196,9 @@ export class TokenStore {
         refreshExpiresAt: row.refresh_expires_at,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        delegationEnabled: Boolean(row.delegation_enabled),
+        pausedAt: row.paused_at,
+        lastUsedAt: row.last_used_at,
       };
     } catch (err) {
       throw new TokenDecryptionError(
@@ -194,7 +213,8 @@ export class TokenStore {
         `
         SELECT provider, scopes, expires_at, refresh_expires_at,
                refresh_token_enc IS NOT NULL AS has_refresh_token,
-               updated_at
+               updated_at, created_at, delegation_enabled, paused_at,
+               last_used_at
         FROM tokens
         WHERE user_id = ?
         `
@@ -208,6 +228,10 @@ export class TokenStore {
       refreshExpiresAt: row.refresh_expires_at,
       hasRefreshToken: Boolean(row.has_refresh_token),
       updatedAt: row.updated_at,
+      createdAt: row.created_at,
+      delegationEnabled: Boolean(row.delegation_enabled),
+      pausedAt: row.paused_at,
+      lastUsedAt: row.last_used_at,
     }));
   }
 
@@ -216,6 +240,112 @@ export class TokenStore {
       .prepare("DELETE FROM tokens WHERE user_id = ? AND provider = ?")
       .run(userId, provider);
     return result.changes > 0;
+  }
+
+  deleteAllTokens(userId) {
+    return this.db
+      .prepare("DELETE FROM tokens WHERE user_id = ?")
+      .run(userId).changes;
+  }
+
+  setDelegation(userId, provider, enabled) {
+    const result = this.db
+      .prepare(
+        `
+        UPDATE tokens
+        SET delegation_enabled = ?, paused_at = ?
+        WHERE user_id = ? AND provider = ?
+        `
+      )
+      .run(enabled ? 1 : 0, enabled ? null : Date.now(), userId, provider);
+    return result.changes > 0;
+  }
+
+  setDelegationAll(userId, enabled) {
+    return this.db
+      .prepare(
+        `
+        UPDATE tokens
+        SET delegation_enabled = ?, paused_at = ?
+        WHERE user_id = ?
+        `
+      )
+      .run(enabled ? 1 : 0, enabled ? null : Date.now(), userId).changes;
+  }
+
+  markUsed(userId, provider) {
+    this.db
+      .prepare(
+        "UPDATE tokens SET last_used_at = ? WHERE user_id = ? AND provider = ?"
+      )
+      .run(Date.now(), userId, provider);
+  }
+
+  // listUsers feeds the operator API: one row per user, no token and no
+  // provider detail.
+  listUsers() {
+    return this.db
+      .prepare(
+        `
+        SELECT user_id,
+               COUNT(*) AS connections,
+               SUM(CASE WHEN delegation_enabled = 0 THEN 1 ELSE 0 END)
+                 AS paused,
+               MAX(COALESCE(last_used_at, updated_at, created_at))
+                 AS last_activity
+        FROM tokens
+        GROUP BY user_id
+        ORDER BY last_activity DESC
+        `
+      )
+      .all()
+      .map((row) => ({
+        userId: row.user_id,
+        connections: row.connections,
+        paused: row.paused,
+        lastActivity: row.last_activity,
+      }));
+  }
+
+  // purgePausedBefore enforces the optional retention: paused rows only,
+  // never an active delegation.
+  purgePausedBefore(cutoff) {
+    return this.db
+      .prepare(
+        `
+        DELETE FROM tokens
+        WHERE delegation_enabled = 0
+          AND paused_at IS NOT NULL
+          AND paused_at <= ?
+        `
+      )
+      .run(cutoff).changes;
+  }
+
+  providerNames() {
+    return this.db
+      .prepare("SELECT DISTINCT provider FROM tokens ORDER BY provider")
+      .all()
+      .map((row) => row.provider);
+  }
+
+  stats() {
+    const row = this.db
+      .prepare(
+        `
+        SELECT COUNT(*) AS tokens,
+               COUNT(DISTINCT user_id) AS users,
+               SUM(CASE WHEN delegation_enabled = 0 THEN 1 ELSE 0 END)
+                 AS paused
+        FROM tokens
+        `
+      )
+      .get();
+    return {
+      tokens: row.tokens || 0,
+      users: row.users || 0,
+      paused: row.paused || 0,
+    };
   }
 
   createState({

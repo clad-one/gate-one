@@ -179,3 +179,112 @@ test("authorization states are one-time and expire", (t) => {
   });
   assert.equal(store.purgeExpiredStates(), 1);
 });
+
+test("pause keeps the credential and resume restores the delegation", (t) => {
+  const { store, cleanup } = tempStore();
+  t.after(cleanup);
+
+  store.upsertToken({
+    userId: "user-1",
+    provider: "mock",
+    token: {
+      accessToken: "a",
+      refreshToken: "r",
+      tokenType: "Bearer",
+      scopes: [],
+      expiresAt: null,
+      refreshExpiresAt: null,
+    },
+  });
+
+  assert.equal(store.getToken("user-1", "mock").delegationEnabled, true);
+  assert.equal(store.setDelegation("user-1", "mock", false), true);
+  const paused = store.getToken("user-1", "mock");
+  assert.equal(paused.delegationEnabled, false);
+  assert.equal(paused.accessToken, "a");
+  assert.ok(paused.pausedAt > 0);
+
+  assert.equal(store.setDelegation("user-1", "mock", true), true);
+  const resumed = store.getToken("user-1", "mock");
+  assert.equal(resumed.delegationEnabled, true);
+  assert.equal(resumed.pausedAt, null);
+});
+
+test("a fresh consent re-enables a paused delegation", (t) => {
+  const { store, cleanup } = tempStore();
+  t.after(cleanup);
+
+  const token = {
+    accessToken: "a",
+    refreshToken: "r",
+    tokenType: "Bearer",
+    scopes: [],
+    expiresAt: null,
+    refreshExpiresAt: null,
+  };
+  store.upsertToken({ userId: "u", provider: "p", token });
+  store.setDelegation("u", "p", false);
+  store.upsertToken({ userId: "u", provider: "p", token: { ...token, accessToken: "b" }, enable: true });
+  const row = store.getToken("u", "p");
+  assert.equal(row.delegationEnabled, true);
+  assert.equal(row.accessToken, "b");
+});
+
+test("retention purges paused rows only", (t) => {
+  const { store, cleanup } = tempStore();
+  t.after(cleanup);
+
+  const token = {
+    accessToken: "a",
+    refreshToken: null,
+    tokenType: "Bearer",
+    scopes: [],
+    expiresAt: null,
+    refreshExpiresAt: null,
+  };
+  store.upsertToken({ userId: "u", provider: "active", token });
+  store.upsertToken({ userId: "u", provider: "paused", token });
+  store.setDelegation("u", "paused", false);
+
+  // Old pause: force paused_at into the past.
+  store.db
+    .prepare("UPDATE tokens SET paused_at = ? WHERE provider = 'paused'")
+    .run(Date.now() - 10 * 24 * 3600 * 1000);
+
+  const removed = store.purgePausedBefore(
+    Date.now() - 5 * 24 * 3600 * 1000
+  );
+  assert.equal(removed, 1);
+  assert.ok(store.getToken("u", "active"));
+  assert.equal(store.getToken("u", "paused"), null);
+});
+
+test("operator aggregates list users and provider names without tokens", (t) => {
+  const { store, cleanup } = tempStore();
+  t.after(cleanup);
+
+  const token = {
+    accessToken: "secret",
+    refreshToken: null,
+    tokenType: "Bearer",
+    scopes: [],
+    expiresAt: null,
+    refreshExpiresAt: null,
+  };
+  store.upsertToken({ userId: "u1", provider: "p", token });
+  store.upsertToken({ userId: "u1", provider: "gone", token });
+  store.setDelegation("u1", "gone", false);
+
+  const users = store.listUsers();
+  assert.equal(users.length, 1);
+  assert.equal(users[0].userId, "u1");
+  assert.equal(users[0].connections, 2);
+  assert.equal(users[0].paused, 1);
+  assert.equal(JSON.stringify(users).includes("secret"), false);
+
+  assert.deepEqual(store.providerNames().sort(), ["gone", "p"]);
+  const stats = store.stats();
+  assert.equal(stats.users, 1);
+  assert.equal(stats.tokens, 2);
+  assert.equal(stats.paused, 1);
+});

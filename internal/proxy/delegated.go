@@ -77,6 +77,9 @@ func (g *Gateway) writeDelegatedError(
 	case tokenbroker.KindReauthorizationRequired:
 		status = http.StatusConflict
 		code = "reauthorization_required"
+	case tokenbroker.KindDelegationDisabled:
+		status = http.StatusForbidden
+		code = "delegation_disabled"
 	case tokenbroker.KindUnknownProvider:
 		status = http.StatusInternalServerError
 		code = "delegated_provider_misconfigured"
@@ -107,7 +110,8 @@ func (g *Gateway) writeDelegatedError(
 
 	if cr != nil && cr.pageRoute &&
 		(kind == tokenbroker.KindNotConnected ||
-			kind == tokenbroker.KindReauthorizationRequired) {
+			kind == tokenbroker.KindReauthorizationRequired ||
+			kind == tokenbroker.KindDelegationDisabled) {
 
 		if connectURL != "" {
 			http.Redirect(w, r, connectURL, http.StatusFound)
@@ -134,7 +138,8 @@ func (g *Gateway) writeDelegatedError(
 	}
 	if connectURL != "" &&
 		(kind == tokenbroker.KindNotConnected ||
-			kind == tokenbroker.KindReauthorizationRequired) {
+			kind == tokenbroker.KindReauthorizationRequired ||
+			kind == tokenbroker.KindDelegationDisabled) {
 		out["connect_url"] = connectURL
 	}
 	_ = json.NewEncoder(w).Encode(out)

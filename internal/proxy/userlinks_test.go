@@ -28,23 +28,20 @@ func testLinksConfig() *core.Config {
 	}
 }
 
-func TestBaseUserLinksHonoursHasDelegated(t *testing.T) {
+func TestBaseUserLinksAlwaysShowsServices(t *testing.T) {
 	cfg := testLinksConfig()
 
-	with := baseUserLinks(cfg, true)
-	if len(with) != 2 {
-		t.Fatalf("hasDelegated=true links = %+v, want account+services", with)
+	// The Services page is the user's control surface (pause/resume and
+	// erase); it must stay reachable even when no route delegates.
+	links := baseUserLinks(cfg)
+	if len(links) != 2 {
+		t.Fatalf("links = %+v, want account+services", links)
 	}
-	if with[0].Label != "Account" || with[0].Target != "_blank" {
-		t.Errorf("account defaults = %+v", with[0])
+	if links[0].Label != "Account" || links[0].Target != "_blank" {
+		t.Errorf("account defaults = %+v", links[0])
 	}
-	if with[1].Label != "Services" || with[1].Target != "_blank" {
-		t.Errorf("services defaults = %+v", with[1])
-	}
-
-	without := baseUserLinks(cfg, false)
-	if len(without) != 1 || without[0].Label != "Account" {
-		t.Errorf("hasDelegated=false links = %+v, want account only", without)
+	if links[1].Label != "Services" || links[1].Target != "_blank" {
+		t.Errorf("services defaults = %+v", links[1])
 	}
 }
 
@@ -116,10 +113,12 @@ func TestGatewayMergesUserBadgeLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	links := gw.routes[0].route.UserBadge.Links
-	// No delegated route in this config: services must be omitted.
-	if len(links) != 2 ||
+	// No delegated route in this config: the Services link must still
+	// be present (the page is the user's pause/resume/erase surface).
+	if len(links) != 3 ||
 		links[0].Label != "Account" ||
-		links[1].Label != "Status" {
-		t.Fatalf("merged links = %+v, want account+status", links)
+		links[1].Label != "Services" ||
+		links[2].Label != "Status" {
+		t.Fatalf("merged links = %+v, want account+services+status", links)
 	}
 }

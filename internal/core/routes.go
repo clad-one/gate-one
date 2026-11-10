@@ -4385,13 +4385,12 @@ func (c *Config) resolveTokenBroker() error {
 			break
 		}
 	}
-	if !needs {
-		return nil
-	}
-
 	if c.TokenBroker == nil {
-		return fmt.Errorf(
-			"upstream.tokenBroker requires the top-level tokenBroker block")
+		if needs {
+			return fmt.Errorf(
+				"upstream.tokenBroker requires the top-level tokenBroker block")
+		}
+		return nil
 	}
 	tb := c.TokenBroker
 

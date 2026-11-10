@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 
@@ -20,7 +19,7 @@ const maxMergedUserLinks = 8
 //   - tokenBroker.links.services: the token-broker connections page,
 //     only when an exposed route actually delegates (the gateway is
 //     the only component that knows this; the connector cannot).
-func baseUserLinks(cfg *core.Config, hasDelegated bool) []core.UserLink {
+func baseUserLinks(cfg *core.Config) []core.UserLink {
 	var out []core.UserLink
 
 	if cfg.AuthProvider != nil && cfg.AuthProvider.Links != nil {
@@ -31,13 +30,10 @@ func baseUserLinks(cfg *core.Config, hasDelegated bool) []core.UserLink {
 
 	if cfg.TokenBroker != nil && cfg.TokenBroker.Links != nil {
 		if l := cfg.TokenBroker.Links.Services; l != nil {
-			if hasDelegated {
-				out = append(out, normalizeUserLink(*l, "Services"))
-			} else {
-				log.Printf(
-					"USERLINKS: tokenBroker.links.services is configured " +
-						"but no exposed route delegates — link hidden")
-			}
+			// Always shown when the broker is configured: the page is
+			// where the user pauses the delegation and erases their
+			// stored credentials, even when no route delegates.
+			out = append(out, normalizeUserLink(*l, "Services"))
 		}
 	}
 

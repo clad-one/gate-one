@@ -24,8 +24,28 @@ function main() {
     } catch (err) {
       console.error(`token-broker: state purge failed: ${err.message}`);
     }
+    purgeRetention();
   }, 10 * 60 * 1000);
   purgeTimer.unref();
+
+  // Optional retention: paused connections only, never an active
+  // delegation. retentionDays = 0 (default) disables it entirely.
+  function purgeRetention() {
+    if (!config.retentionDays) return;
+    try {
+      const cutoff =
+        Date.now() - config.retentionDays * 24 * 60 * 60 * 1000;
+      const removed = store.purgePausedBefore(cutoff);
+      if (removed > 0) {
+        console.log(
+          `token-broker: retention purged ${removed} paused connection(s)`
+        );
+      }
+    } catch (err) {
+      console.error(`token-broker: retention purge failed: ${err.message}`);
+    }
+  }
+  purgeRetention();
 
   const tokenService = new TokenService({ store, config });
   const app = createApp({ config, providers, store, tokenService });

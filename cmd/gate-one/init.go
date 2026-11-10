@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"cladone/gate-one/internal/core"
 	"cladone/gate-one/internal/proxy"
+	"cladone/gate-one/internal/tokenbroker"
 )
 
 // runInit writes a minimal, working api-routes.json.
@@ -292,6 +295,12 @@ func runDoctor(args []string) int {
 	}
 	fmt.Println("provider health: OK")
 
+	if tb := cfg.TokenBroker; tb != nil {
+		if !checkTokenBrokerDoctor(tb) {
+			return 1
+		}
+	}
+
 	if len(cfg.Routes) == 0 {
 		fmt.Fprintln(os.Stderr, "doctor: no routes")
 		return 1
@@ -299,6 +308,59 @@ func runDoctor(args []string) int {
 	fmt.Printf("routes: %d compiled\n", len(cfg.Routes))
 	fmt.Println("doctor: ready")
 	return 0
+}
+
+// checkTokenBrokerDoctor reports the broker's redacted posture and the
+// operator-facing configuration warnings. It never prints a secret.
+func checkTokenBrokerDoctor(tb *core.TokenBrokerConfig) bool {
+	if tb.BrowserHost == "" {
+		fmt.Fprintln(os.Stderr,
+			"token broker: WARN: browserHost is empty — the Services page is unavailable")
+	}
+	client, err := tokenbroker.New(tb.URL, tb.SecretValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "token broker: WARN: %v\n", err)
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	sec, err := client.Security(ctx)
+	cancel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"token broker: WARN: posture unavailable: %v\n", err)
+		return true
+	}
+	fmt.Printf(
+		"token broker: %s base=%s encryption=%v admin_api=%v retention=%dd db=%s providers=%d tokens=%d users=%d paused=%d orphans=%d\n",
+		sec.Status,
+		sec.PublicBaseURL,
+		sec.EncryptionKey,
+		sec.AdminAPI,
+		sec.RetentionDays,
+		sec.Database.Mode,
+		len(sec.Providers),
+		sec.Tokens.Tokens,
+		sec.Tokens.Users,
+		sec.Tokens.Paused,
+		sec.Tokens.Orphans,
+	)
+	if !sec.EncryptionKey {
+		fmt.Fprintln(os.Stderr,
+			"token broker: FAIL: token encryption is not enabled")
+		return false
+	}
+	if sec.Database.Mode != "" &&
+		sec.Database.Mode != "0600" && sec.Database.Mode != "600" {
+		fmt.Fprintf(os.Stderr,
+			"token broker: WARN: database mode %s (expected 0600)\n",
+			sec.Database.Mode)
+	}
+	if sec.Tokens.Orphans > 0 {
+		fmt.Fprintf(os.Stderr,
+			"token broker: WARN: %d stored credential(s) belong to a disabled/removed provider (user erase or admin delete)\n",
+			sec.Tokens.Orphans)
+	}
+	return true
 }
 
 func loadConfig(path, authBridge string) (*core.Config, error) {

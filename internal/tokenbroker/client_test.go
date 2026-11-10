@@ -76,6 +76,14 @@ func TestTokenErrors(t *testing.T) {
 			connect:    "https://login.test/connect/github",
 		},
 		{
+			name:       "delegation paused",
+			status:     http.StatusForbidden,
+			body:       `{"error":"delegation_disabled","provider":"github","connect_url":"https://login.test/connections"}`,
+			wantKind:   KindDelegationDisabled,
+			wantStatus: http.StatusForbidden,
+			connect:    "https://login.test/connections",
+		},
+		{
 			name:       "unknown provider",
 			status:     http.StatusNotFound,
 			body:       `{"error":"unknown_provider"}`,
@@ -221,5 +229,47 @@ func TestTokenPathEscaped(t *testing.T) {
 	}
 	if !strings.HasSuffix(path, "/token/git%20hub") {
 		t.Fatalf("path = %q", path)
+	}
+}
+
+func TestSecurityPosture(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/security" {
+				t.Errorf("path = %q", r.URL.Path)
+			}
+			if r.Header.Get("X-Broker-Secret") != "secret" {
+				t.Errorf("missing shared secret")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"status":"ok",
+				"public_base_url":"https://login.test",
+				"return_to_hosts":[".test"],
+				"encryption_key":true,
+				"admin_api":true,
+				"retention_days":0,
+				"database":{"path":"/data/broker.db","mode":"0600"},
+				"providers":[{"name":"github","pkce":false,"refresh":true,"token_auth_method":"client_secret_post","https":true}],
+				"tokens":{"users":2,"tokens":3,"paused":1,"orphans":0}
+			}`))
+		},
+	))
+	defer srv.Close()
+
+	c, err := New(srv.URL, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := c.Security(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sec.Status != "ok" || !sec.EncryptionKey || !sec.AdminAPI {
+		t.Fatalf("posture = %+v", sec)
+	}
+	if sec.Database.Mode != "0600" || sec.Tokens.Paused != 1 ||
+		len(sec.Providers) != 1 || !sec.Providers[0].HTTPS {
+		t.Fatalf("posture = %+v", sec)
 	}
 }

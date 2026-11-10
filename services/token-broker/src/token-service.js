@@ -6,7 +6,6 @@ import {
   newPkcePair,
   OAuthError,
   refreshAccessToken,
-  revokeToken,
 } from "./oauth.js";
 import { callbackUrl, connectUrl } from "./urls.js";
 
@@ -14,6 +13,14 @@ export class NotConnectedError extends Error {
   constructor(provider) {
     super(`no token stored for ${provider}`);
     this.name = "NotConnectedError";
+    this.provider = provider;
+  }
+}
+
+export class DelegationDisabledError extends Error {
+  constructor(provider) {
+    super(`delegation is paused for ${provider}`);
+    this.name = "DelegationDisabledError";
     this.provider = provider;
   }
 }
@@ -52,6 +59,52 @@ export class OAuthCallbackError extends Error {
     this.description = description;
     this.returnTo = returnTo;
   }
+}
+
+function buildConnection(
+  name,
+  displayName,
+  providerScopes,
+  summary,
+  config,
+  now,
+  orphan = false
+) {
+  const connected = Boolean(summary);
+  const delegationEnabled = connected
+    ? summary.delegationEnabled !== false
+    : false;
+  const paused = connected && !delegationEnabled;
+  const reauth = Boolean(
+    summary &&
+      delegationEnabled &&
+      ((summary.expiresAt &&
+        summary.expiresAt <= now &&
+        !summary.hasRefreshToken) ||
+        (summary.refreshExpiresAt && summary.refreshExpiresAt <= now))
+  );
+
+  return {
+    name,
+    provider: name,
+    display_name: displayName,
+    scopes: summary?.scopes?.length ? summary.scopes : [...providerScopes],
+    connected,
+    delegation_enabled: delegationEnabled,
+    paused,
+    paused_at: summary?.pausedAt ?? null,
+    last_used_at: summary?.lastUsedAt ?? null,
+    created_at: summary?.createdAt ?? null,
+    updated_at: summary?.updatedAt ?? null,
+    expires_at: summary?.expiresAt ?? null,
+    refresh_expires_at: summary?.refreshExpiresAt ?? null,
+    has_refresh_token: summary?.hasRefreshToken ?? false,
+    reauth_required: reauth,
+    // A removed/disabled provider cannot be connected again from the
+    // page; it can only be erased.
+    orphan: Boolean(orphan),
+    connect_url: orphan ? null : connectUrl(config, name),
+  };
 }
 
 export class TokenService {
@@ -139,6 +192,7 @@ export class TokenService {
       userId: stateRow.userId,
       provider: provider.name,
       token,
+      enable: true,
     });
 
     return { userId: stateRow.userId, returnTo: stateRow.returnTo };
@@ -148,13 +202,26 @@ export class TokenService {
     const row = this.store.getToken(userId, provider.name);
     if (!row) throw new NotConnectedError(provider.name);
 
-    if (!this.#needsRefresh(row)) return row;
+    if (!row.delegationEnabled) {
+      throw new DelegationDisabledError(provider.name);
+    }
+
+    if (!this.#needsRefresh(row)) {
+      this.store.markUsed(userId, provider.name);
+      return row;
+    }
 
     if (!provider.refresh || !row.refreshToken) {
       throw new ReauthorizationRequiredError(provider.name);
     }
 
-    return this.#refreshWithSingleFlight({ userId, provider, row });
+    const refreshed = await this.#refreshWithSingleFlight({
+      userId,
+      provider,
+      row,
+    });
+    this.store.markUsed(userId, provider.name);
+    return refreshed;
   }
 
   async #refreshWithSingleFlight({ userId, provider, row }) {
@@ -236,44 +303,35 @@ export class TokenService {
     return row.expiresAt <= Date.now() + this.config.refreshSkewMs;
   }
 
-  async disconnect({ userId, provider }) {
-    const row = this.store.getToken(userId, provider.name);
-    if (!row) return false;
+  // pause: Disconnect for the user (or Pause for the operator). It
+  // never touches the provider and never deletes the credential.
+  pause({ userId, provider }) {
+    return this.store.setDelegation(userId, provider, false);
+  }
 
-    if (provider.revocationEndpoint) {
-      // Revocation is best effort: not every provider exposes a
-      // revocation endpoint, and a provider outage must not prevent a
-      // local disconnect.
-      if (row.refreshToken) {
-        try {
-          await revokeToken(provider, {
-            token: row.refreshToken,
-            tokenTypeHint: "refresh_token",
-            fetchImpl: this.fetchImpl,
-            timeoutMs: this.config.httpTimeoutMs,
-          });
-        } catch (err) {
-          this.logger.warn(
-            `token revocation failed for provider ${provider.name}: ${err.message}`
-          );
-        }
-      }
+  // resume: Connect for a paused delegation. Returns whether a row
+  // existed; the caller decides whether the token is usable (the page
+  // falls back to the OAuth flow when it is not).
+  resume({ userId, provider }) {
+    return this.store.setDelegation(userId, provider, true);
+  }
 
-      try {
-        await revokeToken(provider, {
-          token: row.accessToken,
-          tokenTypeHint: "access_token",
-          fetchImpl: this.fetchImpl,
-          timeoutMs: this.config.httpTimeoutMs,
-        });
-      } catch (err) {
-        this.logger.warn(
-          `token revocation failed for provider ${provider.name}: ${err.message}`
-        );
-      }
-    }
+  pauseAll({ userId }) {
+    return this.store.setDelegationAll(userId, false);
+  }
 
-    return this.store.deleteToken(userId, provider.name);
+  resumeAll({ userId }) {
+    return this.store.setDelegationAll(userId, true);
+  }
+
+  // erase: local deletion only. The provider is never called: the
+  // user's credential may be used elsewhere.
+  erase({ userId, provider }) {
+    return this.store.deleteToken(userId, provider);
+  }
+
+  eraseAll({ userId }) {
+    return this.store.deleteAllTokens(userId);
   }
 
   listConnections(userId, providers) {
@@ -283,33 +341,42 @@ export class TokenService {
         .map((summary) => [summary.provider, summary])
     );
     const now = Date.now();
+    const enabled = new Set(providers.map((p) => p.name));
 
-    return providers
-      .map((provider) => {
-        const summary = summaries.get(provider.name);
-        const connected = Boolean(summary);
+    const rows = providers.map((provider) =>
+      buildConnection(provider.name, provider.displayName, provider.scopes,
+        summaries.get(provider.name), this.config, now, false)
+    );
 
-        return {
-          name: provider.name,
-          display_name: provider.displayName,
-          scopes: summary?.scopes?.length ? summary.scopes : [...provider.scopes],
-          connected,
-          expires_at: summary?.expiresAt ?? null,
-          refresh_expires_at: summary?.refreshExpiresAt ?? null,
-          has_refresh_token: summary?.hasRefreshToken ?? false,
-          updated_at: summary?.updatedAt ?? null,
-          reauth_required: Boolean(
-            summary &&
-              ((summary.expiresAt &&
-                summary.expiresAt <= now &&
-                !summary.hasRefreshToken) ||
-                (summary.refreshExpiresAt &&
-                  summary.refreshExpiresAt <= now))
-          ),
-          connect_url: connectUrl(this.config, provider.name),
-        };
-      })
-      .sort((a, b) => a.display_name.localeCompare(b.display_name));
+    // Providers disabled or removed from the registry still have a
+    // stored row: the user must be able to erase it.
+    for (const [name, summary] of summaries) {
+      if (enabled.has(name)) continue;
+      rows.push(buildConnection(name, name, [], summary, this.config, now,
+        true));
+    }
+
+    return rows.sort((a, b) =>
+      a.display_name.localeCompare(b.display_name));
+  }
+
+  // listAllConnections is the operator view: every stored row for one
+  // user, with no token value and no provider write path.
+  listAllConnections(userId, providers) {
+    const byName = new Map(providers.map((p) => [p.name, p]));
+    const now = Date.now();
+    return this.store.listTokenSummaries(userId).map((summary) => {
+      const provider = byName.get(summary.provider) || null;
+      return buildConnection(
+        summary.provider,
+        provider ? provider.displayName : summary.provider,
+        provider ? provider.scopes : [],
+        summary,
+        this.config,
+        now,
+        !provider
+      );
+    });
   }
 
   connectUrl(provider, returnTo) {

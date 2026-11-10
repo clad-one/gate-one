@@ -6,6 +6,7 @@ import (
 )
 
 func TestUserLinksLoadAndDefaults(t *testing.T) {
+	t.Setenv("TOKEN_BROKER_SHARED_SECRET", "test-secret")
 	cfg, err := loadAuthTest(t, `{
 		"authProvider": {
 			"type": "http-bridge",

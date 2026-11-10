@@ -112,6 +112,17 @@ export function loadConfig(env = process.env) {
     providersFile:
       env.TOKEN_BROKER_PROVIDERS_FILE || "/app/providers.json",
     sharedSecret: env.TOKEN_BROKER_SHARED_SECRET,
+    // Operator API. Absent = the admin endpoints are disabled (404):
+    // Gate One does not hold this secret, so it cannot manage users.
+    adminSecret: (env.TOKEN_BROKER_ADMIN_SECRET || "").trim() || null,
+    // Optional retention for PAUSED connections only. 0 = keep forever
+    // (the default); active delegations are never purged.
+    retentionDays: integerEnv(
+      env,
+      "TOKEN_BROKER_RETENTION_DAYS",
+      0,
+      { min: 0, max: 36500 }
+    ),
     encryptionKey,
     publicBaseUrl,
     returnToHosts: parseReturnToHosts(

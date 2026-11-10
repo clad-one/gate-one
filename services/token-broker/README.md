@@ -6,6 +6,11 @@ auth-bridge); this service obtains and stores the *user's* token for an
 upstream service (GitHub, etc.) so the gateway can call that service on
 the user's behalf.
 
+Disconnect is a **pause**: the credential stays stored and Connect
+resumes it. **Erase** deletes the local credential and never calls the
+provider (the user may use the same credential elsewhere). See the
+`/connections` page and the operator API below.
+
 It is deliberately **not** a reverse proxy and **not** an identity
 provider.
 
@@ -29,6 +34,10 @@ Gate One ──► upstream API with that token
   environment, never in Gate One's configuration.
 - The provider registry (endpoints, client id, scopes) lives here too;
   Gate One only references a provider **name**.
+- Destructive browser actions require a signed CSRF token (bound to the
+  user) and a same-origin `Origin`/`Sec-Fetch-Site`.
+- The operator API uses a **separate** admin secret; Gate One does not
+  hold it. It can list/pause/resume/delete but never writes a credential.
 
 ## Endpoints
 
@@ -36,17 +45,24 @@ Gate One ──► upstream API with that token
 |---|---|---|---|
 | `GET` | `/health` | internal | liveness/readiness, no auth |
 | `GET` | `/providers` | internal | enabled provider names + connection status |
-| `GET` | `/connections` | browser via auth-bridge | HTML/JSON list, connect/disconnect |
-| `POST` | `/connections/{provider}/disconnect` | browser via auth-bridge | delete local token (and best-effort revoke) |
-| `GET` | `/connect/{provider}` | browser via auth-bridge | start authorization code flow |
-| `GET` | `/oauth/{provider}/callback` | provider → auth-bridge → here | exchange code, store tokens |
+| `GET` | `/connections` | browser via Gate One | HTML/JSON list, states and actions |
+| `POST` | `/connections/{provider}/disconnect` | browser | pause the delegation (no delete, no provider call) |
+| `POST` | `/connections/{provider}/connect` | browser | resume a paused delegation (OAuth fallback) |
+| `POST` | `/connections/{provider}/erase` | browser | delete the local credential (no provider call) |
+| `POST` | `/connections/erase-all` | browser | delete every credential of the user |
+| `GET` | `/connect/{provider}` | browser | start authorization code flow |
+| `GET` | `/oauth/{provider}/callback` | provider → Gate One → here | exchange code, store tokens |
 | `GET` | `/token/{provider}` | Gate One | fresh access token or an explicit error |
-| `DELETE` | `/token/{provider}` | Gate One | disconnect / delete |
+| `DELETE` | `/token/{provider}` | Gate One | internal local deletion (works for a disabled provider) |
+| `GET` | `/security` | operator/Gate One | redacted security posture (shared secret) |
+| `GET/POST/DELETE` | `/admin/...` | operator | list/pause/resume/delete (separate admin secret, no credential write) |
 
 `/token/{provider}` responses:
 
 - `200` — `{access_token, token_type, expires_at, scopes, provider}`
 - `404` — `not_connected`, with a `connect_url`
+- `403` — `delegation_disabled` (the user paused the delegation; the
+  credential is kept), with a `connect_url`
 - `409` — `reauthorization_required` (refresh token rejected; the local
   row is deleted), with a `connect_url`
 - `502` — `upstream_unavailable` (provider/network failure; the row is
@@ -89,7 +105,7 @@ Fields:
 | `pkce` | send S256 PKCE (default `true`) |
 | `refresh` | allow refresh-token grant (default `true`) |
 | `token_auth_method` | `client_secret_post` (default), `client_secret_basic`, `none` |
-| `revocation_endpoint` | optional RFC 7009 endpoint; local delete always happens |
+| `revocation_endpoint` | accepted but **not used**: erase is local only (the credential may be used elsewhere) |
 | `authorization_params` | extra string params; protocol params cannot be overridden |
 
 Adding Google/Slack/another OAuth 2.0 service is a registry entry, not a
@@ -110,6 +126,8 @@ All configuration is environment-based:
 | `TOKEN_BROKER_STATE_TTL_SECONDS` | no | `600` | authorization state lifetime |
 | `TOKEN_BROKER_REFRESH_SKEW_SECONDS` | no | `60` | refresh this long before expiry |
 | `TOKEN_BROKER_HTTP_TIMEOUT_SECONDS` | no | `15` | provider HTTP timeout |
+| `TOKEN_BROKER_ADMIN_SECRET` | no | — | operator API (`X-Broker-Admin-Secret`); absent = disabled (404) |
+| `TOKEN_BROKER_RETENTION_DAYS` | no | `0` | purge **paused** connections after N days; 0 = keep forever |
 
 ## Storage
 

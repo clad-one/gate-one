@@ -107,6 +107,14 @@ async function setup(t, { providerOverrides = {}, configOverrides = {} } = {}) {
   };
 }
 
+function csrfFrom(html) {
+  const meta = html.match(/name="csrf-token" content="([^"]+)"/);
+  if (meta) return meta[1];
+  const input = html.match(/name="_csrf" value="([^"]+)"/);
+  assert.ok(input, "the connections page must carry a CSRF token");
+  return input[1];
+}
+
 async function beginConnect(base, returnTo = "https://app.example/welcome") {
   const res = await fetch(
     `${base}/connect/mock?returnTo=${encodeURIComponent(returnTo)}`,
@@ -190,9 +198,8 @@ test("full authorization-code flow: connect, callback, token, disconnect", async
   });
   assert.equal(disconnected.status, 204);
 
-  assert.equal(fake.state.revokeRequests.length, 2);
-  assert.equal(fake.state.revokeRequests[0].token_type_hint, "refresh_token");
-  assert.equal(fake.state.revokeRequests[1].token_type_hint, "access_token");
+  // Local deletion only: the provider is never contacted.
+  assert.equal(fake.state.revokeRequests.length, 0);
 
   const missing = await fetch(`${base}/token/mock`, { headers: auth() });
   assert.equal(missing.status, 404);
@@ -416,4 +423,198 @@ test("health and providers endpoints expose no credentials", async (t) => {
   assert.equal(body.providers[0].connected, false);
   assert.equal(JSON.stringify(body).includes("secret-1"), false);
   assert.equal(JSON.stringify(body).includes("client-1"), false);
+});
+
+async function login(base, fake) {
+  const authorize = await beginConnect(base);
+  fake.state.expectedRedirectUri = authorize.searchParams.get("redirect_uri");
+  fake.state.expectedChallenge = authorize.searchParams.get("code_challenge");
+  const state = authorize.searchParams.get("state");
+  const callback = await fetch(
+    `${base}/oauth/mock/callback?code=${encodeURIComponent(
+      fake.state.validCode
+    )}&state=${encodeURIComponent(state)}`,
+    {
+      headers: { "x-broker-secret": BROKER_SECRET },
+      redirect: "manual",
+    }
+  );
+  assert.equal(callback.status, 302);
+}
+
+function formHeaders(extra = {}) {
+  return auth({
+    "content-type": "application/x-www-form-urlencoded",
+    ...extra,
+  });
+}
+
+test("disconnect pauses, connect resumes, erase deletes without provider calls", async (t) => {
+  const { base, fake, store } = await setup(t);
+  await login(base, fake);
+
+  const page = await (await fetch(`${base}/connections`, { headers: auth() })).text();
+  const csrf = csrfFrom(page);
+
+  let res = await fetch(`${base}/token/mock`, { headers: auth() });
+  assert.equal(res.status, 200);
+
+  // Disconnect = pause: the row and the token stay.
+  res = await fetch(`${base}/connections/mock/disconnect`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: `_csrf=${encodeURIComponent(csrf)}`,
+    redirect: "manual",
+  });
+  assert.equal(res.status, 303);
+  assert.ok(store.getToken(USER, "mock"));
+  assert.equal((await fetch(`${base}/token/mock`, { headers: auth() })).status, 403);
+  const pausedBody = await (
+    await fetch(`${base}/token/mock`, { headers: auth() })
+  ).json();
+  assert.equal(pausedBody.error, "delegation_disabled");
+  assert.ok(pausedBody.connect_url);
+
+  // Connect = resume: the same credential is used, no new OAuth flow.
+  res = await fetch(`${base}/connections/mock/connect`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: `_csrf=${encodeURIComponent(csrf)}`,
+    redirect: "manual",
+  });
+  assert.equal(res.status, 303);
+  assert.equal((await fetch(`${base}/token/mock`, { headers: auth() })).status, 200);
+  assert.equal(fake.state.tokenRequests.length, 1);
+
+  // Erase: local only.
+  res = await fetch(`${base}/connections/mock/erase`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: `_csrf=${encodeURIComponent(csrf)}`,
+    redirect: "manual",
+  });
+  assert.equal(res.status, 303);
+  assert.equal(store.getToken(USER, "mock"), null);
+  assert.equal(fake.state.revokeRequests.length, 0);
+  assert.equal((await fetch(`${base}/token/mock`, { headers: auth() })).status, 404);
+});
+
+test("a stored credential for a removed provider is listed and eraseable", async (t) => {
+  const { base, store } = await setup(t);
+  store.upsertToken({
+    userId: USER,
+    provider: "gone",
+    token: {
+      accessToken: "old-access",
+      refreshToken: "old-refresh",
+      tokenType: "Bearer",
+      scopes: [],
+      expiresAt: null,
+      refreshExpiresAt: null,
+    },
+  });
+
+  const connections = await (
+    await fetch(`${base}/connections`, { headers: auth({ accept: "application/json" }) })
+  ).json();
+  const gone = connections.providers.find((p) => p.name === "gone");
+  assert.ok(gone, "removed provider must still be listed");
+  assert.equal(gone.connected, true);
+  assert.equal(gone.orphan, true);
+
+  const page = await (await fetch(`${base}/connections`, { headers: auth() })).text();
+  const csrf = csrfFrom(page);
+  const res = await fetch(`${base}/connections/gone/erase`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: `_csrf=${encodeURIComponent(csrf)}`,
+    redirect: "manual",
+  });
+  assert.equal(res.status, 303);
+  assert.equal(store.getToken(USER, "gone"), null);
+});
+
+test("state-changing requests require the CSRF token and same origin", async (t) => {
+  const { base } = await setup(t);
+  const missing = await fetch(`${base}/connections/mock/disconnect`, {
+    method: "POST",
+    headers: formHeaders(),
+    body: "_csrf=bad",
+    redirect: "manual",
+  });
+  assert.equal(missing.status, 403);
+
+  const page = await (await fetch(`${base}/connections`, { headers: auth() })).text();
+  const csrf = csrfFrom(page);
+  const cross = await fetch(`${base}/connections/erase-all`, {
+    method: "POST",
+    headers: formHeaders({
+      origin: "https://evil.example",
+    }),
+    body: `_csrf=${encodeURIComponent(csrf)}`,
+    redirect: "manual",
+  });
+  assert.equal(cross.status, 403);
+});
+
+test("operator API lists, pauses, resumes and deletes without exposing tokens", async (t) => {
+  const { base, store } = await setup(t, {
+    configOverrides: { adminSecret: "admin-secret" },
+  });
+  store.upsertToken({
+    userId: USER,
+    provider: "mock",
+    token: {
+      accessToken: "access-1",
+      refreshToken: "refresh-1",
+      tokenType: "Bearer",
+      scopes: ["read"],
+      expiresAt: null,
+      refreshExpiresAt: null,
+    },
+  });
+
+  const admin = { "x-broker-admin-secret": "admin-secret" };
+
+  const users = await fetch(`${base}/admin/users`, { headers: admin });
+  assert.equal(users.status, 200);
+  const usersBody = await users.json();
+  assert.equal(usersBody.users[0].userId, USER);
+  assert.equal(JSON.stringify(usersBody).includes("access-1"), false);
+
+  const detail = await fetch(`${base}/admin/users/${USER}`, { headers: admin });
+  assert.equal(detail.status, 200);
+  const detailBody = await detail.json();
+  assert.equal(detailBody.connections[0].provider, "mock");
+  assert.equal(JSON.stringify(detailBody).includes("access-1"), false);
+
+  let res = await fetch(`${base}/admin/users/${USER}/mock/pause`, {
+    method: "POST",
+    headers: admin,
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).paused, 1);
+
+  res = await fetch(`${base}/admin/users/${USER}/mock/resume`, {
+    method: "POST",
+    headers: admin,
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).resumed, 1);
+
+  res = await fetch(`${base}/admin/users/${USER}`, {
+    method: "DELETE",
+    headers: admin,
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).erased, 1);
+  assert.equal(store.getToken(USER, "mock"), null);
+});
+
+test("the operator API is disabled without an admin secret", async (t) => {
+  const { base } = await setup(t);
+  const res = await fetch(`${base}/admin/users`, {
+    headers: { "x-broker-admin-secret": "anything" },
+  });
+  assert.equal(res.status, 404);
 });
