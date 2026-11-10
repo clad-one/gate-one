@@ -552,6 +552,33 @@
     }
   }
 
+  // claimMatches: one claim condition. Value "*" = the claim must be
+  // present; otherwise a value or a list of values (OR / anyOf on the
+  // same claim). A token claim may itself be a list (groups, token
+  // roles…): any element may match. Keys combine with AND.
+  function claimMatches(spec, claims) {
+    for (var k in spec) {
+      var want = spec[k];
+      var have = claims[k];
+      if (have === undefined) return false;
+      var wanted = Array.isArray(want) ? want : [want];
+      var ok = false;
+      for (var i = 0; i < wanted.length; i++) {
+        if (wanted[i] === "*") { ok = true; break; }
+        if (Array.isArray(have)) {
+          for (var j = 0; j < have.length; j++) {
+            if (String(have[j]) === String(wanted[i])) { ok = true; break; }
+          }
+        } else if (String(have) === String(wanted[i])) {
+          ok = true;
+        }
+        if (ok) break;
+      }
+      if (!ok) return false;
+    }
+    return true;
+  }
+
   function applyRoleGating() {
     applyPatches();
     var nodes = document.querySelectorAll(
@@ -578,16 +605,7 @@
         var cl = n.getAttribute("data-gtw-claims");
         if (cl) {
           try {
-            var spec = JSON.parse(cl);
-            for (var k in spec) {
-              var want = spec[k];
-              var have = sessionClaims[k];
-              if (want === "*") {
-                if (have === undefined) { ok = false; break; }
-              } else if (String(have) !== want) {
-                ok = false; break;
-              }
-            }
+            ok = claimMatches(JSON.parse(cl), sessionClaims);
           } catch (e) { ok = false; }
         }
       }
@@ -943,15 +961,7 @@
       });
     }
     if (ok && rule.claims) {
-      for (var k in rule.claims) {
-        var want = rule.claims[k];
-        var have = sessionClaims[k];
-        if (want === "*") {
-          if (have === undefined) { ok = false; break; }
-        } else if (String(have) !== want) {
-          ok = false; break;
-        }
-      }
+      ok = claimMatches(rule.claims, sessionClaims);
     }
     return ok;
   }

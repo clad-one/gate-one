@@ -15,6 +15,7 @@ if (served) {
   await import(pathToFileURL(path.join(here, "controls.mjs")).href);
   await import(pathToFileURL(path.join(here, "forbidden.mjs")).href);
   await import(pathToFileURL(path.join(here, "turnstile.mjs")).href);
+  await import(pathToFileURL(path.join(here, "claims.mjs")).href);
   console.log(
     globalThis.__uiFailures === 0
       ? "\nUI HARNESS: all OK"

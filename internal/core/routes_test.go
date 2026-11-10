@@ -1124,7 +1124,8 @@ func TestAuthWhenIdentitySplit(t *testing.T) {
 			t.Fatalf("when not deserialized: %+v", a)
 		}
 		if a.Identity == nil || len(a.Identity.Roles) != 1 ||
-			a.Identity.Claims["email"] != "*" {
+			len(a.Identity.Claims["email"]) != 1 ||
+			a.Identity.Claims["email"][0] != "*" {
 			t.Fatalf("identity not deserialized: %+v", a.Identity)
 		}
 	})

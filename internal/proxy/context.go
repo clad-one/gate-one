@@ -41,18 +41,48 @@ func (ctx *RequestContext) HasScope(scope string) bool {
 	return false
 }
 
-// HasClaim checks the presence of a claim ("*" = any value) or the
-// equality of its stringified value (JSON boolean → "true"/"false",
-// numbers → Go format).
-func (ctx *RequestContext) HasClaim(key, want string) bool {
+// HasClaim checks a claim condition: the claim must be present, then
+// ANY of the accepted values must match. "*" means "present, any
+// value". A stringified comparison is used for scalars (JSON boolean →
+// "true"/"false", numbers → Go format); an array-valued claim (groups,
+// roles in a token…) matches when one of its elements matches.
+func (ctx *RequestContext) HasClaim(key string, wants []string) bool {
 	v, ok := ctx.Claims[key]
-	if !ok {
+	if !ok || len(wants) == 0 {
 		return false
 	}
-	if want == "*" {
-		return true
+	for _, want := range wants {
+		if want == "*" {
+			return true
+		}
+		if claimValueMatches(v, want) {
+			return true
+		}
 	}
-	return fmt.Sprintf("%v", v) == want
+	return false
+}
+
+// claimValueMatches compares one accepted value with the token claim.
+// A token claim may itself be a list: any element may match.
+func claimValueMatches(have any, want string) bool {
+	switch v := have.(type) {
+	case []string:
+		for _, item := range v {
+			if item == want {
+				return true
+			}
+		}
+		return false
+	case []any:
+		for _, item := range v {
+			if fmt.Sprintf("%v", item) == want {
+				return true
+			}
+		}
+		return false
+	default:
+		return fmt.Sprintf("%v", have) == want
+	}
 }
 
 func BuildContext(r *http.Request) (*RequestContext, error) {

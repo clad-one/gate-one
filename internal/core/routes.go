@@ -36,10 +36,11 @@ type Match struct {
 
 	Scopes []string `json:"scopes,omitempty"`
 
-	// Token claims: value "*" = mere presence, otherwise
-	// comparison of the stringified value (JSON boolean →
-	// "true"/"false", numbers → Go format).
-	Claims map[string]string `json:"claims,omitempty"`
+	// Token claims: value "*" = mere presence, otherwise one accepted
+	// value or a list (OR / anyOf on the same claim). Keys combine
+	// with AND. Array-valued token claims match when one element
+	// matches.
+	Claims map[string]ClaimValues `json:"claims,omitempty"`
 
 	User string `json:"user,omitempty"`
 }
@@ -120,8 +121,9 @@ type UIGateRule struct {
 	Roles []string `json:"roles,omitempty"`
 	// Scopes: visible if AT LEAST ONE of these scopes is granted.
 	Scopes []string `json:"scopes,omitempty"`
-	// Claims: all must match ("*" = presence).
-	Claims map[string]string `json:"claims,omitempty"`
+	// Claims: all keys must match; each value is one accepted string
+	// or a list (OR / anyOf); "*" = presence.
+	Claims map[string]ClaimValues `json:"claims,omitempty"`
 	// Auth: "after" (native action preserved + invitation tab)
 	// or "before" (click neutralized + direct tab). Same activation-
 	// only semantics as data-gtw-auth: value controls (select/range/

@@ -2755,7 +2755,7 @@ func matchesIdentity(m *core.Match, ctx *RequestContext) bool {
 	}
 
 	for k, v := range m.Claims {
-		if !ctx.HasClaim(k, v) {
+		if !ctx.HasClaim(k, []string(v)) {
 			return false
 		}
 	}

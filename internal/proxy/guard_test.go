@@ -619,7 +619,8 @@ func TestIdentityClaimsPresenceAndValue(t *testing.T) {
 			w.Header().Set("X-User-Id", "u1")
 			w.Header().Set("X-Username", "alice")
 			w.Header().Set("X-Claims", base64.StdEncoding.EncodeToString(
-				[]byte(`{"email":"a@b.c","email_verified":false,"n":42}`)))
+				[]byte(`{"email":"a@b.c","email_verified":false,"n":42,`+
+					`"groups":["admin","user"]}`)))
 			w.WriteHeader(http.StatusOK)
 		},
 	))
@@ -657,6 +658,31 @@ func TestIdentityClaimsPresenceAndValue(t *testing.T) {
 	}
 	if got := probe(`{"absent":"*"}`); got != http.StatusForbidden {
 		t.Errorf(`{"absent":"*"}: status = %d, want 403 (absent claim = insufficient)`, got)
+	}
+
+	// A list of accepted values = OR (anyOf) on the same claim.
+	if got := probe(`{"email":["a@b.c","x@y.z"]}`); got != http.StatusOK {
+		t.Errorf(`{"email":["a@b.c","x@y.z"]}: status = %d, want 200 (one match)`, got)
+	}
+	if got := probe(`{"email":["x@y.z","z@w.v"]}`); got != http.StatusForbidden {
+		t.Errorf(`{"email":["x@y.z","z@w.v"]}: status = %d, want 403 (no match)`, got)
+	}
+	if got := probe(`{"email":["*"]}`); got != http.StatusOK {
+		t.Errorf(`{"email":["*"]}: status = %d, want 200 (presence in a list)`, got)
+	}
+
+	// An array-valued token claim matches when one element matches.
+	if got := probe(`{"groups":"admin"}`); got != http.StatusOK {
+		t.Errorf(`{"groups":"admin"}: status = %d, want 200 (array claim)`, got)
+	}
+	if got := probe(`{"groups":["x","user"]}`); got != http.StatusOK {
+		t.Errorf(`{"groups":["x","user"]}: status = %d, want 200 (one element)`, got)
+	}
+	if got := probe(`{"groups":"x"}`); got != http.StatusForbidden {
+		t.Errorf(`{"groups":"x"}: status = %d, want 403 (no element matches)`, got)
+	}
+	if got := probe(`{"groups":["*"]}`); got != http.StatusOK {
+		t.Errorf(`{"groups":["*"]}: status = %d, want 200 (presence)`, got)
 	}
 }
 
