@@ -56,9 +56,11 @@ function mkWindow(script, opts = {}) {
   });
   const w = dom.window;
   const state = { rendered: [], fetched: null, calls: [] };
-  w.turnstile = {
-    render: (el, opts) => { state.rendered.push({ el, opts }); return state.rendered.length; },
-  };
+  if (!opts.noTurnstile) {
+    w.turnstile = {
+      render: (el, opts) => { state.rendered.push({ el, opts }); return state.rendered.length; },
+    };
+  }
   w.fetch = async (input, init) => {
     state.fetched = { input, init };
     state.calls.push(String(input));
@@ -324,4 +326,35 @@ globalThis.__uiFailures = (globalThis.__uiFailures || 0) + failures;
   res.status === 200 && verified && apiCalls === 2
     ? ok("turnstile gate: stale clearance re-verified and replayed")
     : fail(`turnstile gate: stale clearance (status ${res.status}, calls ${apiCalls})`);
+}
+
+// ── gate: the FIRST pre-clearance caller must not be dropped ──
+{
+  const script = renderTurnstile({
+    siteKey: "k",
+    forms: [],
+    gate: true,
+    formsEnabled: false,
+    preclearance: true,
+    appearance: "always",
+  });
+  const { w, state } = mkWindow(script, {
+    cleared: false,
+    forms: false,
+    url: "http://app.test/app",
+    noTurnstile: true,
+  });
+  state.rendered.length === 0
+    ? ok("turnstile gate: no widget before api.js loads")
+    : fail("turnstile gate: widget rendered without api.js");
+  const loader = w.document.querySelector(
+    'script[src*="challenges.cloudflare.com"]');
+  loader
+    ? ok("turnstile gate: api.js loader inserted")
+    : fail("turnstile gate: api.js loader missing");
+  w.turnstile = { render: (el, opts) => { state.rendered.push({ el, opts }); } };
+  if (loader && loader.onload) loader.onload();
+  state.rendered.length === 1
+    ? ok("turnstile gate: first pre-clearance rendered after api.js load")
+    : fail(`turnstile gate: first pre-clearance dropped (${state.rendered.length})`);
 }

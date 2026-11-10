@@ -850,34 +850,40 @@ const turnstileScriptTmpl = `<script>
   var token = "";
   var state = { loading: false, queue: [] };
   var gateBox = null, gateWidget = null, gateQueue = [];
+  var gateRemoveTimer = 0;
 
   function load(cb) {
     if (window.turnstile) return cb();
-    if (!state.loading) {
-      state.loading = true;
-      var s = document.createElement("script");
-      s.src = SRC;
-      s.async = true;
-      s.defer = true;
-      s.onload = function () {
-        state.loading = false;
-        var q = state.queue.splice(0, state.queue.length);
-        for (var i = 0; i < q.length; i++) { try { q[i](); } catch (e) {} }
-      };
-      s.onerror = function () {
-        state.loading = false;
-        if (window.console) console.warn("turnstile: api.js failed to load");
-      };
-      s.nonce = el && el.nonce ? el.nonce : "";
-      (document.head || document.documentElement).appendChild(s);
-      return;
-    }
+    // Queue BEFORE starting the loader: the first caller (the
+    // pre-clearance) must not be dropped. The onload handler drains the
+    // queue once api.js is available.
     state.queue.push(cb);
+    if (state.loading) return;
+    state.loading = true;
+    var s = document.createElement("script");
+    s.src = SRC;
+    s.async = true;
+    s.defer = true;
+    s.onload = function () {
+      state.loading = false;
+      var q = state.queue.splice(0, state.queue.length);
+      for (var i = 0; i < q.length; i++) { try { q[i](); } catch (e) {} }
+    };
+    s.onerror = function () {
+      state.loading = false;
+      if (window.console) console.warn("turnstile: api.js failed to load");
+    };
+    s.nonce = el && el.nonce ? el.nonce : "";
+    (document.head || document.documentElement).appendChild(s);
   }
 
   // ── gate: pre-clearance and 403 recovery ──
   function gateBoxEl() {
     if (!gateBox) {
+      // Drop a previous success box still in its display delay: a new
+      // challenge must not stack two widgets.
+      var stale = document.querySelectorAll(".cladone-turnstile-gate");
+      for (var i = 0; i < stale.length; i++) stale[i].remove();
       gateBox = document.createElement("div");
       gateBox.className = "cladone-turnstile-gate";
       document.body.appendChild(gateBox);
@@ -904,9 +910,18 @@ const turnstileScriptTmpl = `<script>
       try { q[i].resolve(); } catch (e) {}
     }
     if (gateBox) {
-      gateBox.textContent = "";
+      // Keep the widget visible for a few seconds after success: a fast
+      // Non-Interactive challenge would otherwise disappear before the
+      // browser paints a single frame, and the visitor could not tell
+      // that Turnstile ran.
+      var box = gateBox;
       gateBox = null;
       gateWidget = null;
+      if (gateRemoveTimer) clearTimeout(gateRemoveTimer);
+      gateRemoveTimer = setTimeout(function () {
+        gateRemoveTimer = 0;
+        if (box && box.parentNode) box.parentNode.removeChild(box);
+      }, 3000);
     }
   }
 
