@@ -463,12 +463,12 @@
     },
     "tokenBroker": {
       "type": "object",
-      "description": "Internal per-user credential broker. Required only when a route declares upstream.tokenBroker. The shared secret is read from the named environment variable at load (never from this file) and is never logged.",
+      "description": "Internal per-user credential broker. Required when a route declares upstream.tokenBroker; a configured block also keeps the Services page (/connections: pause/resume/erase) available when no route delegates. The shared secret is read from the named environment variable at load (never from this file) and is never logged.",
       "additionalProperties": false,
       "properties": {
         "url": {
           "type": "string",
-          "description": "Broker base URL (default http://token-broker:4000, the Docker internal service name). Never expose it through Traefik."
+          "description": "Broker base URL (default http://token-broker:4000, the Docker internal service name). Never expose it through an ingress: the broker is an internal service."
         },
         "secretEnv": {
           "type": "string",
@@ -476,7 +476,7 @@
         },
         "links": {
           "type": "object",
-          "description": "Links owned by the token broker, displayed in the user badge. services is the connections page: it is rendered only when an exposed route declares upstream.tokenBroker (computed by the gateway).",
+          "description": "Links owned by the token broker, displayed in the user badge. services is the services/connections page; it is rendered whenever the broker is configured (the gateway computes the final list at load).",
           "additionalProperties": false,
           "properties": {
             "services": {
@@ -486,7 +486,7 @@
         },
         "browserHost": {
           "type": "string",
-          "description": "Host on which Gate One serves the token broker's browser routes (/connections, /connect/*, /oauth/*/callback), injecting the authenticated identity. Empty = derived from links.services.url; if that is absent too, Gate One does not serve them (the auth layer may, as auth-bridge does)."
+          "description": "Host on which Gate One serves the token broker's browser routes (/connections, /connect/*, /oauth/*/callback), authenticating the user and injecting the identity. Empty = derived from links.services.url (its hostname). If both are absent, Gate One does not serve them; an ingress must never proxy those paths directly to the broker (it would answer 401). auth-bridge does not receive the shared secret."
         }
       }
     },
@@ -1845,7 +1845,7 @@
     },
     "tokenBrokerPolicy": {
       "type": "object",
-      "description": "Per-user credentials supplied by the token broker for the authenticated caller. Requires the top-level tokenBroker block and route.auth (the broker needs an authenticated user id). A missing connection produces a 401/409 with a connect_url (or a redirect for frontend routes), never a request without credentials. The same policy applies to REST tool calls produced by an MCP route.",
+      "description": "Per-user credentials supplied by the token broker for the authenticated caller. Requires the top-level tokenBroker block and route.auth (the broker needs an authenticated user id). A missing connection produces a 401/403/409 with a connect_url (403 when the user paused the delegation, 409 when reauthorization is required), or a redirect for frontend routes, never a request without credentials. The same policy applies to REST tool calls produced by an MCP route.",
       "additionalProperties": false,
       "required": [
         "provider"
