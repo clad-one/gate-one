@@ -15,7 +15,7 @@ It is deliberately **not** a reverse proxy and **not** an identity
 provider.
 
 ```
-browser ──► auth-bridge ──► token-broker ──► provider consent screen
+browser ──► Gate One (login host) ──► token-broker ──► provider consent screen
                                   │
                                   └── encrypted tokens (SQLite)
 
@@ -28,8 +28,9 @@ Gate One ──► upstream API with that token
 - The broker is on the Docker `internal` network **only**: no Traefik
   label, no published port.
 - It only accepts calls carrying `X-Broker-Secret`.
-- User-scoped calls also carry `X-User-Id` (set by auth-bridge or Gate
-  One after authentication).
+- User-scoped calls also carry `X-User-Id` (set by Gate One after
+  authentication). Only Gate One (and this broker) holds the shared
+  secret; auth-bridge must not receive it.
 - Provider client secrets and the encryption key live in the broker's
   environment, never in Gate One's configuration.
 - The provider registry (endpoints, client id, scopes) lives here too;
@@ -119,7 +120,7 @@ All configuration is environment-based:
 |---|---|---|---|
 | `TOKEN_BROKER_SHARED_SECRET` | yes | — | internal `X-Broker-Secret` |
 | `TOKEN_BROKER_ENCRYPTION_KEY` | yes | — | AES-256-GCM key, 32 bytes base64 (`openssl rand -base64 32`) |
-| `TOKEN_BROKER_PUBLIC_BASE_URL` | no | `https://login.cladone.com` | public auth-bridge origin; used for callback/connect URLs |
+| `TOKEN_BROKER_PUBLIC_BASE_URL` | no | `https://login.cladone.com` | public login origin (served by Gate One); used for callback/connect URLs |
 | `TOKEN_BROKER_RETURN_TO_HOSTS` | no | public host | comma list; `.cladone.com` allows the apex + subdomains |
 | `TOKEN_BROKER_DB_PATH` | no | `/data/token-broker.db` | SQLite file |
 | `TOKEN_BROKER_PROVIDERS_FILE` | no | `/app/providers.json` | provider registry |
@@ -221,7 +222,7 @@ from the App). Setup, for reference or a rebuild:
 4. in the GitHub App settings, enable **Expire user authorization
    tokens** so the token endpoint also returns a refresh token and
    `expires_in` (the broker refreshes with single-flight);
-5. set `GITHUB_CLIENT_SECRET` and the broker URL/secret for auth-bridge
+5. set `GITHUB_CLIENT_SECRET` and the broker URL/secret for Gate One
    and Gate One;
 6. grant the App the read-only permissions needed by the exposed
    routes/tools first, then widen them deliberately.
