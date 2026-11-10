@@ -566,6 +566,18 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			ctx = context.WithValue(ctx, clientPathKey, clientPath)
 			*req = *req.WithContext(ctx)
 			if injectsBody {
+				// Conditional requests must not short-circuit the
+				// injection: a 304 carries no body, so the browser
+				// would reuse a cached copy WITHOUT the guard,
+				// PWA/custom or Turnstile script. Ask for the full
+				// representation on GET/HEAD (a POST conditional
+				// has different semantics and is left untouched).
+				if req.Method == http.MethodGet ||
+					req.Method == http.MethodHead {
+					req.Header.Del("If-None-Match")
+					req.Header.Del("If-Modified-Since")
+					req.Header.Del("If-Range")
+				}
 				req.Header.Set("Accept-Encoding", "gzip")
 			}
 			// Upstream policy (proxified external site): Host
@@ -719,7 +731,18 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 				Value(usageReqKey{}).(*usageReqState); st != nil {
 				st.readResponse(resp)
 			}
-			return chain(resp)
+			if err := chain(resp); err != nil {
+				return err
+			}
+			// The body was modified (script injected, URL rewritten):
+			// the origin validators no longer describe the response.
+			// Dropping them prevents a cache from storing the origin
+			// representation and later serving it unmodified.
+			if injectsBody && isHTMLResponse(resp) {
+				resp.Header.Del("ETag")
+				resp.Header.Del("Last-Modified")
+			}
+			return nil
 		}
 
 		if route.MCPActive() && !route.MCP.IsStandalone() {
