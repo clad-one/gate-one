@@ -1070,11 +1070,16 @@ const turnstileScriptTmpl = `<script>
         }
       } catch (e) {}
       return origFetch.apply(this, args).then(function (res) {
-        if (!CFG.gate || cleared || !replayable) return res;
+        if (!CFG.gate || !replayable) return res;
         if (res.status !== 403 ||
             res.headers.get(CFG.gateHeader) !== "required") {
           return res;
         }
+        // The clearance may have expired or been deleted since the page
+        // was served: the page's "cleared" flag is only a hint. Trust
+        // the 403 marker, re-challenge and replay.
+        cleared = false;
+        gateWidget = null;
         return new Promise(function (resolve) {
           gateQueue.push({ resolve: function () {
             resolve(origFetch.apply(window, args));

@@ -281,3 +281,47 @@ globalThis.__uiFailures = (globalThis.__uiFailures || 0) + failures;
     ? ok("turnstile gate: backend path attempted exactly twice")
     : fail(`turnstile gate: api calls = ${apiCalls}`);
 }
+
+// ── gate: a stale "cleared" page recovers from a 403 ──
+{
+  const script = renderTurnstile({
+    siteKey: "k",
+    forms: [],
+    gate: true,
+    formsEnabled: false,
+    preclearance: false,
+    appearance: "interaction-only",
+  });
+  let verified = false;
+  let apiCalls = 0;
+  const { w, state } = mkWindow(script, {
+    cleared: true, // page served with a clearance that has since expired
+    forms: false,
+    url: "http://app.test/app",
+    fetch: async (input) => {
+      if (String(input) === "/__gate-one/turnstile/verify") {
+        verified = true;
+        return { ok: true, status: 204, headers: { get: () => null } };
+      }
+      if (String(input) === "/api/process") {
+        apiCalls++;
+        if (!verified) {
+          return { status: 403, ok: false, headers: { get: (h) =>
+            h === "X-Gate-One-Turnstile" ? "required" : null } };
+        }
+        return { status: 200, ok: true, headers: { get: () => null } };
+      }
+      return { status: 200, ok: true, headers: { get: () => null } };
+    },
+  });
+  const pending = w.fetch("/api/process", { method: "POST", body: "{}" });
+  await new Promise((r) => setTimeout(r, 30));
+  state.rendered.length === 1
+    ? ok("turnstile gate: stale clearance triggers the widget")
+    : fail("turnstile gate: stale clearance did not trigger the widget");
+  state.rendered[0].opts.callback("gate-token");
+  const res = await pending;
+  res.status === 200 && verified && apiCalls === 2
+    ? ok("turnstile gate: stale clearance re-verified and replayed")
+    : fail(`turnstile gate: stale clearance (status ${res.status}, calls ${apiCalls})`);
+}
