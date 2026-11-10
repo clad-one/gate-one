@@ -274,11 +274,19 @@ export class TokenStore {
   }
 
   markUsed(userId, provider) {
+    // Throttled: /token is called for every delegated upstream request;
+    // one write per minute is enough for the "last used" display and
+    // keeps the SQLite write rate bounded.
+    const now = Date.now();
     this.db
       .prepare(
-        "UPDATE tokens SET last_used_at = ? WHERE user_id = ? AND provider = ?"
+        `
+        UPDATE tokens SET last_used_at = ?
+        WHERE user_id = ? AND provider = ?
+          AND (last_used_at IS NULL OR last_used_at < ?)
+        `
       )
-      .run(Date.now(), userId, provider);
+      .run(now, userId, provider, now - 60_000);
   }
 
   // listUsers feeds the operator API: one row per user, no token and no
