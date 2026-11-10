@@ -14,6 +14,10 @@ package proxy
 //     requests go through without another Siteverify call. The injected
 //     script also pre-clears in the background and exchanges a 403
 //     "turnstile_required" for a clearance + replay.
+//
+// Conditional requests (If-None-Match/If-Modified-Since) must never
+// short-circuit the injection: the Director strips them and the
+// response validators are dropped (see proxy.go).
 //   - both: gate AND form verification.
 //
 // The token is read from ctx.RawBody (BuildContext already buffers and

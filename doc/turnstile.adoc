@@ -116,7 +116,9 @@ webhooks, MCP). Built-ins always exempt: `/healthz`, `/readyz`,
 derived from the Turnstile secret (rotating it invalidates every
 clearance). | derived
 | `challenge.appearance` | Turnstile render appearance: `always`,
-`execute`, `interaction-only`. | `interaction-only` in gate
+`execute`, `interaction-only`. With a Non-Interactive widget,
+`interaction-only` keeps the widget hidden (silent verification); set
+`always` to show its loading spinner. | `interaction-only` in gate
 | `preclearance` | `gate`/`both`: solve the challenge in the background
 when a page is served without clearance. | true
 |===
