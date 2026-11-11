@@ -395,6 +395,54 @@ clicks are focus, not action: put the attribute on the submit button.
 Full contract and behavioural test matrix:
 <https://clad-one.github.io/gate-one-doc/v0.4.5-docs.9/docs/ui-gating/>.
 
+## Proxifying an external site
+
+A route may expose a third-party site under one of your hosts
+(`upstream`). The gateway can only rewrite what it sees: **HTML bodies**
+(200 `text/html`) and **HTTP headers**. It never rewrites CSS, JS or
+JSON payloads, and it preserves the path.
+
+```json
+{
+  "host": "docs.example.com",
+  "path": "/*",
+  "frontend": false,
+  "backend": "https://origin.example/project/latest/",
+  "stripPrefix": "/project/latest",
+  "upstream": {
+    "host": true,
+    "rewriteRedirects": true,
+    "rewriteBody": { "enabled": true }
+  }
+}
+```
+
+- `upstream.host` — send the backend's own `Host` (required by backends
+  that route by host, e.g. GitHub Pages: 404 otherwise).
+- `upstream.rewriteRedirects` — bring absolute `Location`s targeting the
+  backend back to the public host.
+- `upstream.rewriteBody` — rewrite absolute URLs cited in the HTML to
+  the public host. The **path is preserved**: a site whose URLs carry a
+  build prefix (`/project/latest/…`) keeps that prefix publicly. Pair it
+  with `stripPrefix` so the requests map back, and the prefix is
+  reconciled on both sides. At the root (`stripPrefix` cannot be `/`),
+  that is only possible if the site's URLs carry no prefix at all —
+  build it for the public host (`--baseURL`, or relative URLs).
+- `rewriteBody.clientSide` (`"auto"` default / `"off"`) — the client
+  layers: the service worker at `/__gate-one_pwa/sw.js` (runtime
+  `fetch`/XHR/beacon built by the site's JS) and the guard's in-page
+  patch. `"auto"` registers the worker when the route has a guard, a
+  PWA policy, or (proxified route with neither) through an injected
+  registration. `"off"` keeps only the server-side HTML rewriting and
+  serves a tombstone worker that unregisters a previously installed one
+  — use it for an application that ships its own service worker (one
+  scope per origin).
+
+Limits worth knowing before exposing a site: URL rewriting is
+host-only (no path surgery), a service worker never sees `WebSocket` or
+dedicated workers, and a public origin stays public — proxying it does
+not make the content private.
+
 ## Delegated upstream credentials
 
 A route may call its backend with a **per-user token** supplied by the

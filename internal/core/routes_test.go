@@ -1274,3 +1274,58 @@ func TestDefaultAppURLValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestRewriteBodyClientSide covers the client-layer switch: "auto" is
+// the default (normalized at load), "off" is accepted, anything else is
+// refused — a typo must never silently change the runtime behaviour.
+func TestRewriteBodyClientSide(t *testing.T) {
+	build := func(value string) string {
+		return `{"routes": [{
+			"host": "a.public.localhost", "path": "/*",
+			"backend": "https://a.backend.example",
+			"upstream": {"host": true, "rewriteBody": {"enabled": true` +
+			value + `}}}]}`
+	}
+	load := func(t *testing.T, raw string) (*Config, error) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "routes.json")
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(path)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"default", "", "auto"},
+		{"explicit auto", `, "clientSide": "auto"`, "auto"},
+		{"off", `, "clientSide": "off"`, "off"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := load(t, build(tc.value))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rb := cfg.Routes[0].UpstreamRewriteBody()
+			if rb == nil {
+				t.Fatal("rewriteBody not loaded")
+			}
+			if rb.ClientSide != tc.want {
+				t.Fatalf("clientSide = %q, want %q", rb.ClientSide, tc.want)
+			}
+			wantSide := tc.want != "off"
+			if got := cfg.Routes[0].ClientSideRewrite(); got != wantSide {
+				t.Fatalf("ClientSideRewrite = %t, want %t", got, wantSide)
+			}
+		})
+	}
+
+	if _, err := load(t, build(`, "clientSide": "sometimes"`)); err == nil {
+		t.Fatal("invalid clientSide accepted")
+	} else if !strings.Contains(err.Error(), "clientSide") {
+		t.Fatalf("error does not name the field: %v", err)
+	}
+}

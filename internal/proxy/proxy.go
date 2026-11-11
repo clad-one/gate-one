@@ -698,19 +698,21 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			}
 		}
 
-		if route.PWA != nil && route.PWA.Enabled ||
-			rwPlan != nil {
-
-			cr.pwa = pwa.New(
-				route.PWA,
-				func() *pwa.RewriteSpec {
-					if rwPlan == nil {
-						return nil
-					}
-					return rwPlan.clientSpec()
-				}(),
-			)
-
+		// The client-runtime handler is created for EVERY route: a host
+		// that no longer runs a client layer must still serve the
+		// unregistering tombstone on /__gate-one_pwa/sw.js (an
+		// installed worker survives a configuration change).
+		cr.pwa = pwa.New(
+			route.PWA,
+			func() *pwa.RewriteSpec {
+				if rwPlan == nil || !route.ClientSideRewrite() {
+					return nil
+				}
+				return rwPlan.clientSpec()
+			}(),
+		)
+		if (route.PWA != nil && route.PWA.Enabled) ||
+			(rwPlan != nil && route.ClientSideRewrite()) {
 			log.Printf(
 				"CLIENT runtime enabled host=%s path=%s (pwa=%v rewriteBody=%v)",
 				route.Host,
@@ -1963,6 +1965,12 @@ func patchJSONFor(route *core.Route) string {
 // script (REWRITE=%s; "null" when absent). Origin hosts in BARE
 // form (no scheme): the payload undergoes its own rewrite.
 func rewriteGuardJSON(route *core.Route, backend *url.URL) string {
+	// clientSide "off": the in-page patch layer is part of the
+	// client-side policy — no DTO, no runtime rewriting (the
+	// server-side HTML rewriting still applies).
+	if route != nil && !route.ClientSideRewrite() {
+		return "null"
+	}
 	dto := rewriteGuardDTOFor(route, backend)
 	if dto == nil {
 		return "null"

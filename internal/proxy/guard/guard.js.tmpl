@@ -12,6 +12,9 @@
     (document.currentScript && document.currentScript.nonce) || "";
 
   var LOGIN = "%[1]s";
+  // Client-side rewriting layers (service worker + in-page fetch/XHR
+  // patch). false = upstream.rewriteBody.clientSide "off".
+  var CLIENT_SW = %[10]s;
   var AUTH_STATE = "%[2]s";
   // Route uiGate rules (config-driven UI gating, for fronts that
   // cannot be edited) — serialized from api-routes.json; an element
@@ -171,7 +174,7 @@
       location.hostname === 'localhost' ||
       location.hostname === '127.0.0.1' ||
       location.hostname.endsWith('.localhost');
-    if ('serviceWorker' in navigator && swAllowed) {
+    if (CLIENT_SW && 'serviceWorker' in navigator && swAllowed) {
       try {
         navigator.serviceWorker.getRegistrations().then(function (regs) {
           for (var i = 0; i < regs.length; i++) {

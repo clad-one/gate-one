@@ -101,24 +101,30 @@ func buildInjectors(
 			route.Path,
 			cfg.LoginURLFor(route),
 		)
-		guardStylesheet = buildGuardCSS(route)
-		script := fmt.Sprintf(
-			guardScript,
-			cfg.LoginURLFor(route),
-			AuthStatePath,
-			uiGateJSON(route),
-			userBadgeJSON(route),
-			rewriteGuardJSON(route, u),
-			patchJSONFor(route),
-			forbiddenBannerJSON(route),
-			licenseJSON(cfg),
-			core.AsciiJSON(guardStylesheet, `""`),
-		)
+		var script string
+		script, guardStylesheet = buildGuardScript(cfg, route, u)
 		injectors = append(injectors, &guardInjector{
 			host:   route.Host,
 			script: script,
 		})
 		injectedHTML = append(injectedHTML, script)
+	}
+
+	// Client-side rewriting needs a REGISTERED service worker. A guard
+	// registers it itself, and so does the PWA injection; a proxified
+	// route with NEITHER (frontend:false or authGuard disabled) would
+	// otherwise keep the worker unreachable and dynamic JS URLs
+	// unrewritten. Inject the registration here — same worker, same
+	// third-party protection, no cache role.
+	if rwPlan != nil && route.ClientSideRewrite() &&
+		!guardEnabledFor(route) &&
+		!(route.PWA != nil && route.PWA.Enabled) {
+		frag := pwa.RewriteRegistrationHTML()
+		injectors = append(injectors, &headScriptInjector{script: frag})
+		injectedHTML = append(injectedHTML, frag)
+		log.Printf(
+			"CLIENT SW registration injected host=%s (no guard, no PWA)",
+			route.Host)
 	}
 
 	if rwPlan != nil {
@@ -303,7 +309,58 @@ func (i *guardInjector) modify(resp *http.Response) error {
 	}
 	// STREAMING injection: it does not read the body here (no
 	// buffering) — transport errors surface during the copy.
-	injectGuardScript(resp, i.script)
+	injectHeadScript(resp, i.script)
+	return nil
+}
+
+// buildGuardScript renders the route's guard script and its
+// stylesheet. Single source of truth: the injection chain and the
+// tests that measure an injected page both call it (a duplicated
+// Sprintf list silently drifts when an argument is added).
+func buildGuardScript(
+	cfg *core.Config, route *core.Route, backend *url.URL,
+) (script, stylesheet string) {
+	stylesheet = buildGuardCSS(route)
+	script = fmt.Sprintf(
+		guardScript,
+		cfg.LoginURLFor(route),
+		AuthStatePath,
+		uiGateJSON(route),
+		userBadgeJSON(route),
+		rewriteGuardJSON(route, backend),
+		patchJSONFor(route),
+		forbiddenBannerJSON(route),
+		licenseJSON(cfg),
+		core.AsciiJSON(stylesheet, `""`),
+		clientSideFlag(route),
+	)
+	return script, stylesheet
+}
+
+// clientSideFlag: guard-script argument telling it whether to
+// register the client rewriting worker (upstream.rewriteBody.clientSide).
+func clientSideFlag(route *core.Route) string {
+	if route != nil && route.ClientSideRewrite() {
+		return "true"
+	}
+	return "false"
+}
+
+// headScriptInjector injects a static HTML fragment right after
+// <head> (streaming, O(1) memory — see injectHeadScript). Used for the
+// client-rewriting service worker registration when no guard and no
+// PWA policy inject it.
+type headScriptInjector struct {
+	script string
+}
+
+func (i *headScriptInjector) name() string { return "headScript" }
+
+func (i *headScriptInjector) modify(resp *http.Response) error {
+	if !isHTMLResponse(resp) {
+		return nil
+	}
+	injectHeadScript(resp, i.script)
 	return nil
 }
 

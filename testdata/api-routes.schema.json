@@ -2086,12 +2086,17 @@
     },
     "rewriteBodyPolicy": {
       "type": "object",
-      "description": "Rewriting of the HTML body (200 text/html only, STREAMING — O(1) memory): the origin's absolute URLs cited in the pages (\"https://origin/…\", \"http://origin/…\", \"//origin/…\") are rewritten to the route's public host, so the browser stays in the proxy. Any explicit port is part of the rewritten prefix and is lost (target served on the standard port). The path, query and fragment follow as-is. Routes expanded from one wildcard automatically rewrite sibling editions toward their public hosts. `targets` and `followRoutes` add explicit cross-route mappings (bare hosts only: the request's scheme and port are inherited). At runtime (fetch/XHR/sendBeacon launched by the site), the client SW served on /__gate-one_pwa/sw.js applies the same policy — it is auto-registered by the guard script, served pre-authentication. One same policy (origins × exceptions × targets) is implemented three times (Go engine, client SW, script patch) — parity tested. Default: absent (no body rewriting).",
+      "description": "Rewriting of the HTML body (200 text/html only, STREAMING — O(1) memory): the origin's absolute URLs cited in the pages (\"https://origin/…\", \"http://origin/…\", \"//origin/…\") are rewritten to the route's public host, so the browser stays in the proxy. Any explicit port is part of the rewritten prefix and is lost (target served on the standard port). The path, query and fragment follow as-is. Routes expanded from one wildcard automatically rewrite sibling editions toward their public hosts. `targets` and `followRoutes` add explicit cross-route mappings (bare hosts only: the request's scheme and port are inherited). At runtime (fetch/XHR/sendBeacon launched by the site), the client SW served on /__gate-one_pwa/sw.js applies the same policy — registered by the guard script, by the PWA injection, or (proxified route with neither) by an injected registration; see clientSide. One same policy (origins × exceptions × targets) is implemented three times (Go engine, client SW, script patch) — parity tested. Default: absent (no body rewriting).",
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "type": "boolean",
           "description": "true = engine active (the block is present to stay declarative; absent = disabled)."
+        },
+        "clientSide": {
+          "type": "string",
+          "enum": ["auto", "off"],
+          "description": "Client-side layers of the policy: the service worker served on /__gate-one_pwa/sw.js (runtime fetch/XHR/beacon launched by the site) and the in-page patch of the guard script. \"auto\" (default) = registered when the route has a guard, a PWA policy, or a proxified route with neither (frontend:false / authGuard disabled). \"off\" = no client-side layer at all (server-side HTML rewriting only); an already-installed worker is replaced by an unregistering tombstone on the next visit. Use \"off\" for an application that ships its OWN service worker (one scope per origin). Client-side rewriting always preserves the pathname: it can never strip a path prefix."
         },
         "except": {
           "type": "array",

@@ -723,18 +723,7 @@ func guardInjectedLen(t *testing.T) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := fmt.Sprintf(
-		guardScript,
-		gw.config.LoginURLFor(route),
-		AuthStatePath,
-		uiGateJSON(route),
-		userBadgeJSON(route),
-		rewriteGuardJSON(route, backend),
-		patchJSONFor(route),
-		forbiddenBannerJSON(route),
-		licenseJSON(gw.config),
-		core.AsciiJSON(buildGuardCSS(route), `""`),
-	)
+	script, _ := buildGuardScript(gw.config, route, backend)
 	return len(script)
 }
 

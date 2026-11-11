@@ -388,6 +388,33 @@ type RewriteBodyPolicy struct {
 	// wildcard expansion; no match, self-only match or ambiguous
 	// mapping refuses the load.
 	FollowRoutes []string `json:"followRoutes,omitempty"`
+
+	// ClientSide: whether the CLIENT layers of the rewriting policy
+	// participate — the service worker served on
+	// /__gate-one_pwa/sw.js (runtime fetch/XHR/beacon launched by the
+	// site) and the in-page patch of the guard script. "auto"
+	// (default) = yes: the SW is registered when the route has a
+	// guard, a PWA policy, or a client-side-only proxified route.
+	// "off" = no client-side layer at all; only the server-side HTML
+	// rewriting applies, and an already-installed SW is replaced by
+	// an unregistering tombstone on the next visit.
+	//
+	// Use "off" for an application that ships its OWN service worker
+	// (one scope per origin) or whose runtime URLs must not be
+	// touched. Client-side rewriting can never strip a path prefix
+	// (it preserves the pathname): a proxified site exposed under its
+	// original prefix is the only case where it composes with
+	// stripPrefix.
+	ClientSide string `json:"clientSide,omitempty"`
+}
+
+// ClientSideRewrite: does the client-side layer take part in this
+// rewriting policy? (default "auto" = yes)
+func (rb *RewriteBodyPolicy) ClientSideRewrite() bool {
+	if rb == nil || !rb.Enabled {
+		return false
+	}
+	return rb.ClientSide != "off"
 }
 
 // UpstreamResponseHeaders: adjustment of the backend's RESPONSE
@@ -4750,6 +4777,12 @@ func routePathOverlapsPrefix(routePath, prefix string) bool {
 
 // UpstreamRewriteBody: accessor of a route's rewriteBody policy
 // (nil when absent or disabled).
+// ClientSideRewrite: does the route's rewriting policy include the
+// client layers (service worker + in-page patch)?
+func (r *Route) ClientSideRewrite() bool {
+	return r.UpstreamRewriteBody().ClientSideRewrite()
+}
+
 func (r *Route) UpstreamRewriteBody() *RewriteBodyPolicy {
 	if r.Upstream == nil || r.Upstream.RewriteBody == nil ||
 		!r.Upstream.RewriteBody.Enabled {
@@ -4768,6 +4801,15 @@ const (
 )
 
 func validateRewriteBody(rb *RewriteBodyPolicy) error {
+	switch rb.ClientSide {
+	case "":
+		rb.ClientSide = "auto"
+	case "auto", "off":
+	default:
+		return fmt.Errorf(
+			"rewriteBody.clientSide %q: expected \"auto\" or \"off\"",
+			rb.ClientSide)
+	}
 	if len(rb.Except) > maxRewriteExcepts {
 		return fmt.Errorf(
 			"rewriteBody.except: %d entries (max %d)",

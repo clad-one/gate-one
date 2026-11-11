@@ -204,7 +204,7 @@ func guardEnabledFor(route *core.Route) bool {
 // authGuard.loginUrl wins over oidc.loginUrl — load-time validation
 // guarantees an active-guard route has one).
 
-// injectGuardScript installs the guard injection IN STREAMING mode: the
+// injectHeadScript installs the guard injection IN STREAMING mode: the
 // body is no longer buffered (the pre-2026-10-18 algorithm read up to
 // 32 MiB into memory) — the byte arriving from the origin goes out
 // toward the client, memory stays O(1) and the browser starts
@@ -217,7 +217,7 @@ func guardEnabledFor(route *core.Route) bool {
 // decision from resp.ContentLength). Pages LARGER than any limit:
 // served IN FULL and injected — the 2026-10-17 truncation incident
 // is structurally impossible (no ReadAll anymore).
-func injectGuardScript(resp *http.Response, script string) {
+func injectHeadScript(resp *http.Response, script string) {
 
 	// The body changes size (~28 KB script inserted): the response is
 	// served chunked. Clear in the pipeline: gzip decompression is
