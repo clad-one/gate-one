@@ -316,7 +316,12 @@ for target in "${TARGETS[@]}"; do
 	else
 		tar -czf "$demo_archive" -C "$demo_stage" .
 	fi
-	if tar -tzf "$demo_archive" 2>/dev/null | grep -Eq 'deploy/local/billing(/|$)'; then
+	if [ "$ext" = ".zip" ]; then
+		demo_listing="$(unzip -Z1 "$demo_archive" 2>/dev/null || true)"
+	else
+		demo_listing="$(tar -tzf "$demo_archive" 2>/dev/null || true)"
+	fi
+	if printf '%s\n' "$demo_listing" | grep -Eq 'deploy/local/billing(/|$)'; then
 		echo "release.sh: managed-side demo found in $demo_archive" >&2
 		exit 1
 	fi
