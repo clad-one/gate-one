@@ -88,6 +88,7 @@ func meteredConfig(
 			"types": {"billing": {"shareBytes": 1048576, "fsync": "none"}},
 			"plugins": [{"name": "audit", "url": "http://127.0.0.1:1", "types": ["billing"]}],
 			"sink": {"exportDir": %q, "signingKeyEnv": "TEST_SINK_KEY",
+				"receiptPublicKey": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
 				"batchWaitMs": 10, "exportAfterSeconds": 1},
 			"profile": "airgap",
 			"allowanceFile": %q,
@@ -267,9 +268,25 @@ func TestMeteredRecordReachesSink(t *testing.T) {
 	if len(payloads) == 0 {
 		t.Fatal("sink received nothing")
 	}
-	if !strings.Contains(payloads[0], `"metric":"api.request"`) ||
-		!strings.Contains(payloads[0], `"settlement":"settled"`) ||
-		!strings.Contains(payloads[0], `"amountMicro":1200`) {
-		t.Fatalf("payload = %s", payloads[0])
+	var batch struct {
+		Records []struct {
+			Data string `json:"data"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(payloads[0]), &batch); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+	if len(batch.Records) == 0 {
+		t.Fatal("empty batch")
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(batch.Records[0].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := string(decoded)
+	if !strings.Contains(record, `"metric":"api.request"`) ||
+		!strings.Contains(record, `"settlement":"settled"`) ||
+		!strings.Contains(record, `"amountMicro":1200`) {
+		t.Fatalf("record = %s", record)
 	}
 }

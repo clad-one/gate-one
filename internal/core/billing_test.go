@@ -24,7 +24,8 @@ func billingConfig() string {
 			"types": {"billing": {"shareBytes": 1000000, "fsync": "none"}},
 			"plugins": [{"name": "audit", "url": "http://127.0.0.1:9100", "types": ["billing"]}],
 			"sink": {"url": "http://127.0.0.1:1", "exportDir": "usage-export",
-				"signingKeyEnv": "TEST_SINK_KEY"},
+				"signingKeyEnv": "TEST_SINK_KEY",
+				"receiptPublicKey": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"},
 			"metrics": {
 				"api.request": {
 					"unit": "request", "scale": 0, "maxDimensions": 1,

@@ -59,14 +59,17 @@ func TestPushAcksAndCommits(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			b.Signature = ""
-			payload, _ := json.Marshal(b)
-			if !ed25519.Verify(pub, payload, sig) {
+			if !ed25519.Verify(pub, SignaturePayload(b), sig) {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 			for _, rec := range b.Records {
-				sum := sha256.Sum256(rec.Data)
+				data, err := base64.RawURLEncoding.DecodeString(rec.Data)
+				if err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				sum := sha256.Sum256(data)
 				if "sha256:"+hex.EncodeToString(sum[:]) != rec.Hash {
 					w.WriteHeader(http.StatusBadRequest)
 					return

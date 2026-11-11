@@ -79,6 +79,8 @@ type UsageSinkConfig struct {
 	BatchWaitMS        int    `json:"batchWaitMs,omitempty"`
 	ExportDir          string `json:"exportDir,omitempty"`
 	ExportAfterSeconds int    `json:"exportAfterSeconds,omitempty"`
+	// ReceiptPublicKey verifies the ingest receipts (airgap ack).
+	ReceiptPublicKey string `json:"receiptPublicKey,omitempty"`
 }
 
 // resolveBilling parses and validates the metering/tariff configuration
@@ -291,6 +293,10 @@ func (u *UsageConfig) resolveBilling(baseDir string) error {
 	if u.Profile == "airgap" {
 		if u.Sink.ExportDir == "" {
 			return fmt.Errorf("usage.profile airgap requires usage.sink.exportDir")
+		}
+		if u.Sink.ReceiptPublicKey == "" {
+			return fmt.Errorf(
+				"usage.profile airgap requires usage.sink.receiptPublicKey")
 		}
 	} else if u.Sink.URL == "" && u.Sink.ExportDir == "" {
 		return fmt.Errorf(

@@ -1,0 +1,31 @@
+{
+  "node": "gw-vector",
+  "batchId": "vector-1",
+  "seed": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "signature": "fGjOb5bBLyyxi8wgE8soKqqTB5evbSWmJ2aleRRlAMjTnCbeP3b-6Y9fkRtIEJ58XBmwdCvfMRdOakIfk2hSCg",
+  "records": [
+    {
+      "offset": 0,
+      "hash": "sha256:015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+      "data": "eyJhIjoxfQ"
+    },
+    {
+      "offset": 120,
+      "hash": "sha256:0ab1a6d394cd30195f0642b67ae1180c375ffadf5dd7f39c390668b5fdb6da93",
+      "data": "eyJiIjoyfQ"
+    }
+  ],
+  "publicKey": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+  "receipt": {
+    "bundleId": "bundle-gw-vector-000001",
+    "node": "gw-vector",
+    "seq": 1,
+    "accepted": 2,
+    "duplicates": 0,
+    "firstOffset": 0,
+    "lastOffset": 120,
+    "nextOffset": 240,
+    "rejected": [],
+    "signature": "wkbrKO9QWFVv2AoJwA2OIRQUKCqaYJvrLW3-inBFv7n1-jAG9w3ovFQ6WyUDby9UEowQzQetYkkcMIkQsbDzAA"
+  }
+}

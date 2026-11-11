@@ -28,6 +28,13 @@ import (
 	"cladone/gate-one/internal/outbox"
 )
 
+// Outbox record framing, mirrored to compute the next offset in a bundle
+// manifest (the receiver only sees the last record's start).
+const (
+	recordHeaderBytes  = 4
+	recordTrailerBytes = 4
+)
+
 // Config configures the pusher.
 type Config struct {
 	// URL is the managed ingest endpoint (empty = export only).
@@ -51,11 +58,13 @@ type Config struct {
 	Client *http.Client
 }
 
-// Record is one delivered entry.
+// Record is one delivered entry. Data is the base64url-encoded payload:
+// encoding (not embedding) the bytes keeps the per-record hash exact in
+// any receiver, with no JSON canonicalisation dependency.
 type Record struct {
-	Offset int64           `json:"offset"`
-	Hash   string          `json:"hash"`
-	Data   json.RawMessage `json:"data"`
+	Offset int64  `json:"offset"`
+	Hash   string `json:"hash"`
+	Data   string `json:"data"`
 }
 
 // Batch is the signed push body.
@@ -183,7 +192,7 @@ func (p *Pusher) build(records []outbox.Record) (Batch, error) {
 		out = append(out, Record{
 			Offset: r.Offset,
 			Hash:   "sha256:" + hex.EncodeToString(sum[:]),
-			Data:   json.RawMessage(r.Payload),
+			Data:   base64.RawURLEncoding.EncodeToString(r.Payload),
 		})
 	}
 	b := Batch{
@@ -193,12 +202,8 @@ func (p *Pusher) build(records []outbox.Record) (Batch, error) {
 		Records:   out,
 	}
 	b.BatchID = batchID(b)
-	payload, err := canonical(b)
-	if err != nil {
-		return Batch{}, err
-	}
 	b.Signature = base64.RawURLEncoding.EncodeToString(
-		ed25519.Sign(p.cfg.SigningKey, payload))
+		ed25519.Sign(p.cfg.SigningKey, SignaturePayload(b)))
 	return b, nil
 }
 
@@ -214,9 +219,26 @@ func batchID(b Batch) string {
 	return hex.EncodeToString(h.Sum(nil)[:12])
 }
 
-func canonical(b Batch) ([]byte, error) {
-	b.Signature = ""
-	return json.Marshal(b)
+// SignaturePayload is the signed bytes of a batch. It is a line format,
+// not canonical JSON: the receiver (any language) rebuilds it trivially,
+// with no dependency on a JSON canonicalisation quirk.
+//
+//	v1
+//	<node>
+//	<batchId>
+//	<offset>:<hash>
+//	...
+//
+// The timestamp is deliberately NOT signed: Go marshals nanoseconds while
+// JavaScript truncates to milliseconds, and it adds no integrity (the id
+// already covers the content).
+func SignaturePayload(b Batch) []byte {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "v1\n%s\n%s\n", b.Node, b.BatchID)
+	for _, r := range b.Records {
+		fmt.Fprintf(&buf, "%d:%s\n", r.Offset, r.Hash)
+	}
+	return buf.Bytes()
 }
 
 func (p *Pusher) post(ctx context.Context, b Batch) error {
@@ -281,10 +303,11 @@ func Export(
 	for _, r := range records {
 		sum := sha256.Sum256(r.Payload)
 		line := struct {
-			Offset int64           `json:"offset"`
-			Hash   string          `json:"hash"`
-			Data   json.RawMessage `json:"data"`
-		}{r.Offset, "sha256:" + hex.EncodeToString(sum[:]), r.Payload}
+			Offset int64  `json:"offset"`
+			Hash   string `json:"hash"`
+			Data   string `json:"data"`
+		}{r.Offset, "sha256:" + hex.EncodeToString(sum[:]),
+			base64.RawURLEncoding.EncodeToString(r.Payload)}
 		raw, err := json.Marshal(line)
 		if err != nil {
 			return "", err
@@ -301,6 +324,8 @@ func Export(
 		[]byte(base64.RawURLEncoding.EncodeToString(sig)), 0o600); err != nil {
 		return "", err
 	}
+	last := records[len(records)-1]
+	next := last.Offset + recordHeaderBytes + int64(len(last.Payload)) + recordTrailerBytes
 	manifest := struct {
 		BundleID string `json:"bundleId"`
 		Node     string `json:"node"`
@@ -308,9 +333,10 @@ func Export(
 		Count    int    `json:"count"`
 		First    int64  `json:"firstOffset"`
 		Last     int64  `json:"lastOffset"`
+		Next     int64  `json:"nextOffset"`
 		SHA256   string `json:"sha256"`
 	}{base, node, seq, len(records), records[0].Offset,
-		records[len(records)-1].Offset, hex.EncodeToString(sum[:])}
+		last.Offset, next, hex.EncodeToString(sum[:])}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return "", err

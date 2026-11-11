@@ -958,7 +958,8 @@
             "batchBytes": {"type": "integer", "minimum": 1, "description": "Maximum batch size in bytes. Default 1 MiB."},
             "batchWaitMs": {"type": "integer", "minimum": 1, "description": "Maximum wait before flushing a partial batch. Default 1000 ms."},
             "exportDir": {"type": "string", "description": "Directory receiving signed export bundles (bundle .jsonl, .sig and manifest). Required for the airgap profile."},
-            "exportAfterSeconds": {"type": "integer", "minimum": 0, "description": "How long the push may fail before an export bundle is written. Default 300 s."}
+            "exportAfterSeconds": {"type": "integer", "minimum": 0, "description": "How long the push may fail before an export bundle is written. Default 300 s."},
+            "receiptPublicKey": {"type": "string", "description": "Base64 Ed25519 public key of the ingest service, verifies the signed receipts that acknowledge an air-gap bundle (gate-one billing ack). Required for the airgap profile."}
           }
         },
         "allowanceFile": {

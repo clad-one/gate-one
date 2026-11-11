@@ -98,6 +98,8 @@ func main() {
 			os.Exit(runSign(os.Args[2:]))
 		case "verify":
 			os.Exit(runVerify(os.Args[2:]))
+		case "billing":
+			os.Exit(runBilling(os.Args[2:]))
 		}
 	}
 
