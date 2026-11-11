@@ -17,6 +17,11 @@ test/e2e/browser/node_modules/
 test/e2e/browser/test-results/
 test/e2e/browser/playwright-report/
 
+# Managed-side billing code lives in a private repository; it must never
+# be committed or published here (release.sh refuses to run if present).
+/services/billing-ingest/
+/deploy/local/billing/
+
 # Private release signing material
 /release/*.key
 /release/*.password
