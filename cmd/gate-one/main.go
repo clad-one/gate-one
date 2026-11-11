@@ -100,6 +100,8 @@ func main() {
 			os.Exit(runVerify(os.Args[2:]))
 		case "billing":
 			os.Exit(runBilling(os.Args[2:]))
+		case "allowance":
+			os.Exit(runAllowance(os.Args[2:]))
 		}
 	}
 

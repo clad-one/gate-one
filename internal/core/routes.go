@@ -3180,9 +3180,6 @@ func (c *Config) resolveUsage(baseDir string) error {
 		}
 		u.Plugins = append(u.Plugins, discovered...)
 	}
-	if len(u.Plugins) == 0 {
-		return fmt.Errorf("usage: at least one plugin is required")
-	}
 	seen := map[string]bool{}
 	for i := range u.Plugins {
 		p := &u.Plugins[i]
@@ -3321,6 +3318,11 @@ func (c *Config) resolveUsage(baseDir string) error {
 	}
 	if err := u.resolveBilling(baseDir); err != nil {
 		return err
+	}
+	// A metering-only deployment needs no event plugin; the plugin bus is
+	// still required when no metric is declared.
+	if len(u.Plugins) == 0 && u.Metering == nil {
+		return fmt.Errorf("usage: at least one plugin is required")
 	}
 	return nil
 }

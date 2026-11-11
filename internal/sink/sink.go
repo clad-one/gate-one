@@ -179,6 +179,16 @@ func (p *Pusher) Run(ctx context.Context) {
 	}
 }
 
+// endpoint is the ingest path: the configured URL is a base, so a bare
+// host gets /v1/ingest appended (and an explicit path is left alone).
+func (p *Pusher) endpoint() string {
+	base := strings.TrimRight(p.cfg.URL, "/")
+	if strings.HasSuffix(base, "/v1/ingest") {
+		return base
+	}
+	return base + "/v1/ingest"
+}
+
 // Close stops nothing (Run is context-driven) but is kept for symmetry.
 func (p *Pusher) Close() error {
 	p.close.Do(func() {})
@@ -247,7 +257,7 @@ func (p *Pusher) post(ctx context.Context, b Batch) error {
 		return err
 	}
 	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, p.cfg.URL, bytes.NewReader(raw))
+		ctx, http.MethodPost, p.endpoint(), bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
