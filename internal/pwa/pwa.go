@@ -71,10 +71,13 @@ func apiCachePolicyJSON(c any) []byte {
 // longest prefix first), whose entries without To remain at the
 // origin.
 type RewriteSpec struct {
-	Origins []string             `json:"origins"`
-	Target  string               `json:"target"`
-	Targets map[string]string    `json:"targets,omitempty"`
-	Except  []core.RewriteExcept `json:"except,omitempty"`
+	Origins []string          `json:"origins"`
+	Target  string            `json:"target"`
+	Targets map[string]string `json:"targets,omitempty"`
+	// Except is never omitted: rwMatch reads RW.except.length, and
+	// an absent field threw a TypeError that silently disabled the
+	// interception of every runtime call (2026-11-12).
+	Except []core.RewriteExcept `json:"except"`
 }
 
 type Handler struct {
@@ -359,10 +362,11 @@ function rwMatch(url) {
     alt.hostname = target;
     return alt.origin;
   }
-  for (var i = 0; i < RW.except.length; i++) {
-    if (RW.except[i].path &&
-        url.pathname.indexOf(RW.except[i].path) === 0) {
-      return RW.except[i].to || null; // exception: alternative or remains at the origin
+  var except = RW.except || [];
+  for (var i = 0; i < except.length; i++) {
+    if (except[i].path &&
+        url.pathname.indexOf(except[i].path) === 0) {
+      return except[i].to || null; // exception: alternative or remains at the origin
     }
   }
   return RW.target; // standard rewrite to the public host
@@ -413,10 +417,11 @@ function rwMatch(url) {
     alt.hostname = target;
     return alt.origin;
   }
-  for (var i = 0; i < RW.except.length; i++) {
-    if (RW.except[i].path &&
-        url.pathname.indexOf(RW.except[i].path) === 0) {
-      return RW.except[i].to || null; // exception: alternative or remains at the origin
+  var except = RW.except || [];
+  for (var i = 0; i < except.length; i++) {
+    if (except[i].path &&
+        url.pathname.indexOf(except[i].path) === 0) {
+      return except[i].to || null; // exception: alternative or remains at the origin
     }
   }
   // the SW lives on the public host: ITS origin IS the target

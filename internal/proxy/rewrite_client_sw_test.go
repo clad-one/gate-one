@@ -125,6 +125,35 @@ func TestRewriteClientSideSW(t *testing.T) {
 	}
 }
 
+// TestRewriteSWShipsExceptionsArray: rwMatch reads RW.except.length,
+// so the payload must ALWAYS carry the array — an omitted field threw a
+// TypeError in the fetch handler and silently disabled the interception
+// of every runtime call (found by a browser test on a route with no
+// exception).
+func TestRewriteSWShipsExceptionsArray(t *testing.T) {
+	gw, hosts := testGateway(t, `{
+		"oidc": {"loginUrl": "https://login.test/login"},
+		"routes": [{"host": "app.test", "path": "/*", "backend": "BACKEND",
+		 "upstream": {"host": true, "rewriteBody": {"enabled": true}}}]
+	}`)
+
+	resp := doGet(t, gw, hosts["app.test"], "/__gate-one_pwa/sw.js")
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	if !strings.Contains(script, `"except":[]`) {
+		t.Fatalf("SW payload omits the exceptions array:\n%s", script)
+	}
+	// Defensive fallback for a worker already installed with the old
+	// payload.
+	if !strings.Contains(script, "RW.except || []") {
+		t.Fatal("rwMatch does not tolerate a missing exceptions array")
+	}
+}
+
 // TestRewriteClientSideGuardFlag: the guard script must carry the
 // client-side flag, otherwise a clientSide:"off" route would still
 // register the worker from its own guard.
