@@ -102,6 +102,8 @@ func main() {
 			os.Exit(runBilling(os.Args[2:]))
 		case "allowance":
 			os.Exit(runAllowance(os.Args[2:]))
+		case "meter":
+			os.Exit(runMeter(os.Args[2:]))
 		}
 	}
 
