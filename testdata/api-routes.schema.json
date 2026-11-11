@@ -809,6 +809,139 @@
             }
           }
         },
+        "profile": {
+          "type": "string",
+          "enum": ["online", "airgap"],
+          "description": "Spending authorisation profile: online (a lease refilled from the managed ledger) or airgap (a signed allowance file, valid for a period). Default online."
+        },
+        "metrics": {
+          "type": "object",
+          "description": "Billable metrics, keyed by metric code. A route references one with routes[].metric. Empty = the metering path is disabled.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["unit", "scale"],
+            "properties": {
+              "unit": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Free-form unit label (request, token, byte, second, ...)."
+              },
+              "scale": {
+                "type": "integer",
+                "enum": [0, 3, 6],
+                "description": "Decimal scale of the quantity: 0 (units), 3 (milli) or 6 (micro)."
+              },
+              "maxDimensions": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Maximum number of dimensions accepted per measure; must not exceed the declared dimensions."
+              },
+              "dimensions": {
+                "type": "object",
+                "description": "Declared dimension names and their types; an undeclared dimension is rejected.",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["type"],
+                  "properties": {
+                    "type": {"type": "string", "enum": ["string", "enum"]},
+                    "maxLength": {"type": "integer", "minimum": 0},
+                    "values": {"type": "array", "items": {"type": "string", "minLength": 1}}
+                  }
+                }
+              },
+              "measurement": {
+                "type": "string",
+                "enum": ["event", "periodic"],
+                "description": "event (discrete fact) or periodic (continuous quantity emitted by heartbeat, e.g. time, bytes, storage). Default event."
+              },
+              "heartbeatSeconds": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 3600,
+                "description": "Heartbeat period of a periodic metric. Default 60."
+              },
+              "pricing": {
+                "type": "string",
+                "enum": ["declarative", "plugin"],
+                "description": "declarative (core rate table) or plugin (signed pricing plugin). Default declarative."
+              },
+              "fallback": {
+                "type": "string",
+                "description": "Declarative tariff version used when pricing=plugin is unavailable. Required with pricing=plugin."
+              }
+            }
+          }
+        },
+        "tariffs": {
+          "type": "object",
+          "description": "Versioned rate tables, keyed by version. Each entry names its metric and effective date.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metric", "version", "currency", "effectiveFrom", "charges"],
+            "properties": {
+              "metric": {"type": "string", "minLength": 1},
+              "version": {"type": "string", "minLength": 1},
+              "currency": {"type": "string", "minLength": 3, "maxLength": 3},
+              "effectiveFrom": {"type": "string", "format": "date-time"},
+              "charges": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["model"],
+                  "properties": {
+                    "model": {
+                      "type": "string",
+                      "enum": ["unit", "tiered", "volume", "package", "percentage_of"]
+                    },
+                    "amountMicro": {"type": "integer", "minimum": 0},
+                    "filter": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1}
+                      }
+                    },
+                    "tiers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["fromValue", "toValue", "perUnitMicro"],
+                        "properties": {
+                          "fromValue": {"type": "integer", "minimum": 0},
+                          "toValue": {"type": "integer"},
+                          "perUnitMicro": {"type": "integer", "minimum": 0},
+                          "flatAmountMicro": {"type": "integer", "minimum": 0}
+                        }
+                      }
+                    },
+                    "packageSize": {"type": "integer", "minimum": 0},
+                    "freeUnits": {"type": "integer", "minimum": 0},
+                    "rateBasisPoints": {"type": "integer", "minimum": 0},
+                    "fixedAmountMicro": {"type": "integer", "minimum": 0}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "allowanceFile": {
+          "type": "string",
+          "description": "Signed allowance file (airgap profile). Resolved relative to the configuration file."
+        },
+        "allowanceEnv": {
+          "type": "string",
+          "description": "Environment variable holding the signed allowance JSON. Mutually exclusive with allowanceFile."
+        },
+        "allowancePublicKey": {
+          "type": "string",
+          "description": "Base64 Ed25519 public key verifying the allowance (airgap profile)."
+        },
         "plugins": {
           "type": "array",
           "minItems": 1,
@@ -2018,6 +2151,10 @@
         "usage": {
           "type": "boolean",
           "description": "Emit usage events for this route. Default true; set false to serve the route without producing ANY usage event — no WAL reservation and no admission 503 on this route. Use it for control or monitoring routes (a status page, an events viewer) that must not pollute, or depend on, the event bus."
+        },
+        "metric": {
+          "type": "string",
+          "description": "Billable metric produced by this route (a key of usage.metrics). The amount is rated and reserved BEFORE the backend call; an unaffordable request answers 402 instead of running. Empty = the route does not use the metering path."
         },
         "autoHead": {
           "type": "boolean",

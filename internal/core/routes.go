@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"cladone/gate-one/internal/license"
+	"cladone/gate-one/internal/pricing"
 	"cladone/gate-one/pkg/pluginmanifest"
 	"cladone/gate-one/pkg/publisherfeed"
 	"cladone/gate-one/pkg/usage"
@@ -897,6 +898,10 @@ type Route struct {
 	// viewer) that must not pollute, or depend on, the event bus.
 	Usage *bool `json:"usage,omitempty"`
 
+	// Metric names the billable metric produced by this route (defined in
+	// usage.metrics). Empty = the route does not use the metering path.
+	Metric string `json:"metric,omitempty"`
+
 	// StripPrefix: exact public path prefix removed from the request
 	// before it reaches the backend. "/api" turns "/api/foo" into
 	// "/foo"; the backend base path is then prepended as usual.
@@ -1727,6 +1732,25 @@ type UsageConfig struct {
 	// copied into matching events (default: billing), scoped by
 	// host/route/method. Values are capped and sensitive names skipped.
 	Capture []UsageCapture `json:"capture,omitempty"`
+
+	// Profile selects how spending is authorised: "online" (default, a
+	// lease refilled from the managed ledger) or "airgap" (a signed
+	// allowance loaded from a file, valid for a period).
+	Profile string `json:"profile,omitempty"`
+	// Metrics are the billable quantities (metric code -> definition).
+	Metrics map[string]UsageMetricConfig `json:"metrics,omitempty"`
+	// Tariffs are the versioned rate tables, keyed by version.
+	Tariffs map[string]UsageTariffConfig `json:"tariffs,omitempty"`
+	// AllowanceFile/AllowanceEnv name the signed allowance (airgap).
+	AllowanceFile string `json:"allowanceFile,omitempty"`
+	AllowanceEnv  string `json:"allowanceEnv,omitempty"`
+	// AllowancePublicKey is the base64 Ed25519 key verifying allowances.
+	AllowancePublicKey string `json:"allowancePublicKey,omitempty"`
+	// AllowanceJSON is the resolved allowance document (file or env).
+	AllowanceJSON []byte `json:"-"`
+
+	// Metering is the parsed registry (metrics + tariffs), built at load.
+	Metering *pricing.Registry `json:"-"`
 
 	// Trust is the parsed trust store.
 	Trust pluginmanifest.TrustStore `json:"-"`
@@ -3284,6 +3308,9 @@ func (c *Config) resolveUsage(baseDir string) error {
 					"usage.capture[%d].query: empty parameter name", i)
 			}
 		}
+	}
+	if err := u.resolveBilling(baseDir); err != nil {
+		return err
 	}
 	return nil
 }

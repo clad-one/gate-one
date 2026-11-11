@@ -143,6 +143,10 @@ type Gateway struct {
 	// extension plugins). nil = no events produced.
 	usage *usageRuntime
 
+	// billing authorises billable routes (metric + budget). nil = the
+	// metering path is not configured.
+	billing *billingRuntime
+
 	// turnstile is the platform-wide Cloudflare Turnstile check
 	// (verification + script injection). nil = disabled.
 	turnstile *turnstileRuntime
@@ -853,6 +857,12 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 			return nil, err
 		}
 		gw.usage = ur
+
+		bill, err := newBillingRuntime(cfg.Usage, "metering")
+		if err != nil {
+			return nil, err
+		}
+		gw.billing = bill
 	}
 
 	return gw, nil
@@ -2497,6 +2507,20 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Metering admission: rate the route metric and reserve the amount
+	// BEFORE the backend call, so an unaffordable request never runs.
+	var billAdm *billingAdmission
+	if g.billing != nil && route.Metric != "" {
+		var berr error
+		billAdm, berr = g.billing.admit(
+			r.Context(), route,
+			tenantFor(route, g.providerFor(cr)), requestID, r)
+		if berr != nil {
+			writeBillingError(w, r, cr.pageRoute, berr)
+			return
+		}
+	}
+
 	// Statistics: the response's FINAL status is counted per route
 	// (302 auth, 401, 403, 429, 200 proxified…).
 	sw := &statsWriter{ResponseWriter: w}
@@ -2512,6 +2536,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				usageAdm, route, eventCtx, g.providerFor(cr),
 				sw.status, time.Since(start), sw.bytes, usageState,
 				requestID)
+		}
+		if g.billing != nil && billAdm != nil {
+			g.billing.settle(billAdm, sw.status)
 		}
 	}()
 
