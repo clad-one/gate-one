@@ -322,6 +322,9 @@ func (g *Gateway) Close() error {
 				first = err
 			}
 		}
+		if g.billing != nil {
+			g.billing.close()
+		}
 		if g.turnstile != nil && g.turnstile.client != nil {
 			g.turnstile.client.CloseIdleConnections()
 		}

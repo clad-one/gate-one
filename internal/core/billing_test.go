@@ -23,6 +23,8 @@ func billingConfig() string {
 			"budgetBytes": 1000000,
 			"types": {"billing": {"shareBytes": 1000000, "fsync": "none"}},
 			"plugins": [{"name": "audit", "url": "http://127.0.0.1:9100", "types": ["billing"]}],
+			"sink": {"url": "http://127.0.0.1:1", "exportDir": "usage-export",
+				"signingKeyEnv": "TEST_SINK_KEY"},
 			"metrics": {
 				"api.request": {
 					"unit": "request", "scale": 0, "maxDimensions": 1,
@@ -49,8 +51,12 @@ func loadBillingRaw(t *testing.T, raw string) (*Config, error) {
 	t.Helper()
 	t.Setenv("TEST_SUBJECT_SECRET", "s")
 	t.Setenv("TEST_PLUGIN_SECRET", "p")
+	t.Setenv("TEST_SINK_KEY", testSinkSeed)
 	return loadAuthTest(t, raw)
 }
+
+// testSinkSeed is a base64url 32-byte Ed25519 seed (all zeros).
+const testSinkSeed = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 func TestBillingConfigValid(t *testing.T) {
 	cfg, err := loadBillingRaw(t, billingConfig())

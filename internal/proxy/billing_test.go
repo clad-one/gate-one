@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -70,6 +72,7 @@ func meteredConfig(
 	t.Helper()
 	t.Setenv("TEST_SUBJECT_SECRET", "s")
 	t.Setenv("TEST_PLUGIN_SECRET", "p")
+	t.Setenv("TEST_SINK_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	return fmt.Sprintf(`{
 		"license": {"token": %q, "publicKey": %q},
 		"authProvider": {
@@ -84,6 +87,8 @@ func meteredConfig(
 			"budgetBytes": 1048576,
 			"types": {"billing": {"shareBytes": 1048576, "fsync": "none"}},
 			"plugins": [{"name": "audit", "url": "http://127.0.0.1:1", "types": ["billing"]}],
+			"sink": {"exportDir": %q, "signingKeyEnv": "TEST_SINK_KEY",
+				"batchWaitMs": 10, "exportAfterSeconds": 1},
 			"profile": "airgap",
 			"allowanceFile": %q,
 			"allowancePublicKey": %q,
@@ -100,7 +105,8 @@ func meteredConfig(
 		"routes": [{
 			"host": "app.test", "path": "/*", "backend": %q, "metric": "api.request"
 		}]
-	}`, licToken, licPub, t.TempDir(), allowancePath, pubKey, backend)
+	}`, licToken, licPub, t.TempDir(), filepath.Join(t.TempDir(), "export"),
+		allowancePath, pubKey, backend)
 }
 
 func TestMeteredAdmissionAndExhaustion(t *testing.T) {
@@ -201,5 +207,69 @@ func TestAirgapRequiresBYOLicense(t *testing.T) {
 	if _, err := New(cfg); err == nil ||
 		!strings.Contains(err.Error(), "billing-byo") {
 		t.Fatalf("err = %v, want a billing-byo refusal", err)
+	}
+}
+
+func TestMeteredRecordReachesSink(t *testing.T) {
+	var mu sync.Mutex
+	var payloads []string
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			payloads = append(payloads, string(raw))
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	t.Cleanup(srv.Close)
+
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	t.Cleanup(backend.Close)
+
+	dir := t.TempDir()
+	allowancePath, pub := writeAllowance(t, dir, 5000)
+	lic, licPub := licenseToken(t, "billing-byo")
+	raw := meteredConfig(t, allowancePath, pub, backend.URL, lic, licPub)
+	// Point the sink at the fake server.
+	raw = strings.Replace(raw,
+		`"sink": {"exportDir":`,
+		`"sink": {"url": "`+srv.URL+`", "exportDir":`, 1)
+	cfg := loadForTest(t, raw)
+	gw, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
+
+	r := httptest.NewRequest(http.MethodGet, "http://app.test/x", nil)
+	r.Host = "app.test"
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(payloads)
+		mu.Unlock()
+		if n > 0 && gw.billing.box.CommitOffset() == gw.billing.box.Head() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(payloads) == 0 {
+		t.Fatal("sink received nothing")
+	}
+	if !strings.Contains(payloads[0], `"metric":"api.request"`) ||
+		!strings.Contains(payloads[0], `"settlement":"settled"`) ||
+		!strings.Contains(payloads[0], `"amountMicro":1200`) {
+		t.Fatalf("payload = %s", payloads[0])
 	}
 }

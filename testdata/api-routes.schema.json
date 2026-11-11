@@ -930,6 +930,37 @@
             }
           }
         },
+        "outbox": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Bounded local delivery buffer for billing records. It survives a transport outage for a few hours, then refuses new billable requests; it is not a financial archive.",
+          "properties": {
+            "dir": {"type": "string", "description": "Outbox directory. Default ./usage-outbox, resolved from the configuration file."},
+            "maxAge": {"type": "string", "description": "Maximum age of the oldest pending record (duration, e.g. 6h). Default 6h."},
+            "maxBytes": {"type": "integer", "minimum": 0, "description": "Maximum pending bytes. Default 512 MiB."},
+            "maxRecords": {"type": "integer", "minimum": 0, "description": "Maximum pending records. Default 50000."},
+            "onFull": {
+              "type": "string",
+              "enum": ["block", "drop"],
+              "description": "block (default): new billable requests answer 503 when the buffer is full. drop: discard (counted, logged) — never silent but loses revenue."
+            }
+          }
+        },
+        "sink": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Delivery of billing records: signed push to the managed endpoint, or a signed export bundle when the endpoint is unreachable (airgap).",
+          "properties": {
+            "url": {"type": "string", "description": "Managed ingest endpoint (http/https). Empty = export only."},
+            "secretEnv": {"type": "string", "description": "Environment variable holding the Bearer secret sent with every push."},
+            "signingKeyEnv": {"type": "string", "description": "Environment variable holding the base64url 32-byte Ed25519 seed that signs each batch and each export bundle. Required when metrics are configured."},
+            "batchRecords": {"type": "integer", "minimum": 1, "description": "Maximum records per batch. Default 500."},
+            "batchBytes": {"type": "integer", "minimum": 1, "description": "Maximum batch size in bytes. Default 1 MiB."},
+            "batchWaitMs": {"type": "integer", "minimum": 1, "description": "Maximum wait before flushing a partial batch. Default 1000 ms."},
+            "exportDir": {"type": "string", "description": "Directory receiving signed export bundles (bundle .jsonl, .sig and manifest). Required for the airgap profile."},
+            "exportAfterSeconds": {"type": "integer", "minimum": 0, "description": "How long the push may fail before an export bundle is written. Default 300 s."}
+          }
+        },
         "allowanceFile": {
           "type": "string",
           "description": "Signed allowance file (airgap profile). Resolved relative to the configuration file."

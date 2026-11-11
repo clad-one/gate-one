@@ -1746,8 +1746,16 @@ type UsageConfig struct {
 	AllowanceEnv  string `json:"allowanceEnv,omitempty"`
 	// AllowancePublicKey is the base64 Ed25519 key verifying allowances.
 	AllowancePublicKey string `json:"allowancePublicKey,omitempty"`
+	// Outbox bounds the local delivery buffer.
+	Outbox *UsageOutboxConfig `json:"outbox,omitempty"`
+	// Sink configures the delivery of billing records.
+	Sink *UsageSinkConfig `json:"sink,omitempty"`
+
 	// AllowanceJSON is the resolved allowance document (file or env).
 	AllowanceJSON []byte `json:"-"`
+	// SinkSigningSeed/SinkSecret are resolved from the environment.
+	SinkSigningSeed []byte `json:"-"`
+	SinkSecret      []byte `json:"-"`
 
 	// Metering is the parsed registry (metrics + tariffs), built at load.
 	Metering *pricing.Registry `json:"-"`

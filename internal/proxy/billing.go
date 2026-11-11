@@ -2,6 +2,9 @@ package proxy
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -12,6 +15,8 @@ import (
 	"cladone/gate-one/internal/credit"
 	"cladone/gate-one/internal/license"
 	"cladone/gate-one/internal/metering"
+	"cladone/gate-one/internal/outbox"
+	"cladone/gate-one/internal/sink"
 	"cladone/gate-one/pkg/pluginmanifest"
 )
 
@@ -26,6 +31,24 @@ type billingRuntime struct {
 	reg    *meteringRegistry
 	budget credit.Budget
 	ttl    time.Duration
+	box    *outbox.Store
+	pusher *sink.Pusher
+	cancel context.CancelFunc
+}
+
+func (b *billingRuntime) close() {
+	if b == nil {
+		return
+	}
+	if b.cancel != nil {
+		b.cancel()
+	}
+	if b.pusher != nil {
+		_ = b.pusher.Close()
+	}
+	if b.box != nil {
+		_ = b.box.Close()
+	}
 }
 
 // meteringRegistry is the subset of pricing.Registry used here, kept as a
@@ -77,17 +100,60 @@ func newBillingRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("usage allowance: %w", err)
 	}
+	maxAge, err := time.ParseDuration(u.Outbox.MaxAge)
+	if err != nil {
+		return nil, fmt.Errorf("usage.outbox.maxAge: %w", err)
+	}
+	box, err := outbox.Open(outbox.Config{
+		Dir:        u.Outbox.Dir,
+		MaxAge:     maxAge,
+		MaxBytes:   u.Outbox.MaxBytes,
+		MaxRecords: u.Outbox.MaxRecords,
+		OnFull:     u.Outbox.OnFull,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("usage.outbox: %w", err)
+	}
+	seed, err := base64.RawURLEncoding.DecodeString(string(u.SinkSigningSeed))
+	if err != nil || len(seed) != ed25519.SeedSize {
+		_ = box.Close()
+		return nil, fmt.Errorf(
+			"usage.sink.signingKeyEnv: expected a base64url 32-byte seed")
+	}
+	pusher, err := sink.New(box, sink.Config{
+		URL:          u.Sink.URL,
+		Secret:       string(u.SinkSecret),
+		NodeID:       u.NodeID,
+		SigningKey:   ed25519.NewKeyFromSeed(seed),
+		BatchRecords: u.Sink.BatchRecords,
+		BatchBytes:   u.Sink.BatchBytes,
+		BatchWait:    time.Duration(u.Sink.BatchWaitMS) * time.Millisecond,
+		ExportDir:    u.Sink.ExportDir,
+		ExportAfter:  time.Duration(u.Sink.ExportAfterSeconds) * time.Second,
+	})
+	if err != nil {
+		_ = box.Close()
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go pusher.Run(ctx)
 	return &billingRuntime{
 		reg:    reg,
 		budget: credit.NewAllocationBudget([]credit.Allowance{a}),
 		ttl:    5 * time.Minute,
+		box:    box,
+		pusher: pusher,
+		cancel: cancel,
 	}, nil
 }
 
 // billingAdmission is the hold for one request.
 type billingAdmission struct {
-	res    credit.Reservation
-	metric string
+	res      credit.Reservation
+	metric   string
+	scale    int
+	measure  metering.Measure
+	decision metering.Decision
 }
 
 // admit rates and reserves the request. A non-nil error means the caller
@@ -123,7 +189,10 @@ func (b *billingRuntime) admit(
 	if err != nil {
 		return nil, err
 	}
-	return &billingAdmission{res: res, metric: m.Code}, nil
+	return &billingAdmission{
+		res: res, metric: m.Code, scale: m.Scale,
+		measure: measure, decision: decision,
+	}, nil
 }
 
 // routeDimensions fills the dimensions the metric declares and the
@@ -158,10 +227,57 @@ func (b *billingRuntime) settle(adm *billingAdmission, status int) {
 		if err := b.budget.Release(ctx, adm.res); err != nil {
 			log.Printf("billing: release %s: %v", adm.metric, err)
 		}
+		b.record(adm, "released", status)
 		return
 	}
 	if err := b.budget.Settle(ctx, adm.res, adm.res.AmountMicro); err != nil {
 		log.Printf("billing: settle %s: %v", adm.metric, err)
+	}
+	b.record(adm, "settled", status)
+}
+
+// record appends the priced measure to the outbox. Delivery (and its
+// acknowledgement) is the pusher's job, never the request path.
+func (b *billingRuntime) record(adm *billingAdmission, settlement string, status int) {
+	if b.box == nil {
+		return
+	}
+	rec := struct {
+		SchemaVersion  int               `json:"schemaVersion"`
+		Tenant         string            `json:"tenant"`
+		Metric         string            `json:"metric"`
+		Quantity       int64             `json:"quantity"`
+		Scale          int               `json:"scale"`
+		Dimensions     map[string]string `json:"dimensions,omitempty"`
+		IdempotencyKey string            `json:"idempotencyKey"`
+		At             time.Time         `json:"at"`
+		RequestID      string            `json:"requestId,omitempty"`
+		AmountMicro    int64             `json:"amountMicro"`
+		Currency       string            `json:"currency"`
+		PriceVersion   string            `json:"priceVersion"`
+		EngineVersion  string            `json:"engineVersion"`
+		InputsHash     string            `json:"inputsHash"`
+		Settlement     string            `json:"settlement"`
+		Status         int               `json:"status"`
+	}{
+		SchemaVersion: 1, Tenant: adm.measure.Tenant, Metric: adm.metric,
+		Quantity: adm.measure.Quantity, Scale: adm.scale,
+		Dimensions:     adm.measure.Dimensions,
+		IdempotencyKey: adm.measure.Idempotency, At: adm.measure.At,
+		RequestID:   adm.measure.RequestID,
+		AmountMicro: adm.decision.AmountMicro, Currency: adm.decision.Currency,
+		PriceVersion:  adm.decision.PriceVersion,
+		EngineVersion: adm.decision.EngineVersion,
+		InputsHash:    adm.decision.InputsHash,
+		Settlement:    settlement, Status: status,
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		log.Printf("billing: record: %v", err)
+		return
+	}
+	if _, err := b.box.Append(raw); err != nil {
+		log.Printf("billing: outbox append: %v", err)
 	}
 }
 
@@ -176,6 +292,8 @@ func writeBillingError(w http.ResponseWriter, r *http.Request, page bool, err er
 		code, reason = http.StatusPaymentRequired, "allowance_expired"
 	case errors.Is(err, credit.ErrNoAllowance):
 		code, reason = http.StatusPaymentRequired, "no_allowance"
+	case errors.Is(err, outbox.ErrFull):
+		code, reason = http.StatusServiceUnavailable, "billing_buffer_full"
 	}
 	if page && isDocumentNavigation(r) {
 		http.Error(w, "payment required: "+reason, code)

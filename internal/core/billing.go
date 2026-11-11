@@ -60,6 +60,27 @@ type UsageTariffConfig struct {
 	Charges       []UsageChargeConfig `json:"charges"`
 }
 
+// UsageOutboxConfig bounds the local delivery buffer.
+type UsageOutboxConfig struct {
+	Dir        string `json:"dir,omitempty"`
+	MaxAge     string `json:"maxAge,omitempty"` // duration, e.g. "6h"
+	MaxBytes   int64  `json:"maxBytes,omitempty"`
+	MaxRecords int64  `json:"maxRecords,omitempty"`
+	OnFull     string `json:"onFull,omitempty"` // block | drop
+}
+
+// UsageSinkConfig configures the delivery of billing records.
+type UsageSinkConfig struct {
+	URL                string `json:"url,omitempty"`
+	SecretEnv          string `json:"secretEnv,omitempty"`
+	SigningKeyEnv      string `json:"signingKeyEnv,omitempty"`
+	BatchRecords       int    `json:"batchRecords,omitempty"`
+	BatchBytes         int    `json:"batchBytes,omitempty"`
+	BatchWaitMS        int    `json:"batchWaitMs,omitempty"`
+	ExportDir          string `json:"exportDir,omitempty"`
+	ExportAfterSeconds int    `json:"exportAfterSeconds,omitempty"`
+}
+
 // resolveBilling parses and validates the metering/tariff configuration
 // and stores the resulting registry on the UsageConfig.
 func (u *UsageConfig) resolveBilling(baseDir string) error {
@@ -208,6 +229,78 @@ func (u *UsageConfig) resolveBilling(baseDir string) error {
 				"usage: environment variable %s is empty", u.AllowanceEnv)
 		}
 		u.AllowanceJSON = []byte(raw)
+	}
+
+	// Outbox and sink.
+	if u.Outbox == nil {
+		u.Outbox = &UsageOutboxConfig{}
+	}
+	u.Outbox.Dir = strings.TrimSpace(u.Outbox.Dir)
+	if u.Outbox.Dir == "" {
+		u.Outbox.Dir = "usage-outbox"
+	}
+	if !filepath.IsAbs(u.Outbox.Dir) {
+		u.Outbox.Dir = filepath.Join(baseDir, u.Outbox.Dir)
+	}
+	u.Outbox.OnFull = strings.TrimSpace(u.Outbox.OnFull)
+	switch u.Outbox.OnFull {
+	case "":
+		u.Outbox.OnFull = "block"
+	case "block", "drop":
+	default:
+		return fmt.Errorf("usage.outbox.onFull must be block or drop")
+	}
+	if u.Outbox.MaxAge == "" {
+		u.Outbox.MaxAge = "6h"
+	}
+	if _, err := time.ParseDuration(u.Outbox.MaxAge); err != nil {
+		return fmt.Errorf("usage.outbox.maxAge: %w", err)
+	}
+	if u.Outbox.MaxBytes == 0 {
+		u.Outbox.MaxBytes = 512 << 20
+	}
+	if u.Outbox.MaxRecords == 0 {
+		u.Outbox.MaxRecords = 50000
+	}
+
+	if u.Sink == nil {
+		u.Sink = &UsageSinkConfig{}
+	}
+	u.Sink.URL = strings.TrimSpace(u.Sink.URL)
+	u.Sink.ExportDir = strings.TrimSpace(u.Sink.ExportDir)
+	if u.Sink.ExportDir != "" && !filepath.IsAbs(u.Sink.ExportDir) {
+		u.Sink.ExportDir = filepath.Join(baseDir, u.Sink.ExportDir)
+	}
+	if u.Sink.SigningKeyEnv == "" {
+		return fmt.Errorf("usage.sink.signingKeyEnv is required when metrics are configured")
+	}
+	seed, ok := os.LookupEnv(u.Sink.SigningKeyEnv)
+	if !ok || strings.TrimSpace(seed) == "" {
+		return fmt.Errorf(
+			"usage: environment variable %s is empty", u.Sink.SigningKeyEnv)
+	}
+	u.SinkSigningSeed = []byte(strings.TrimSpace(seed))
+	if u.Sink.SecretEnv != "" {
+		v, ok := os.LookupEnv(u.Sink.SecretEnv)
+		if !ok || v == "" {
+			return fmt.Errorf(
+				"usage: environment variable %s is empty", u.Sink.SecretEnv)
+		}
+		u.SinkSecret = []byte(v)
+	}
+	if u.Profile == "airgap" {
+		if u.Sink.ExportDir == "" {
+			return fmt.Errorf("usage.profile airgap requires usage.sink.exportDir")
+		}
+	} else if u.Sink.URL == "" && u.Sink.ExportDir == "" {
+		return fmt.Errorf(
+			"usage.sink: url or exportDir is required when metrics are configured")
+	}
+	if u.Sink.BatchWaitMS == 0 {
+		u.Sink.BatchWaitMS = 1000
+	}
+	if u.Sink.ExportAfterSeconds == 0 {
+		u.Sink.ExportAfterSeconds = 300
 	}
 
 	if u.Profile == "airgap" {
