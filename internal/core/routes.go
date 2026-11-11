@@ -1741,6 +1741,8 @@ type UsageConfig struct {
 	Metrics map[string]UsageMetricConfig `json:"metrics,omitempty"`
 	// Tariffs are the versioned rate tables, keyed by version.
 	Tariffs map[string]UsageTariffConfig `json:"tariffs,omitempty"`
+	// PricingPlugins are the signed, out-of-process pricing services.
+	PricingPlugins map[string]UsagePricingPluginConfig `json:"pricingPlugins,omitempty"`
 	// AllowanceFile/AllowanceEnv name the signed allowance (airgap).
 	AllowanceFile string `json:"allowanceFile,omitempty"`
 	AllowanceEnv  string `json:"allowanceEnv,omitempty"`

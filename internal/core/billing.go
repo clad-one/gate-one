@@ -27,6 +27,7 @@ type UsageMetricConfig struct {
 	Measurement      string                  `json:"measurement,omitempty"` // event | periodic
 	HeartbeatSeconds int                     `json:"heartbeatSeconds,omitempty"`
 	Pricing          string                  `json:"pricing,omitempty"` // declarative | plugin
+	PricingPlugin    string                  `json:"pricingPlugin,omitempty"`
 	Fallback         string                  `json:"fallback,omitempty"`
 }
 
@@ -58,6 +59,15 @@ type UsageTariffConfig struct {
 	Currency      string              `json:"currency"`
 	EffectiveFrom string              `json:"effectiveFrom"`
 	Charges       []UsageChargeConfig `json:"charges"`
+}
+
+// UsagePricingPluginConfig targets one signed pricing plugin.
+type UsagePricingPluginConfig struct {
+	URL             string `json:"url"`
+	PublicKey       string `json:"publicKey"`
+	TimeoutMS       int    `json:"timeoutMs,omitempty"`
+	Failures        int    `json:"failures,omitempty"`
+	CooldownSeconds int    `json:"cooldownSeconds,omitempty"`
 }
 
 // UsageOutboxConfig bounds the local delivery buffer.
@@ -114,6 +124,7 @@ func (u *UsageConfig) resolveBilling(baseDir string) error {
 			Measurement:      metering.Measurement(mc.Measurement),
 			HeartbeatSeconds: mc.HeartbeatSeconds,
 			Pricing:          mc.Pricing,
+			PricingPlugin:    mc.PricingPlugin,
 			Fallback:         mc.Fallback,
 		}
 		if len(mc.Dimensions) > 0 {
@@ -317,6 +328,29 @@ func (u *UsageConfig) resolveBilling(baseDir string) error {
 		if strings.TrimSpace(u.AllowancePublicKey) == "" {
 			return fmt.Errorf(
 				"usage.profile airgap requires usage.allowancePublicKey")
+		}
+	}
+
+	// Pricing plugins: a plugin metric must name an existing plugin and a
+	// declarative fallback on the same metric.
+	for name, pc := range u.PricingPlugins {
+		if pc.URL == "" || pc.PublicKey == "" {
+			return fmt.Errorf(
+				"usage.pricingPlugins[%s]: url and publicKey are required", name)
+		}
+	}
+	for code, mc := range u.Metrics {
+		if mc.Pricing != metering.PricingPlugin {
+			continue
+		}
+		if mc.PricingPlugin == "" {
+			return fmt.Errorf(
+				"usage.metrics[%s]: pricing=plugin requires pricingPlugin", code)
+		}
+		if _, ok := u.PricingPlugins[mc.PricingPlugin]; !ok {
+			return fmt.Errorf(
+				"usage.metrics[%s].pricingPlugin %q: unknown plugin",
+				code, mc.PricingPlugin)
 		}
 	}
 

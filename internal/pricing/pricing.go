@@ -201,6 +201,16 @@ func (r *Registry) AddTariff(metric string, t Tariff) error {
 	return nil
 }
 
+// tariffByVersion returns a specific tariff version of a metric.
+func (r *Registry) tariffByVersion(metric, version string) (Tariff, bool) {
+	for _, t := range r.tariffs[metric] {
+		if t.Version == version {
+			return t, true
+		}
+	}
+	return Tariff{}, false
+}
+
 // Metric returns a metric definition.
 func (r *Registry) Metric(code string) (metering.Metric, bool) {
 	m, ok := r.metrics[code]
@@ -220,8 +230,28 @@ func (r *Registry) TariffInEffect(metric string, at time.Time) (Tariff, bool) {
 	return found, ok
 }
 
-// Rate prices one measure. It is pure: no I/O, no clock, no state.
+// Rate prices one measure against the tariff in effect at its instant.
+// It is pure: no I/O, no clock, no state.
 func (r *Registry) Rate(m metering.Measure) (metering.Decision, error) {
+	if _, ok := r.metrics[m.Metric]; !ok {
+		return metering.Decision{}, fmt.Errorf(
+			"%w: %q", ErrUnknownMetric, m.Metric)
+	}
+	tariff, ok := r.TariffInEffect(m.Metric, m.At)
+	if !ok {
+		return metering.Decision{}, fmt.Errorf(
+			"%w: %s at %s", ErrNoTariff, m.Metric,
+			m.At.UTC().Format(time.RFC3339))
+	}
+	return r.RateWithVersion(m, tariff.Version)
+}
+
+// RateWithVersion prices a measure against an explicit tariff version.
+// It is used by the declarative fallback of a plugin metric, which must
+// not depend on the clock.
+func (r *Registry) RateWithVersion(
+	m metering.Measure, version string,
+) (metering.Decision, error) {
 	metric, ok := r.metrics[m.Metric]
 	if !ok {
 		return metering.Decision{}, fmt.Errorf(
@@ -230,11 +260,10 @@ func (r *Registry) Rate(m metering.Measure) (metering.Decision, error) {
 	if err := m.ValidateFor(metric); err != nil {
 		return metering.Decision{}, err
 	}
-	tariff, ok := r.TariffInEffect(m.Metric, m.At)
+	tariff, ok := r.tariffByVersion(m.Metric, version)
 	if !ok {
 		return metering.Decision{}, fmt.Errorf(
-			"%w: %s at %s", ErrNoTariff, m.Metric,
-			m.At.UTC().Format(time.RFC3339))
+			"%w: %s@%s", ErrNoTariff, m.Metric, version)
 	}
 	for i, c := range tariff.Charges {
 		if !chargeMatches(c, m.Dimensions) {

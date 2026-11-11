@@ -16,6 +16,7 @@ import (
 	"cladone/gate-one/internal/license"
 	"cladone/gate-one/internal/metering"
 	"cladone/gate-one/internal/outbox"
+	"cladone/gate-one/internal/pricingplugin"
 	"cladone/gate-one/internal/sink"
 	"cladone/gate-one/pkg/pluginmanifest"
 )
@@ -28,12 +29,13 @@ import (
 // profile). The online ledger lease plugs into the same credit.Budget
 // interface without touching this file.
 type billingRuntime struct {
-	reg    *meteringRegistry
-	budget credit.Budget
-	ttl    time.Duration
-	box    *outbox.Store
-	pusher *sink.Pusher
-	cancel context.CancelFunc
+	reg     *meteringRegistry
+	budget  credit.Budget
+	ttl     time.Duration
+	box     *outbox.Store
+	pusher  *sink.Pusher
+	cancel  context.CancelFunc
+	pricers map[string]*pricingplugin.Client
 }
 
 func (b *billingRuntime) close() {
@@ -55,8 +57,9 @@ func (b *billingRuntime) close() {
 // tiny interface so the proxy does not depend on the pricing package in
 // its tests.
 type meteringRegistry struct {
-	rate   func(m metering.Measure) (metering.Decision, error)
-	metric func(code string) (metering.Metric, bool)
+	rate        func(m metering.Measure) (metering.Decision, error)
+	rateVersion func(m metering.Measure, version string) (metering.Decision, error)
+	metric      func(code string) (metering.Metric, bool)
 }
 
 // FeatureBillingBYO gates the "bring your own billing backend" paths
@@ -80,8 +83,28 @@ func newBillingRuntime(
 			FeatureBillingBYO)
 	}
 	reg := &meteringRegistry{
-		rate:   u.Metering.Rate,
-		metric: u.Metering.Metric,
+		rate:        u.Metering.Rate,
+		rateVersion: u.Metering.RateWithVersion,
+		metric:      u.Metering.Metric,
+	}
+	pricers := map[string]*pricingplugin.Client{}
+	for name, pc := range u.PricingPlugins {
+		pub, err := pluginmanifest.DecodePublicKey(pc.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("usage.pricingPlugins[%s].publicKey: %w", name, err)
+		}
+		client, err := pricingplugin.New(pricingplugin.Config{
+			Name:     name,
+			URL:      pc.URL,
+			Public:   pub,
+			Timeout:  time.Duration(pc.TimeoutMS) * time.Millisecond,
+			Failures: pc.Failures,
+			Cooldown: time.Duration(pc.CooldownSeconds) * time.Second,
+		})
+		if err != nil {
+			return nil, err
+		}
+		pricers[name] = client
 	}
 
 	if u.AllowancePublicKey == "" || len(u.AllowanceJSON) == 0 {
@@ -138,12 +161,13 @@ func newBillingRuntime(
 	ctx, cancel := context.WithCancel(context.Background())
 	go pusher.Run(ctx)
 	return &billingRuntime{
-		reg:    reg,
-		budget: credit.NewAllocationBudget([]credit.Allowance{a}),
-		ttl:    5 * time.Minute,
-		box:    box,
-		pusher: pusher,
-		cancel: cancel,
+		reg:     reg,
+		budget:  credit.NewAllocationBudget([]credit.Allowance{a}),
+		ttl:     5 * time.Minute,
+		box:     box,
+		pusher:  pusher,
+		cancel:  cancel,
+		pricers: pricers,
 	}, nil
 }
 
@@ -176,7 +200,7 @@ func (b *billingRuntime) admit(
 		Idempotency: "req:" + requestID,
 		At:          time.Now().UTC(),
 	}
-	decision, err := b.reg.rate(measure)
+	decision, err := b.price(ctx, m, measure)
 	if err != nil {
 		return nil, fmt.Errorf("rate %s: %w", m.Code, err)
 	}
@@ -193,6 +217,32 @@ func (b *billingRuntime) admit(
 		res: res, metric: m.Code, scale: m.Scale,
 		measure: measure, decision: decision,
 	}, nil
+}
+
+// price applies the metric's pricing path: the signed plugin when
+// configured, with the declarative fallback on any failure (timeout, bad
+// signature, circuit open). The fallback is mandatory by config, so a
+// plugin outage never blocks billing.
+func (b *billingRuntime) price(
+	ctx context.Context, m metering.Metric, measure metering.Measure,
+) (metering.Decision, error) {
+	if m.Pricing == metering.PricingPlugin {
+		if client := b.pricers[m.PricingPlugin]; client != nil {
+			d, err := client.Price(ctx, measure, m.Scale)
+			if err == nil {
+				return d, nil
+			}
+			log.Printf(
+				"PRICING FALLBACK metric=%s plugin=%s: %v (declarative %s)",
+				m.Code, m.PricingPlugin, err, m.Fallback)
+			return b.reg.rateVersion(measure, m.Fallback)
+		}
+		log.Printf(
+			"PRICING FALLBACK metric=%s: plugin %q not loaded (declarative %s)",
+			m.Code, m.PricingPlugin, m.Fallback)
+		return b.reg.rateVersion(measure, m.Fallback)
+	}
+	return b.reg.rate(measure)
 }
 
 // routeDimensions fills the dimensions the metric declares and the

@@ -93,6 +93,8 @@ type Metric struct {
 	HeartbeatSeconds int `json:"heartbeatSeconds,omitempty"`
 	// Pricing is "declarative" (default) or "plugin".
 	Pricing string `json:"pricing,omitempty"`
+	// PricingPlugin names the signed pricing plugin (Pricing=plugin).
+	PricingPlugin string `json:"pricingPlugin,omitempty"`
 	// Fallback names the declarative tariff used when a plugin pricing is
 	// unavailable. Required when Pricing is "plugin".
 	Fallback string `json:"fallback,omitempty"`

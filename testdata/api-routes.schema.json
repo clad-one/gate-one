@@ -867,6 +867,10 @@
                 "enum": ["declarative", "plugin"],
                 "description": "declarative (core rate table) or plugin (signed pricing plugin). Default declarative."
               },
+              "pricingPlugin": {
+                "type": "string",
+                "description": "Name of the signed pricing plugin used when pricing=plugin (a key of usage.pricingPlugins)."
+              },
               "fallback": {
                 "type": "string",
                 "description": "Declarative tariff version used when pricing=plugin is unavailable. Required with pricing=plugin."
@@ -927,6 +931,22 @@
                   }
                 }
               }
+            }
+          }
+        },
+        "pricingPlugins": {
+          "type": "object",
+          "description": "Signed out-of-process pricing services, keyed by name. A metric with pricing=plugin names one here; its answer is verified with the public key and any failure falls back to the metric's declarative tariff.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "publicKey"],
+            "properties": {
+              "url": {"type": "string", "description": "Base URL; POST <url>/price is called."},
+              "publicKey": {"type": "string", "description": "Base64 Ed25519 public key verifying the signed decision."},
+              "timeoutMs": {"type": "integer", "minimum": 1, "description": "Call timeout. Default 50 ms."},
+              "failures": {"type": "integer", "minimum": 1, "description": "Consecutive failures before the circuit opens. Default 3."},
+              "cooldownSeconds": {"type": "integer", "minimum": 1, "description": "How long the circuit stays open. Default 30 s."}
             }
           }
         },
