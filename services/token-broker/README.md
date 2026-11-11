@@ -106,7 +106,6 @@ Fields:
 | `pkce` | send S256 PKCE (default `true`) |
 | `refresh` | allow refresh-token grant (default `true`) |
 | `token_auth_method` | `client_secret_post` (default), `client_secret_basic`, `none` |
-| `revocation_endpoint` | accepted but **not used**: erase is local only (the credential may be used elsewhere) |
 | `authorization_params` | extra string params; protocol params cannot be overridden |
 
 Adding Google/Slack/another OAuth 2.0 service is a registry entry, not a
@@ -160,8 +159,9 @@ The tests start a fake OAuth 2.0 provider on loopback and cover:
 authorization URL/PKCE, code exchange, encrypted storage, refresh and
 rotation, single-flight refresh, reauthorization on `invalid_grant`,
 provider outage, callback state/user binding, secret/user enforcement,
-returnTo allow-list, HTML escaping, revocation, zero/invalid expiry
-handling, and the refusal of provider redirects/userinfo.
+returnTo allow-list, HTML escaping, the refusal to call the provider on
+erase, zero/invalid expiry handling, and the refusal of provider
+redirects/userinfo.
 
 Run the broker against a local SQLite file:
 

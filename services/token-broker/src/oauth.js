@@ -216,27 +216,3 @@ export async function refreshAccessToken(
 
   return normalizeTokenResponse(response, provider);
 }
-
-export async function revokeToken(
-  provider,
-  { token, tokenTypeHint = "access_token", fetchImpl, timeoutMs }
-) {
-  if (!provider.revocationEndpoint) return false;
-
-  const auth = clientAuth(provider, provider.revocationAuthMethod);
-  const response = await postForm(
-    provider.revocationEndpoint,
-    {
-      token,
-      token_type_hint: tokenTypeHint,
-      client_id: provider.clientId,
-      ...auth.body,
-    },
-    { fetchImpl, timeoutMs, headers: auth.headers }
-  );
-
-  // RFC 7009 says a successful revocation is 200 (or 204). postForm
-  // returns the parsed body; an error field would already have thrown.
-  void response;
-  return true;
-}

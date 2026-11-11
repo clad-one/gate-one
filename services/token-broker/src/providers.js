@@ -104,24 +104,7 @@ function normalizeProvider(name, raw, env) {
   const refresh = raw.refresh !== false;
   const scopes = stringArray(raw.scopes, `provider "${name}".scopes`);
 
-  const revocationEndpoint = raw.revocation_endpoint
-    ? assertProviderUrl(
-        raw.revocation_endpoint,
-        `provider "${name}".revocation_endpoint`
-      )
-    : null;
-
-  const revocationAuthMethod =
-    raw.revocation_auth_method || tokenAuthMethod;
-  if (!TOKEN_AUTH_METHODS.has(revocationAuthMethod)) {
-    throw new ProviderConfigError(
-      `provider "${name}".revocation_auth_method is invalid`
-    );
-  }
-
-  const needsClientSecret =
-    tokenAuthMethod !== "none" ||
-    (revocationEndpoint !== null && revocationAuthMethod !== "none");
+  const needsClientSecret = tokenAuthMethod !== "none";
 
   let clientSecret = null;
   let clientSecretEnv = null;
@@ -184,8 +167,6 @@ function normalizeProvider(name, raw, env) {
     pkce,
     refresh,
     scopes,
-    revocationEndpoint,
-    revocationAuthMethod,
     authorizationParams: Object.freeze(cleanAuthorizationParams),
   });
 }
