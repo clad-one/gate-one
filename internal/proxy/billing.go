@@ -10,6 +10,7 @@ import (
 
 	"cladone/gate-one/internal/core"
 	"cladone/gate-one/internal/credit"
+	"cladone/gate-one/internal/license"
 	"cladone/gate-one/internal/metering"
 	"cladone/gate-one/pkg/pluginmanifest"
 )
@@ -35,11 +36,25 @@ type meteringRegistry struct {
 	metric func(code string) (metering.Metric, bool)
 }
 
+// FeatureBillingBYO gates the "bring your own billing backend" paths
+// (airgap profile, external sink). The managed path is the default; BYO
+// is a paid licence feature because it bypasses the settlement split.
+const FeatureBillingBYO = "billing-byo"
+
 func newBillingRuntime(
-	u *core.UsageConfig, region string,
+	u *core.UsageConfig, lic *license.Config, region string,
 ) (*billingRuntime, error) {
 	if u == nil || u.Metering == nil {
 		return nil, nil
+	}
+	// The managed path keeps the settlement split; any path that bypasses
+	// it (airgap today, external sink later) requires the licence feature.
+	byo := u.Profile == "airgap"
+	if byo && !license.HasFeature(license.Eval(lic, time.Now()), FeatureBillingBYO) {
+		return nil, fmt.Errorf(
+			"usage.profile airgap requires the %q licence feature: "+
+				"the managed profile keeps the settlement split, BYO is a paid option",
+			FeatureBillingBYO)
 	}
 	reg := &meteringRegistry{
 		rate:   u.Metering.Rate,

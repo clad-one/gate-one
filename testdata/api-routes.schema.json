@@ -812,7 +812,7 @@
         "profile": {
           "type": "string",
           "enum": ["online", "airgap"],
-          "description": "Spending authorisation profile: online (a lease refilled from the managed ledger) or airgap (a signed allowance file, valid for a period). Default online."
+          "description": "Spending authorisation profile: online (a lease refilled from the managed ledger) or airgap (a signed allowance file, valid for a period). Default online. The airgap profile bypasses the managed settlement split and therefore requires the \"billing-byo\" licence feature; the gateway refuses to start without it."
         },
         "metrics": {
           "type": "object",

@@ -858,7 +858,7 @@ func New(cfg *core.Config, opts ...Option) (*Gateway, error) {
 		}
 		gw.usage = ur
 
-		bill, err := newBillingRuntime(cfg.Usage, "metering")
+		bill, err := newBillingRuntime(cfg.Usage, cfg.License, "metering")
 		if err != nil {
 			return nil, err
 		}

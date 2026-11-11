@@ -10,12 +10,35 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"cladone/gate-one/internal/credit"
 )
+
+// licenseToken mints a signed licence token carrying the given features.
+func licenseToken(t *testing.T, features ...string) (token, pub string) {
+	t.Helper()
+	pubKey, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := map[string]any{
+		"org": "test", "email": "t@test", "plan": "owner",
+		"exp":      time.Now().Add(time.Hour).Unix(),
+		"domains":  []string{"app.test"},
+		"features": features,
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := ed25519.Sign(priv, payload)
+	enc := base64.RawURLEncoding.EncodeToString
+	return "v1." + enc(payload) + "." + enc(sig), enc(pubKey)
+}
 
 func writeAllowance(t *testing.T, dir string, amount int64) (string, string) {
 	t.Helper()
@@ -41,11 +64,14 @@ func writeAllowance(t *testing.T, dir string, amount int64) (string, string) {
 	return path, base64.RawURLEncoding.EncodeToString(pub)
 }
 
-func meteredConfig(t *testing.T, allowancePath, pubKey, backend string) string {
+func meteredConfig(
+	t *testing.T, allowancePath, pubKey, backend, licToken, licPub string,
+) string {
 	t.Helper()
 	t.Setenv("TEST_SUBJECT_SECRET", "s")
 	t.Setenv("TEST_PLUGIN_SECRET", "p")
 	return fmt.Sprintf(`{
+		"license": {"token": %q, "publicKey": %q},
 		"authProvider": {
 			"type": "dev",
 			"loginBaseUrl": "http://login.dev.test:3000",
@@ -74,7 +100,7 @@ func meteredConfig(t *testing.T, allowancePath, pubKey, backend string) string {
 		"routes": [{
 			"host": "app.test", "path": "/*", "backend": %q, "metric": "api.request"
 		}]
-	}`, t.TempDir(), allowancePath, pubKey, backend)
+	}`, licToken, licPub, t.TempDir(), allowancePath, pubKey, backend)
 }
 
 func TestMeteredAdmissionAndExhaustion(t *testing.T) {
@@ -88,7 +114,8 @@ func TestMeteredAdmissionAndExhaustion(t *testing.T) {
 
 	dir := t.TempDir()
 	allowancePath, pub := writeAllowance(t, dir, 2500) // 2 requêtes à 1200
-	cfg := loadForTest(t, meteredConfig(t, allowancePath, pub, backend.URL))
+	lic, licPub := licenseToken(t, "billing-byo")
+	cfg := loadForTest(t, meteredConfig(t, allowancePath, pub, backend.URL, lic, licPub))
 	gw, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +164,8 @@ func TestMeteredServerErrorIsReleased(t *testing.T) {
 
 	dir := t.TempDir()
 	allowancePath, pub := writeAllowance(t, dir, 1200) // une seule requête
-	cfg := loadForTest(t, meteredConfig(t, allowancePath, pub, backend.URL))
+	lic, licPub := licenseToken(t, "billing-byo")
+	cfg := loadForTest(t, meteredConfig(t, allowancePath, pub, backend.URL, lic, licPub))
 	gw, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -158,5 +186,20 @@ func TestMeteredServerErrorIsReleased(t *testing.T) {
 	// Une seconde requête doit donc encore être autorisée.
 	if code := do(); code != http.StatusInternalServerError {
 		t.Fatalf("second = %d (reservation not released?)", code)
+	}
+}
+
+func TestAirgapRequiresBYOLicense(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(backend.Close)
+
+	dir := t.TempDir()
+	allowancePath, pub := writeAllowance(t, dir, 1200)
+	lic, licPub := licenseToken(t) // no features
+	cfg := loadForTest(t, meteredConfig(t, allowancePath, pub, backend.URL, lic, licPub))
+	if _, err := New(cfg); err == nil ||
+		!strings.Contains(err.Error(), "billing-byo") {
+		t.Fatalf("err = %v, want a billing-byo refusal", err)
 	}
 }
