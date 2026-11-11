@@ -15,6 +15,7 @@ No domain, no DNS entry, no external identity provider.
 | `injectable-ux` | injection, UI gating, nonce CSP | `gate-one` |
 | `turnstile` | Cloudflare Turnstile gate: whole page and action-only | `gate-one`, internet |
 | `usage-events` | signed plugin, WAL, events | `gate-one`, Go |
+| `metering-audit` | pricing, allowance, outbox, signed offline audit | `gate-one`, Python 3 |
 
 These use the loopback-only `dev` provider: `alice`/`alice` (user) and
 `bob`/`bob` (admin). `run.sh` starts a static server and Gate One, and

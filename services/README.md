@@ -11,6 +11,13 @@ process/container.
 
 Neither service decides Gate One's policy: the token broker returns a
 token for one authenticated user; the bridge returns identity/IAM facts.
+
+[NOTE]
+====
+The managed billing ingestion service is **not** part of this repository.
+It runs in Cladone's environment, not the customer's; its code, images
+and runbooks are kept in a private repository.
+====
 See the product docs: **Delegated credentials**, **Token broker** and
 **HTTP bridge contract**.
 

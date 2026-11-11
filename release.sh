@@ -43,6 +43,25 @@ SRC="$PWD"
 	echo "release.sh: run from the Gate One source root" >&2
 	exit 1
 }
+
+# Managed-side code (ingestion, invoicing, reconciliation) lives in a
+# private repository. It must never be in this tree, hence never in a
+# public archive or the SBOM.
+for private_path in services/billing-ingest deploy/local/billing; do
+	if [ -e "$SRC/$private_path" ]; then
+		echo "release.sh: $private_path is managed-side and must not be" >&2
+		echo "  in the public tree; move it to the private billing repository" >&2
+		exit 1
+	fi
+done
+
+assert_public_archive() {
+	local archive="$1"
+	if tar -tzf "$archive" | grep -Eq '(^|/)(billing-ingest|billing)/|/lago\.js$|/reconcile\.js$'; then
+		echo "release.sh: managed-side code found in $archive" >&2
+		exit 1
+	fi
+}
 PRODUCT="${GATE_ONE_PRODUCT:-../gate-one-product}"
 if [ -d "$PRODUCT" ]; then
 	PRODUCT="$(cd "$PRODUCT" && pwd)"
@@ -286,6 +305,8 @@ for target in "${TARGETS[@]}"; do
 	if [ -n "$PRODUCT" ] && [ -d "$PRODUCT/examples" ]; then
 		mkdir -p "$demo_stage/deploy"
 		cp -R "$SRC"/deploy/local "$demo_stage/deploy/" 2>/dev/null || true
+		# Managed-side harness: never published.
+		rm -rf "$demo_stage/deploy/local/billing"
 	fi
 	cp "$SRC"/LICENSE "$SRC"/README.md "$SRC"/VERSION "$demo_stage/" 2>/dev/null || true
 
@@ -294,6 +315,10 @@ for target in "${TARGETS[@]}"; do
 		( cd "$demo_stage" && zip -qr "$demo_archive" . )
 	else
 		tar -czf "$demo_archive" -C "$demo_stage" .
+	fi
+	if tar -tzf "$demo_archive" 2>/dev/null | grep -Eq 'deploy/local/billing(/|$)'; then
+		echo "release.sh: managed-side demo found in $demo_archive" >&2
+		exit 1
 	fi
 	"$syft_bin" "dir:$demo_stage" \
 		--source-name "gate-one-demo-idp" --source-version "$VERSION" \
@@ -304,14 +329,26 @@ done
 rmdir "$DIST/stage" 2>/dev/null || true
 
 # --- companion services (source) ----------------------------------
-# The token broker and auth-bridge are not part of the gate-one
-# binary: they ship as source, built into their own images.
+# Only the user-hosted services ship as source: the token broker and the
+# auth-bridge. The managed billing ingestion service is private and is
+# never part of a public archive.
+PUBLIC_SERVICES=(token-broker auth-bridge)
+services_stage="$DIST/stage/services_public"
+mkdir -p "$services_stage"
+for svc in "${PUBLIC_SERVICES[@]}"; do
+	cp -R "$SRC/services/$svc" "$services_stage/" || {
+		echo "release.sh: services/$svc is missing" >&2
+		exit 1
+	}
+	rm -rf "$services_stage/$svc/node_modules"
+done
 services_archive="$DIST/services_${VERSION}_src.tar.gz"
-tar -czf "$services_archive" -C "$SRC" \
-	--exclude='services/*/node_modules' services
-"$syft_bin" "dir:$SRC/services" \
+tar -czf "$services_archive" -C "$services_stage" .
+assert_public_archive "$services_archive"
+"$syft_bin" "dir:$services_stage" \
 	--source-name "gate-one-services" --source-version "$VERSION" \
 	-o "spdx-json=$DIST/services_${VERSION}_src.spdx.json" >/dev/null
+rm -rf "$services_stage"
 
 site_line=""
 if [ -n "$PRODUCT" ] && [ -x "$PRODUCT/scripts/build-site" ]; then
@@ -320,6 +357,11 @@ if [ -n "$PRODUCT" ] && [ -x "$PRODUCT/scripts/build-site" ]; then
 	# both the site archive and GitHub Pages use the same absolute links.
 	site_base_url="${SITE_BASE_URL:-https://clad-one.github.io/gate-one-doc/v${release_label}/}"
 	( cd "$PRODUCT" && "$PRODUCT/scripts/build-site" --baseURL "$site_base_url" >/dev/null )
+	# The published site must not describe the managed-side service.
+	if grep -rIqE 'billing-ingest|/v1/reconcile|fake-lago' "$PRODUCT/public"; then
+		echo "release.sh: managed-side content found in the published site" >&2
+		exit 1
+	fi
 	tar -czf "$DIST/gate-one_${release_label}_site.tar.gz" \
 		-C "$PRODUCT/public" .
 	site_line="- \`gate-one_${release_label}_site.tar.gz\` (static documentation, published at $site_base_url)"

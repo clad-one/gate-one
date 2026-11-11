@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// TestSignatureVector pins the exact bytes signed for a batch, so a
-// receiver written in another language can be checked against the same
-// fixture (services/billing-ingest/test/vector.test.js).
+// TestSignatureVector pins the exact bytes signed for a batch, so any
+// receiver, in any language, can be checked against the same fixture.
+// The fixture is a wire-format contract, not a reference implementation.
 func TestSignatureVector(t *testing.T) {
 	raw, err := os.ReadFile("testdata/vector.json")
 	if err != nil {

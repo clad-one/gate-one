@@ -39,8 +39,7 @@ type ReceiptDocument struct {
 	Signature string  `json:"signature"`
 }
 
-// ReceiptPayload is the signed line format (mirrored by
-// services/billing-ingest/src/verify.js receiptPayload):
+// ReceiptPayload is the signed line format a receiver must produce:
 //
 //	v1
 //	<bundleId>
