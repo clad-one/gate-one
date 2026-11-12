@@ -363,7 +363,7 @@ if [ -n "$PRODUCT" ] && [ -x "$PRODUCT/scripts/build-site" ]; then
 	site_base_url="${SITE_BASE_URL:-https://clad-one.github.io/gate-one-doc/v${release_label}/}"
 	( cd "$PRODUCT" && "$PRODUCT/scripts/build-site" --baseURL "$site_base_url" >/dev/null )
 	# The published site must not describe the managed-side service.
-	if grep -rIqE 'billing-ingest|/v1/reconcile|fake-lago' "$PRODUCT/public"; then
+	if grep -rIqE 'billing-ingest|/v1/reconcile|fake-lago|PRIVATE — do not distribute' "$PRODUCT/public"; then
 		echo "release.sh: managed-side content found in the published site" >&2
 		exit 1
 	fi
