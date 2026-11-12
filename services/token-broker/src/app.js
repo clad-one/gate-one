@@ -57,16 +57,24 @@ function csrfValid(config, userId, value) {
   return secretsEqual(sig, want);
 }
 
+// CSRF origin gate. Origin, when the browser sends a usable one, is
+// AUTHORITATIVE: it is the browser's own assertion of the initiating
+// origin and a page cannot forge it. Sec-Fetch-Site is only a fallback:
+// some browsers/extensions omit Origin or send the opaque "null", and
+// some report "same-site" for a same-origin POST — which used to turn a
+// legitimate Disconnect into a 403 csrf_origin (2026-11-12). The CSRF
+// token stays the primary control; this gate is defence in depth.
 function sameOrigin(req, config) {
-  const site = req.get("sec-fetch-site");
-  if (site && site !== "same-origin" && site !== "none") return false;
   const origin = req.get("origin");
-  if (!origin) return true;
-  try {
-    return new URL(origin).host === new URL(config.publicBaseUrl).host;
-  } catch {
-    return false;
+  if (origin && origin !== "null") {
+    try {
+      return new URL(origin).host === new URL(config.publicBaseUrl).host;
+    } catch {
+      return false;
+    }
   }
+  const site = req.get("sec-fetch-site");
+  return !site || site === "same-origin" || site === "none";
 }
 
 function wantsJson(req) {
@@ -316,6 +324,15 @@ export function createApp({ config, providers, store, tokenService }) {
 
   function requireCsrf(req, res, next) {
     if (!sameOrigin(req, config)) {
+      // Never a silent failure: the next diagnosis must not need
+      // DevTools. No token or cookie ever lands here.
+      console.warn("csrf_origin", {
+        method: req.method,
+        path: req.path,
+        origin: req.get("origin") || null,
+        secFetchSite: req.get("sec-fetch-site") || null,
+        expectedHost: new URL(config.publicBaseUrl).host,
+      });
       return res.status(403).json({ error: "csrf_origin" });
     }
     if (!csrfValid(config, req.userId, req.body?._csrf)) {

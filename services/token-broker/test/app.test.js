@@ -557,6 +557,44 @@ test("state-changing requests require the CSRF token and same origin", async (t)
   assert.equal(cross.status, 403);
 });
 
+test("the CSRF origin gate accepts the browser's legitimate variants", async (t) => {
+  const { base, fake } = await setup(t);
+  await login(base, fake);
+
+  const page = await (await fetch(`${base}/connections`, { headers: auth() })).text();
+  const csrf = csrfFrom(page);
+  const body = `_csrf=${encodeURIComponent(csrf)}`;
+  const post = (headers) =>
+    fetch(`${base}/connections/mock/disconnect`, {
+      method: "POST",
+      headers: formHeaders(headers),
+      body,
+      redirect: "manual",
+    });
+
+  // The configured public host is http://127.0.0.1 (see setup).
+  const matched = "http://127.0.0.1";
+
+  // 1. Same origin, normal fetch metadata.
+  assert.equal((await post({ origin: matched, "sec-fetch-site": "same-origin" })).status, 303);
+  // 2. "same-site" on a same-origin POST: the false negative that broke
+  //    Disconnect. The matching Origin is authoritative.
+  assert.equal((await post({ origin: matched, "sec-fetch-site": "same-site" })).status, 303);
+  // 3. Opaque origin ("null") + same-origin metadata.
+  assert.equal((await post({ origin: "null", "sec-fetch-site": "same-origin" })).status, 303);
+  // 4. Legacy browser: neither header.
+  assert.equal((await post({})).status, 303);
+
+  // Still refused: a foreign origin…
+  let res = await post({ origin: "https://evil.example", "sec-fetch-site": "same-origin" });
+  assert.equal(res.status, 403);
+  assert.equal((await res.json()).error, "csrf_origin");
+  // …and a cross-site request with no Origin to compare.
+  res = await post({ "sec-fetch-site": "cross-site" });
+  assert.equal(res.status, 403);
+  assert.equal((await res.json()).error, "csrf_origin");
+});
+
 test("operator API lists, pauses, resumes and deletes without exposing tokens", async (t) => {
   const { base, store } = await setup(t, {
     configOverrides: { adminSecret: "admin-secret" },
