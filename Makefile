@@ -1,9 +1,26 @@
 build: ## Compile le binaire dans bin/gate-one
 	./build.sh
 
-test: ## go vet + tests unitaires
+test: test-go test-delegation ## Tout : Go (vet + unitaires) + délégation de services
+
+test-go: ## go vet + tests unitaires Go
 	go vet ./...
 	go test ./...
+
+test-delegation: ## Délégation de services : broker de jetons, auth-bridge, Gate One
+	@command -v node >/dev/null 2>&1 || { \
+		echo "test-delegation : node absent — suites Node IGNORÉES"; \
+		exit 0; }
+	$(MAKE) -s test-token-broker test-auth-bridge
+	go test ./internal/proxy -run 'TestDelegated' -count=1
+
+test-token-broker: ## Broker de jetons : OAuth, pause/resume/erase, porte CSRF (Node)
+	@cd services/token-broker && { [ -d node_modules ] || npm ci --omit=dev; }
+	cd services/token-broker && node --test test/*.test.js
+
+test-auth-bridge: ## Passerelle d'auth historique : routes /connections (Node)
+	@cd services/auth-bridge && { [ -d node_modules ] || npm ci --omit=dev; }
+	cd services/auth-bridge && node --test server.broker.test.js
 
 test-auth: ## Tests d'acceptation auth (AC-AUTH-*) + IAM + conformité
 	go test ./cmd/gate-one/... ./internal/authn/... ./internal/iam/... ./internal/core/... ./internal/proxy/... ./pkg/identityadapter/... ./pkg/pluginmanifest/... -run 'TestAC_AUTH_' -count=1
@@ -63,4 +80,4 @@ probe-ha: ## Sonde Sentinel/TLS/ACL de la pile Redis HA (pile infra démarrée)
 		-sentinel-password-env REDIS_HA_SENTINEL_PASSWORD \
 		-tls -tls-ca /tls/ca.crt -tls-server-name redis.cladone.internal
 
-.PHONY: build test test-auth test-auth-race test-e2e e2e-up e2e-down test-browser build-auth build-fake-google smoke run check release test-ha probe-ha
+.PHONY: build test test-go test-delegation test-token-broker test-auth-bridge test-auth test-auth-race test-e2e e2e-up e2e-down test-browser build-auth build-fake-google smoke run check release test-ha probe-ha

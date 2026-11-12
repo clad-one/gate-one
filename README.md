@@ -293,12 +293,18 @@ Full guide: `doc/turnstile.adoc`.
 ## Tests
 
 ```bash
-go vet ./...
-go test ./...
+make test                  # go vet + go test ./... + the delegation suites
+make test-go               # Go only (vet + unit tests)
+make test-delegation       # token-broker (OAuth/CSRF/pause-resume-erase),
+                           # auth-bridge /connections, Gate One TestDelegated*
 make test-auth             # AC-AUTH-* acceptance tests (authn, IAM, proxy, conformance)
 make test-auth-race        # same, under -race
 ./smoke.sh                 # end-to-end: fake backend + auth-bridge + gateway
 ```
+
+`make test-delegation` needs Node; the Node suites install their own
+dependencies (`npm ci --omit=dev`) on first run and are skipped with a
+warning when `node` is not on the PATH.
 
 `test/ui` contains the jsdom harness for the injected guard script
 (`npm install && npm test`). `npm run preview` serves the controls
