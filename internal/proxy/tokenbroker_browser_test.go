@@ -102,6 +102,11 @@ func TestTokenBrokerBrowserRoute(t *testing.T) {
 		{"/connections", true, true},
 		{"/connect/github", true, true},
 		{"/connections/github/disconnect", true, true},
+		// The other actions of the services page: a missing entry here
+		// made the gateway answer 404 instead of proxying to the broker.
+		{"/connections/github/connect", true, true},
+		{"/connections/github/erase", true, true},
+		{"/connections/erase-all", true, true},
 		{"/oauth/github/callback", false, true},
 		{"/connectionsx", false, false},
 		{"/other", false, false},
@@ -231,5 +236,38 @@ func TestTokenBrokerBrowserOtherHostFallsThrough(t *testing.T) {
 		map[string]string{"Cookie": "access_token=u1"})
 	if resp.StatusCode == http.StatusOK {
 		t.Fatalf("browser route served on a non-matching host")
+	}
+}
+
+// TestTokenBrokerBrowserConnectIsProxied is the regression test for the
+// "Connect after Disconnect → 404" bug: the services page posts to
+// /connections/{provider}/connect, which the gateway did not recognise
+// as a broker browser route and answered 404 itself (the broker never
+// saw the request).
+func TestTokenBrokerBrowserConnectIsProxied(t *testing.T) {
+	broker, cap := fakeTokenBroker(t)
+	bridge := delegatedBridge(t)
+	gw := newBrowserGateway(t, broker.URL, bridge.URL, "login.test")
+
+	req := httptest.NewRequest(http.MethodPost,
+		"http://login.test/connections/github/connect",
+		strings.NewReader("_csrf=token"))
+	req.Host = "login.test"
+	req.Header.Set("Cookie", "access_token=u1")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	resp := rec.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (proxied), not 404", resp.StatusCode)
+	}
+	_, user, path := cap.snapshot()
+	if path != "/connections/github/connect" {
+		t.Fatalf("broker saw path %q, want /connections/github/connect", path)
+	}
+	if user != "user-1" {
+		t.Fatalf("X-User-Id = %q, want user-1", user)
 	}
 }

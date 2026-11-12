@@ -102,12 +102,15 @@ func (g *Gateway) serveTokenBrokerBrowser(
 // route, and whether it requires an authenticated user.
 func tokenBrokerBrowserRoute(path string) (authed bool, ok bool) {
 	switch {
-	case path == "/connections":
+	case path == "/connections",
+		strings.HasPrefix(path, "/connections/"):
+		// EVERY /connections subtree is broker UI: the services page,
+		// disconnect (pause) AND connect (resume), erase, erase-all.
+		// An explicit per-action list missed /connect and /erase: the
+		// gateway answered 404 before the broker saw the request
+		// (2026-11-12, "Connect" after a Disconnect).
 		return true, true
 	case strings.HasPrefix(path, "/connect/"):
-		return true, true
-	case strings.HasPrefix(path, "/connections/") &&
-		strings.HasSuffix(path, "/disconnect"):
 		return true, true
 	case strings.HasPrefix(path, "/oauth/") &&
 		strings.HasSuffix(path, "/callback"):
